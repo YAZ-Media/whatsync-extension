@@ -183,6 +183,22 @@
       margin: 0;
       opacity: 0.95;
     }
+
+    .inline-error-message {
+      display: none;
+      background-color: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .inline-error-message.show {
+      display: block;
+    }
     
     @keyframes slideDown {
       from {
@@ -584,6 +600,7 @@
       </div>
       
       <form id="loginForm">
+      <div class="inline-error-message" id="inlineErrorMessage" role="alert" aria-live="polite"></div>
       <div class="form-group" id="emailLoginGroup">
         <label for="emailLogin">Email</label>
         <div class="input-wrapper">

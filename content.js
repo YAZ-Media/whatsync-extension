@@ -8025,11 +8025,12 @@ let sidebarFieldsSubscription = null;
  * Initialize realtime subscription for sidebar fields changes
  */
 async function initializeSidebarFieldsRealtime() {
+  let userId = null;
   try {
     // Get userId
     const result = await chrome.storage.local.get('external_auth_session');
     const session = result.external_auth_session;
-    const userId = session?.user?.id;
+    userId = session?.user?.id;
     
     if (!userId) {
       return;
@@ -8056,7 +8057,9 @@ async function initializeSidebarFieldsRealtime() {
   } catch (error) {
     console.error('[Realtime] Error initializing realtime subscription:', error);
     // If realtime fails, use polling
-    startSidebarFieldsPolling(userId);
+    if (userId) {
+      startSidebarFieldsPolling(userId);
+    }
   }
 }
 

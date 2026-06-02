@@ -79,6 +79,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const successMessage = document.getElementById('successMessage');
   const successTitle = document.getElementById('successTitle');
   const successText = document.getElementById('successText');
+  const inlineErrorMessage = document.getElementById('inlineErrorMessage');
   const loggedInSection = document.getElementById('loggedInSection');
   const loginSection = document.getElementById('loginSection');
   const userName = document.getElementById('userName');
@@ -101,6 +102,44 @@ document.addEventListener('DOMContentLoaded', async () => {
   function hideLoadingShowContent() {
     if (popupLoading) popupLoading.classList.add('hidden');
     if (loginSection) loginSection.classList.remove('initial-hide');
+  }
+
+  function showInlineError(message) {
+    if (!inlineErrorMessage) return;
+    inlineErrorMessage.textContent = message;
+    inlineErrorMessage.classList.add('show');
+  }
+
+  function clearInlineError() {
+    if (!inlineErrorMessage) return;
+    inlineErrorMessage.textContent = '';
+    inlineErrorMessage.classList.remove('show');
+  }
+
+  async function isEmailRegistered(email) {
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail) return false;
+
+    // RLS on user_profiles allows reading only own row (auth.uid() = user_id).
+    // During login, user is unauthenticated, so this lookup is not reliable.
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) {
+      return null;
+    }
+
+    const { data, error } = await supabaseClient
+      .from('user_profiles')
+      .select('id')
+      .ilike('email', normalizedEmail)
+      .limit(1);
+
+    // If lookup is blocked by RLS/policy, don't break login flow.
+    if (error) {
+      console.warn('Email lookup failed, falling back to direct login check:', error);
+      return null;
+    }
+
+    return Array.isArray(data) && data.length > 0;
   }
 
   function formatConnectedDate(value) {
@@ -288,6 +327,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loggedInSection.classList.remove('show');
     loginSection.style.display = 'block';
     loginForm.reset();
+    clearInlineError();
   }
   
   // Function to show success message
@@ -334,6 +374,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   switchLink.addEventListener('click', (e) => {
     e.preventDefault();
     isLoginMode = !isLoginMode;
+    clearInlineError();
     
     if (isLoginMode) {
       pageTitle.textContent = 'Log In.';
@@ -375,6 +416,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Handle form submission
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    clearInlineError();
     
     const submitBtnText = submitBtn.textContent;
     submitBtn.disabled = true;
@@ -387,7 +429,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         const password = passwordInput.value;
         
         if (!email || !password) {
-          alert('Please fill in all fields');
+          showInlineError('Please fill in all fields');
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitBtnText;
+          return;
+        }
+
+        const emailRegistered = await isEmailRegistered(email);
+        if (emailRegistered === false) {
+          showInlineError('No account found for this email. Please sign up first.');
           submitBtn.disabled = false;
           submitBtn.textContent = submitBtnText;
           return;
@@ -399,7 +449,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         
         if (error) {
-          alert('Login failed: ' + error.message);
+          if (error.message && error.message.toLowerCase().includes('invalid login credentials')) {
+            showInlineError('Invalid email or password. Please check your details and try again.');
+          } else {
+            showInlineError('Login failed: ' + error.message);
+          }
           submitBtn.disabled = false;
           submitBtn.textContent = submitBtnText;
           return;
@@ -623,7 +677,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } catch (error) {
       console.error('Unexpected error:', error);
-      alert('An unexpected error occurred: ' + error.message);
+      showInlineError('An unexpected error occurred: ' + error.message);
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = submitBtnText;

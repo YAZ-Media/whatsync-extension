@@ -60,24 +60,46 @@ let syncSettingsCache = null; // { userId, settings, cachedAt }
 // All HubSpot API calls are routed through the edge function - no token in extension code
 
 // Function to call HubSpot via edge function
+async function getStoredAccessToken() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['accessToken', 'external_auth_session'], (storageData) => {
+      let token = storageData.accessToken || null;
+      if (!token && storageData.external_auth_session) {
+        try {
+          const parsed = typeof storageData.external_auth_session === 'string'
+            ? JSON.parse(storageData.external_auth_session)
+            : storageData.external_auth_session;
+          token = parsed?.session?.access_token || null;
+        } catch {
+          token = null;
+        }
+      }
+      resolve(token);
+    });
+  });
+}
+
 async function callHubSpotEdgeFunction(action, data) {
   const requestBody = { action, data };
-  
+  const accessToken = await getStoredAccessToken();
+  const headers = { 'Content-Type': 'application/json' };
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`;
+  }
+
   console.log('[Background] ===== CALLING EDGE FUNCTION =====');
   console.log('[Background] URL:', HUBSPOT_TOKEN_ENDPOINT);
   console.log('[Background] Method: POST');
   console.log('[Background] Action:', action);
   console.log('[Background] Request body:', JSON.stringify(requestBody, null, 2));
-  
+
   try {
     const response = await fetch(HUBSPOT_TOKEN_ENDPOINT, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers,
       body: JSON.stringify(requestBody)
     });
-    
+
     console.log('[Background] Response status:', response.status, response.statusText);
     console.log('[Background] Response headers:', Object.fromEntries(response.headers.entries()));
     
@@ -2158,6 +2180,46 @@ async function fetchContactNotesFromSupabase(userId, accessToken, contactId) {
 }
 
 // Function to create HubSpot contact via edge function
+async function findExistingHubSpotContactByPhone(phone) {
+  if (!phone) return null;
+  const variations = getPhoneVariations(phone);
+  for (const variation of variations) {
+    try {
+      const result = await callHubSpotEdgeFunction('searchContacts', {
+        searchRequest: {
+          filterGroups: [{
+            filters: [{
+              propertyName: 'phone',
+              operator: 'EQ',
+              value: variation,
+            }],
+          }],
+          limit: 1,
+        },
+      });
+      const hit = result?.results?.[0];
+      if (hit) return hit;
+    } catch (error) {
+      console.warn('[Background] Contact search failed for variation:', variation, error);
+    }
+  }
+  return null;
+}
+
+async function maybeCreateCompanyForContact(createdContact, payload, syncSettings) {
+  if (!syncSettings?.auto_create_companies) return;
+  const companyName = payload?.properties?.company || payload?.sourceData?.company;
+  if (!companyName || !String(companyName).trim()) return;
+  try {
+    await callHubSpotEdgeFunction('createCompany', {
+      properties: { name: String(companyName).trim() },
+    });
+    console.log('[Background] auto_create_companies: company record created for', companyName);
+  } catch (error) {
+    console.warn('[Background] auto_create_companies failed:', error);
+  }
+}
+
 async function createHubSpotContactViaEdgeFunction(contactData, userId, accessToken) {
   console.log('[Background] Creating HubSpot contact via edge function:', contactData);
   
@@ -2176,6 +2238,18 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
         properties: mappedProperties,
       };
       payload = await applyContactOwnerAssignment(payload, userId);
+
+      if (syncSettings.enrich_before_create !== false) {
+        const phone = payload.sourceData?.phone || payload.properties?.phone;
+        const existing = await findExistingHubSpotContactByPhone(phone);
+        if (existing) {
+          console.log('[Background] enrich_before_create: using existing contact', existing.id);
+          if (userId && accessToken) {
+            await logContactCreationToSupabase(userId, accessToken, payload, existing, syncSettings);
+          }
+          return existing;
+        }
+      }
     }
 
     // Call edge function to create contact
@@ -2194,6 +2268,7 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
       if (userId && accessToken) {
         const syncSettings = await getSyncSettingsForUser(userId);
         await logContactCreationToSupabase(userId, accessToken, payload, createdContact, syncSettings);
+        await maybeCreateCompanyForContact(createdContact, payload, syncSettings);
       } else {
         console.warn('[Background] Missing userId or accessToken, skipping Supabase log');
         console.warn('[Background] userId:', userId, 'accessToken:', accessToken ? 'present' : 'missing');

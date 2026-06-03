@@ -1848,10 +1848,36 @@ function extractMessageTimestamp(messageElement) {
   const timestampElement = messageElement.querySelector('span[dir="auto"]');
   if (timestampElement) {
     const timestampText = timestampElement.textContent || timestampElement.innerText || '';
-    // Try to parse timestamp from text like "1:00 pm" or "11:27 am"
     return timestampText.trim();
   }
   return null;
+}
+
+function getRecentChatMessageTexts(limit = 10) {
+  const messageElements = Array.from(document.querySelectorAll('.message-out, .message-in'));
+  return messageElements
+    .slice(-limit)
+    .map((el) => {
+      const text = extractMessageText(el).trim();
+      if (!text) return null;
+      const direction = el.classList.contains('message-out') ? 'You' : 'Contact';
+      return `${direction}: ${text}`;
+    })
+    .filter(Boolean);
+}
+
+async function appendMessageHistoryIfEnabled(text) {
+  try {
+    const syncSettings = await getSyncSettings();
+    if (!syncSettings?.attach_message_history) return text || '';
+    const lines = getRecentChatMessageTexts(10);
+    if (!lines.length) return text || '';
+    const block = '\n\n--- Recent WhatsApp messages ---\n' + lines.join('\n');
+    return `${text || ''}${block}`;
+  } catch (error) {
+    console.warn('[Content] appendMessageHistoryIfEnabled failed:', error);
+    return text || '';
+  }
 }
 
 // Function to format selected messages for note
@@ -6378,9 +6404,8 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
   try {
     // Build task data object with flexible format support
     const taskPayload = {
-      // Basic task properties
       subject: taskData.taskName || '',
-      body: taskData.notes || '',
+      body: await appendMessageHistoryIfEnabled(taskData.notes || ''),
       
       // Task status - map to HubSpot values
       // HubSpot task statuses: NOT_STARTED, IN_PROGRESS, COMPLETED, WAITING, DEFERRED
@@ -6499,7 +6524,7 @@ async function createHubSpotTicket(ticketData, contactId) {
     
     // Description/Content
     if (ticketData.description) {
-      properties.content = ticketData.description;
+      properties.content = await appendMessageHistoryIfEnabled(ticketData.description);
     }
     
     // Pipeline stage - map status to HubSpot pipeline stage
@@ -7640,8 +7665,8 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo) {
   const messagePayload = {
     action: 'createHubSpotNote',
     data: {
-      contactId: numericContactId, // HubSpot numeric contact ID (as number, not string)
-      noteText: noteText,
+      contactId: numericContactId,
+      noteText: await appendMessageHistoryIfEnabled(noteText),
       noteHtml: noteHtml,
       createTodo: createTodo
     }
@@ -9391,8 +9416,45 @@ function updateSidebarContent() {
           }, 100);
         } else {
           if (updateToken !== sidebarContentUpdateToken) return;
+
+          const syncSettings = await getSyncSettings();
+          if (syncSettings?.auto_sync_contacts) {
+            try {
+              const contactName = getCurrentContactName() || '';
+              const nameParts = contactName.trim().split(/\s+/).filter(Boolean);
+              const hubspotPhone = formatPhoneForHubSpot(extractedPhone);
+              await createHubSpotContact({
+                sourceData: {
+                  phone: hubspotPhone || undefined,
+                  contact_name: contactName,
+                  last_message_date: Date.now(),
+                },
+                properties: {},
+              });
+              const syncedContacts = await checkHubSpotContact(extractedPhone);
+              if (updateToken !== sidebarContentUpdateToken) return;
+              if (syncedContacts && syncedContacts.length > 0) {
+                sidebarContent.innerHTML = await formatContactDetails(syncedContacts, extractedPhone);
+                setupCopyEmailHandler();
+                setupEmailHandler();
+                setupMeetingScheduler();
+                setupNoteCreation();
+                setupTicketCreation();
+                setupTaskCreation();
+                setupActionButtonTooltips();
+                setupMoreActionsDropdown();
+                setupNotesSection();
+                setupTicketsSection();
+                setupTasksSection();
+                setupDealsSection();
+                return;
+              }
+            } catch (autoSyncError) {
+              console.warn('[Sidebar] auto_sync_contacts failed:', autoSyncError);
+            }
+          }
+
           sidebarContent.innerHTML = await formatContactDetails(null, extractedPhone);
-          // Setup create contact form handler
           setupCreateContactForm(extractedPhone);
         }
       } else {

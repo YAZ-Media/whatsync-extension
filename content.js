@@ -203,96 +203,162 @@ function validatePhoneNumberAndCountryCode(phoneNumber) {
   };
 }
 
+function looksLikePhoneNumber(text) {
+  if (!text || typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  if (!/^\+?[\d\s\-().]+$/.test(trimmed)) return false;
+  const digits = trimmed.replace(/\D/g, '');
+  return digits.length >= 7;
+}
+
+function parsePhoneFromWhatsAppDataId(dataId) {
+  if (!dataId || !dataId.startsWith('false_')) return null;
+
+  const parts = dataId.split('_');
+  if (parts.length < 2) return null;
+
+  const phoneNumber = parts[1];
+  const validation = validatePhoneNumberAndCountryCode(phoneNumber);
+  if (validation.isValid && validation.formattedNumber) {
+    return validation.formattedNumber;
+  }
+
+  const digits = phoneNumber.replace(/\D/g, '');
+  if (digits.length >= 7) {
+    return phoneNumber.startsWith('+') ? phoneNumber : `+${digits}`;
+  }
+
+  return null;
+}
+
+function getActiveChatPanel() {
+  return document.querySelector('div#main');
+}
+
+function extractPhoneFromConversationHeader(root) {
+  if (!root) return null;
+
+  const header =
+    root.querySelector('[data-testid="conversation-header"]') ||
+    root.querySelector('header');
+  if (!header) return null;
+
+  const candidates = [];
+  header.querySelectorAll('[title]').forEach((el) => {
+    candidates.push(el.getAttribute('title'));
+  });
+  header.querySelectorAll('span[dir="auto"]').forEach((el) => {
+    candidates.push(el.textContent);
+  });
+
+  for (const value of candidates) {
+    const trimmed = (value || '').trim();
+    if (looksLikePhoneNumber(trimmed)) {
+      return trimmed;
+    }
+  }
+
+  return null;
+}
+
+function extractPhoneFromMessageComposer(root) {
+  if (!root) return null;
+
+  const messageInput = root.querySelector('div[contenteditable="true"][role="textbox"]');
+  if (!messageInput) return null;
+
+  const ariaLabel = messageInput.getAttribute('aria-label') || '';
+  const match = ariaLabel.match(/Type (?:a message )?to (.+)/i);
+  if (!match || !match[1]) return null;
+
+  const trimmed = match[1].trim();
+  return looksLikePhoneNumber(trimmed) ? trimmed : null;
+}
+
+function extractPhoneFromSelectedChatListRow() {
+  const chatList = document.querySelector('[aria-label="Chat list"]');
+  if (!chatList) return null;
+
+  const selected = chatList.querySelector('[role="gridcell"][aria-selected="true"]');
+  if (!selected) return null;
+
+  const candidates = [];
+  selected.querySelectorAll('[title], span[dir="auto"]').forEach((el) => {
+    candidates.push(el.getAttribute('title'), el.textContent);
+  });
+
+  for (const value of candidates) {
+    const trimmed = (value || '').trim();
+    if (looksLikePhoneNumber(trimmed)) {
+      return trimmed;
+    }
+  }
+
+  return null;
+}
+
+function extractPhoneFromDataIdInPanel(root) {
+  if (!root) return null;
+
+  const seen = new Set();
+  const elements = root.querySelectorAll('[data-id^="false_"]');
+  for (const el of elements) {
+    const dataId = el.getAttribute('data-id');
+    if (!dataId || seen.has(dataId)) continue;
+    seen.add(dataId);
+
+    const phone = parsePhoneFromWhatsAppDataId(dataId);
+    if (phone) return phone;
+  }
+
+  return null;
+}
+
 function getCurrentContactPhone() {
   try {
-    // Method 1: Try old header span method first
-    const maindiv = document.querySelector("div#main");
-    const header = maindiv?.querySelector("header");
-    const span = header?.children[1]?.querySelector('span[dir="auto"]');
-    const content = span?.innerHTML?.trim();
-    
-    if (content) {
-      const isPhoneNumber = /^\+?[\d\s\-()]+$/.test(content);
-      if (isPhoneNumber) {
-        console.log('[Phone Extraction] ✅ Found phone from header span (old method):', content);
-        return content;
+    const maindiv = getActiveChatPanel();
+
+    // 1. Open conversation header (scoped to active chat panel only)
+    if (maindiv) {
+      const fromHeader = extractPhoneFromConversationHeader(maindiv);
+      if (fromHeader) {
+        console.log('[Phone Extraction] ✅ Found phone from conversation header:', fromHeader);
+        return fromHeader;
       }
     }
-    
-    // Method 2: Try to get phone from the chat header (data-testid method)
-    const headerElement = document.querySelector('[data-testid="conversation-header"]');
-    if (headerElement) {
-      const phoneElement = headerElement.querySelector('[data-testid="conversation-info-header"] span[title]');
-      if (phoneElement) {
-        const phone = phoneElement.getAttribute('title') || phoneElement.textContent;
-        const trimmedPhone = phone.trim();
-        if (trimmedPhone) {
-          console.log('[Phone Extraction] ✅ Found phone from conversation header:', trimmedPhone);
-          return trimmedPhone;
-        }
+
+    // 2. Message composer label (scoped to active chat panel)
+    if (maindiv) {
+      const fromComposer = extractPhoneFromMessageComposer(maindiv);
+      if (fromComposer) {
+        console.log('[Phone Extraction] ✅ Found phone from message composer:', fromComposer);
+        return fromComposer;
       }
     }
-    
-    // Method 3: Try to get from URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const phone = urlParams.get('phone');
-    if (phone) {
-      console.log('[Phone Extraction] ✅ Found phone from URL:', phone);
-      return phone;
+
+    // 3. URL query param
+    const urlPhone = new URLSearchParams(window.location.search).get('phone');
+    if (urlPhone && looksLikePhoneNumber(urlPhone)) {
+      console.log('[Phone Extraction] ✅ Found phone from URL:', urlPhone);
+      return urlPhone;
     }
-    
-    // Method 4: Try to extract from data-id attribute starting with "false_" (with validation)
-    const elementsWithFalseId = document.querySelectorAll('[data-id^="false_"]');
-    if (elementsWithFalseId && elementsWithFalseId.length > 0) {
-      // Get the first element
-      const firstElement = elementsWithFalseId[0];
-      const dataId = firstElement.getAttribute('data-id');
-      
-      if (dataId) {
-        console.log('[Phone Extraction] Found data-id:', dataId);
-        
-        // Split by "_"
-        const parts = dataId.split('_');
-        console.log('[Phone Extraction] Split parts:', parts);
-        
-        if (parts.length >= 2) {
-          // Get the phone number part (index [1])
-          const phoneNumber = parts[1];
-          console.log('[Phone Extraction] Extracted phone number:', phoneNumber);
-          
-          // Validate phone number and identify country code
-          const validation = validatePhoneNumberAndCountryCode(phoneNumber);
-          console.log('[Phone Extraction] Phone validation result:', {
-            isValid: validation.isValid,
-            countryCode: validation.countryCode,
-            countryName: validation.countryName,
-            formattedNumber: validation.formattedNumber,
-            rawNumber: validation.rawNumber
-          });
-          
-          if (validation.isValid && validation.formattedNumber) {
-            console.log('[Phone Extraction] ✅ Found phone from data-id (validated):', validation.formattedNumber);
-            return validation.formattedNumber;
-          } else if (phoneNumber) {
-            // Return raw number even if validation failed
-            console.log('[Phone Extraction] ✅ Found phone from data-id (raw):', phoneNumber);
-            return phoneNumber;
-          }
-        }
+
+    // 4. Selected row in chat list (header may show a saved name, not digits)
+    const fromSelectedRow = extractPhoneFromSelectedChatListRow();
+    if (fromSelectedRow) {
+      console.log('[Phone Extraction] ✅ Found phone from selected chat list row:', fromSelectedRow);
+      return fromSelectedRow;
+    }
+
+    // 5. data-id fallback — only inside #main, never the whole page/chat list
+    if (maindiv) {
+      const fromDataId = extractPhoneFromDataIdInPanel(maindiv);
+      if (fromDataId) {
+        console.log('[Phone Extraction] ✅ Found phone from data-id in main panel:', fromDataId);
+        return fromDataId;
       }
     }
-    
-    // Method 5: Fallback - Try to extract from aria-label of message input
-    const messageInput = document.querySelector('div[contenteditable="true"][role="textbox"][aria-label*="Type to"]');
-    if (messageInput) {
-      const ariaLabel = messageInput.getAttribute('aria-label');
-      const match = ariaLabel?.match(/Type to (.+)/);
-      if (match && match[1]) {
-        console.log('[Phone Extraction] ✅ Found phone from aria-label:', match[1].trim());
-        return match[1].trim();
-      }
-    }
-    
+
     console.log('[Phone Extraction] ❌ No phone number found using any method');
     return null;
   } catch (error) {
@@ -9088,6 +9154,9 @@ async function formatContactDetails(contacts, phoneNumber) {
   `;
 }
 
+// Incremented on each sidebar refresh so stale async updates are ignored
+let sidebarContentUpdateToken = 0;
+
 // Function to update sidebar content based on maindiv
 function updateSidebarContent() {
   const sidebar = document.getElementById("hubspot-sidebar");
@@ -9095,6 +9164,8 @@ function updateSidebarContent() {
   
   const sidebarContent = sidebar.querySelector(".sidebar-content");
   if (!sidebarContent) return;
+
+  const updateToken = ++sidebarContentUpdateToken;
   
   const maindiv = document.querySelector("div#main");
   
@@ -9120,9 +9191,13 @@ function updateSidebarContent() {
     // Phone extraction happens when sidebar shows
     console.log('[Sidebar] Sidebar is showing - extracting phone number...');
     extractPhoneFromChat().then(async extractedPhone => {
+      if (updateToken !== sidebarContentUpdateToken) return;
+
       if (extractedPhone) {
         console.log('[Sidebar] ✅ Extracted Phone:', extractedPhone);
         const contacts = await checkHubSpotContact(extractedPhone);
+        if (updateToken !== sidebarContentUpdateToken) return;
+
         if (contacts && contacts.length > 0) {
           console.log('Matching contact found in HubSpot:', contacts);
           sidebarContent.innerHTML = await formatContactDetails(contacts, extractedPhone);
@@ -9184,11 +9259,13 @@ function updateSidebarContent() {
             }
           }, 100);
         } else {
+          if (updateToken !== sidebarContentUpdateToken) return;
           sidebarContent.innerHTML = await formatContactDetails(null, extractedPhone);
           // Setup create contact form handler
           setupCreateContactForm(extractedPhone);
         }
       } else {
+        if (updateToken !== sidebarContentUpdateToken) return;
         sidebarContent.innerHTML = `
           <div class="no-contact-found">
             <div class="no-contact-icon">📱</div>
@@ -9198,6 +9275,7 @@ function updateSidebarContent() {
         `;
       }
     }).catch(error => {
+      if (updateToken !== sidebarContentUpdateToken) return;
       console.error('Error updating sidebar content:', error);
       sidebarContent.innerHTML = `
         <div class="no-contact-found">

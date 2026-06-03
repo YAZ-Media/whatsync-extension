@@ -6,6 +6,7 @@
  */
 (function () {
   const STORAGE_KEY = 'external_auth_session';
+  const SYNC_SETTINGS_KEY = 'whatsync.syncSettings';
 
   function syncSessionToExtension() {
     try {
@@ -27,12 +28,33 @@
     }
   }
 
-  syncSessionToExtension();
+  function syncIntegrationSettingsToExtension() {
+    try {
+      const raw = localStorage.getItem(SYNC_SETTINGS_KEY);
+      if (!raw) return;
+
+      const settings = JSON.parse(raw);
+      if (!settings || typeof settings !== 'object') return;
+
+      chrome.storage.local.set({ [SYNC_SETTINGS_KEY]: settings });
+      console.log('[Dashboard Bridge] Synced HubSpot integration settings to extension');
+    } catch (e) {
+      console.warn('[Dashboard Bridge] Could not sync integration settings:', e);
+    }
+  }
+
+  function syncAll() {
+    syncSessionToExtension();
+    syncIntegrationSettingsToExtension();
+  }
+
+  syncAll();
 
   window.addEventListener('storage', (e) => {
     if (e.key === STORAGE_KEY && e.newValue) syncSessionToExtension();
+    if (e.key === SYNC_SETTINGS_KEY && e.newValue) syncIntegrationSettingsToExtension();
   });
 
-  const interval = setInterval(syncSessionToExtension, 5000);
+  const interval = setInterval(syncAll, 5000);
   setTimeout(() => clearInterval(interval), 60000);
 })();

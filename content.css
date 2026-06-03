@@ -1626,6 +1626,18 @@ body.whatsapp-message-selection-mode [data-id].message-container-selected {
     text-align: left;
 }
 
+#hubspot-sidebar .form-group .optional-label {
+    font-weight: 400;
+    opacity: 0.85;
+}
+
+#hubspot-sidebar .form-group .form-hint {
+    font-size: 12px;
+    color: var(--sidebar-text-secondary, #667781);
+    margin: 0;
+    line-height: 1.4;
+}
+
 #hubspot-sidebar .form-group input {
     padding: 12px 16px;
     border: 2px solid var(--sidebar-border, #e2e8f0);

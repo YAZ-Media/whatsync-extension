@@ -822,6 +822,83 @@ async function createHubSpotContact(contactData) {
   }
 }
 
+// Fetch deal pipelines from HubSpot (via background → hubspot-oauth)
+async function fetchHubSpotDealPipelines() {
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'getDealPipelines' });
+    if (response?.success && Array.isArray(response.pipelines)) {
+      return response.pipelines;
+    }
+    console.error('[Content] Failed to fetch deal pipelines:', response?.error);
+    return [];
+  } catch (error) {
+    console.error('[Content] Error fetching deal pipelines:', error);
+    return [];
+  }
+}
+
+/**
+ * Populates deal modal pipeline/stage dropdowns from HubSpot and applies dashboard defaults.
+ */
+async function setupDealPipelineForm(modal) {
+  const pipelineSelect = modal.querySelector('#deal-pipeline');
+  const stageSelect = modal.querySelector('#deal-stage');
+  if (!pipelineSelect || !stageSelect) return;
+
+  const [pipelines, syncSettings] = await Promise.all([
+    fetchHubSpotDealPipelines(),
+    getSyncSettings(),
+  ]);
+
+  const defaultPipelineId = syncSettings?.default_pipeline_id || null;
+  const defaultStageId = syncSettings?.default_stage_id || null;
+
+  const renderStages = (pipelineId) => {
+    const pipeline = pipelines.find((p) => p.id === pipelineId);
+    stageSelect.innerHTML = '';
+    if (!pipeline?.stages?.length) {
+      stageSelect.innerHTML = '<option value="">No stages available</option>';
+      return;
+    }
+    pipeline.stages.forEach((stage) => {
+      const option = document.createElement('option');
+      option.value = stage.id;
+      option.textContent = stage.label;
+      stageSelect.appendChild(option);
+    });
+  };
+
+  pipelineSelect.innerHTML = '';
+  if (!pipelines.length) {
+    pipelineSelect.innerHTML = '<option value="">No pipelines available</option>';
+    stageSelect.innerHTML = '<option value="">—</option>';
+    return;
+  }
+
+  pipelines.forEach((pipeline) => {
+    const option = document.createElement('option');
+    option.value = pipeline.id;
+    option.textContent = pipeline.label;
+    pipelineSelect.appendChild(option);
+  });
+
+  const initialPipeline =
+    defaultPipelineId && pipelines.some((p) => p.id === defaultPipelineId)
+      ? defaultPipelineId
+      : pipelines[0].id;
+
+  pipelineSelect.value = initialPipeline;
+  renderStages(initialPipeline);
+
+  if (defaultStageId && Array.from(stageSelect.options).some((o) => o.value === defaultStageId)) {
+    stageSelect.value = defaultStageId;
+  }
+
+  pipelineSelect.addEventListener('change', () => {
+    renderStages(pipelineSelect.value);
+  });
+}
+
 // Function to fetch HubSpot owners
 async function fetchHubSpotOwners() {
   try {
@@ -4882,21 +4959,14 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
             <div class="deal-form-group">
               <label for="deal-pipeline" class="deal-label required">Pipeline *</label>
               <select id="deal-pipeline" name="pipeline" class="deal-select" required>
-                <option value="sales-pipeline" selected>Sales Pipeline</option>
-                <option value="support-pipeline">Support Pipeline</option>
+                <option value="">Loading pipelines...</option>
               </select>
             </div>
             
             <div class="deal-form-group">
               <label for="deal-stage" class="deal-label required">Deal stage *</label>
               <select id="deal-stage" name="dealStage" class="deal-select" required>
-                <option value="appointment-scheduled" selected>Appointment Scheduled</option>
-                <option value="qualified-to-buy">Qualified to Buy</option>
-                <option value="presentation-scheduled">Presentation Scheduled</option>
-                <option value="decision-maker-bought-in">Decision Maker Bought-In</option>
-                <option value="contract-sent">Contract Sent</option>
-                <option value="closed-won">Closed Won</option>
-                <option value="closed-lost">Closed Lost</option>
+                <option value="">Loading stages...</option>
               </select>
             </div>
             
@@ -5144,6 +5214,10 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
       }
     });
   }
+
+  setupDealPipelineForm(modal).catch((err) => {
+    console.error('[Deal Modal] Failed to load pipelines:', err);
+  });
   
   // Form submit handler
   form.addEventListener('submit', async (e) => {
@@ -6530,6 +6604,15 @@ async function createHubSpotDeal(dealData, contactId) {
   console.log('[Content] Contact ID:', contactId);
   
   try {
+    const syncSettings = await getSyncSettings();
+    const placeholderPipelines = ['sales-pipeline', 'support-pipeline', 'default-pipeline'];
+    if ((!dealData.pipeline || placeholderPipelines.includes(dealData.pipeline)) && syncSettings?.default_pipeline_id) {
+      dealData.pipeline = syncSettings.default_pipeline_id;
+    }
+    if (!dealData.dealStage && syncSettings?.default_stage_id) {
+      dealData.dealStage = syncSettings.default_stage_id;
+    }
+
     // Map form fields to HubSpot deal properties
     const properties = {};
     
@@ -6543,18 +6626,9 @@ async function createHubSpotDeal(dealData, contactId) {
       properties.amount = dealData.amount;
     }
     
-    // Deal stage - map to HubSpot deal stage
+    // Deal stage — values are HubSpot stage IDs from the pipelines API
     if (dealData.dealStage) {
-      const stageMap = {
-        'appointment-scheduled': 'appointmentscheduled',
-        'qualified-to-buy': 'qualifiedtobuy',
-        'presentation-scheduled': 'presentationscheduled',
-        'decision-maker-bought-in': 'decisionmakerboughtin',
-        'contract-sent': 'contractsent',
-        'closed-won': 'closedwon',
-        'closed-lost': 'closedlost'
-      };
-      properties.dealstage = stageMap[dealData.dealStage] || dealData.dealStage;
+      properties.dealstage = dealData.dealStage;
     }
     
     // Close date - convert to timestamp (milliseconds)
@@ -7413,13 +7487,25 @@ function setupCreateContactForm(phoneNumber) {
   const createBtn = document.getElementById('createContactBtn');
   const messageDiv = document.getElementById('createContactMessage');
   const ownerSelect = document.getElementById('contactOwner');
+  const ownerHint = document.getElementById('contactOwnerHint');
+  const ownerGroup = document.getElementById('contactOwnerGroup');
   
   if (!form || !createBtn || !messageDiv) return;
+
+  getSyncSettings().then((syncSettings) => {
+    const mode = syncSettings?.contact_owner_assignment || 'round_robin';
+    if (ownerHint) {
+      ownerHint.textContent = CONTACT_OWNER_ASSIGNMENT_HINTS[mode] || CONTACT_OWNER_ASSIGNMENT_HINTS.round_robin;
+    }
+    if (ownerGroup && mode === 'none') {
+      ownerGroup.classList.add('contact-owner--auto-none');
+    }
+  });
   
   // Fetch and populate owners dropdown
   if (ownerSelect) {
     fetchHubSpotOwners().then(owners => {
-      ownerSelect.innerHTML = '<option value="">Select Owner (Optional)</option>';
+      ownerSelect.innerHTML = '<option value="">Use automatic assignment</option>';
       
       if (owners && owners.length > 0) {
         owners.forEach(owner => {
@@ -7461,7 +7547,10 @@ function setupCreateContactForm(phoneNumber) {
         phone: hubspotPhoneFormat || undefined, // Format: +971-50-569-7410 (HubSpot format)
         company: document.getElementById('company').value.trim() || undefined,
         jobtitle: document.getElementById('jobTitle').value.trim() || undefined,
-        hubspot_owner_id: document.getElementById('contactOwner').value.trim() || undefined,
+        hubspot_owner_id: (() => {
+          const manual = document.getElementById('contactOwner')?.value?.trim();
+          return manual || undefined;
+        })(),
         lifecyclestage: document.getElementById('lifecycleStage').value.trim() || undefined,
         hs_lead_status: document.getElementById('leadStatus').value.trim() || undefined
       }
@@ -7661,8 +7750,9 @@ async function formatCreateContactForm(phoneNumber) {
             <label for="jobTitle">Job Title</label>
             <input type="text" id="jobTitle" name="jobTitle">
           </div>
-          <div class="form-group">
-            <label for="contactOwner">Contact Owner</label>
+          <div class="form-group" id="contactOwnerGroup">
+            <label for="contactOwner">Contact Owner <span class="optional-label">(optional)</span></label>
+            <p class="form-hint" id="contactOwnerHint"></p>
             <select id="contactOwner" name="contactOwner">
               <option value="">Loading owners...</option>
             </select>
@@ -7722,6 +7812,28 @@ const DEFAULT_PRIVACY = { mask_phone: true, mask_media: false, allowed_propertie
 /**
  * Get privacy settings: always from backend via background script (edge function, 5-min cache).
  */
+async function getSyncSettings() {
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'getSyncSettings' });
+    if (response?.success && response.settings) {
+      return response.settings;
+    }
+  } catch (error) {
+    console.warn('[Content] getSyncSettings failed:', error);
+  }
+  return {
+    contact_owner_assignment: 'round_robin',
+    default_pipeline_id: null,
+    default_stage_id: null,
+  };
+}
+
+const CONTACT_OWNER_ASSIGNMENT_HINTS = {
+  round_robin: 'Owner is assigned automatically (round robin) when left blank.',
+  creator: 'Owner is set to your HubSpot user (matched by email) when left blank.',
+  none: 'No owner is assigned automatically. Pick one below to override.',
+};
+
 async function getPrivacySettings() {
   try {
     const response = await chrome.runtime.sendMessage({ action: 'getPrivacySettings' });

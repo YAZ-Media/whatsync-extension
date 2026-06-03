@@ -29,6 +29,11 @@ const SETTINGS_EDGE_URL = `${SUPABASE_URL}/functions/v1/settings`;
 const PRIVACY_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 let privacySettingsCache = null; // { userId, privacy, cachedAt }
 
+// HubSpot sync settings (from hubspot-oauth getSyncSettings)
+const SYNC_SETTINGS_STORAGE_KEY = 'whatsync.syncSettings';
+const SYNC_SETTINGS_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+let syncSettingsCache = null; // { userId, settings, cachedAt }
+
 // Note: HubSpot access token is stored securely in the edge function (Deno.env)
 // All HubSpot API calls are routed through the edge function - no token in extension code
 
@@ -291,6 +296,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } catch (error) {
         console.error('[Background] getPrivacySettings failed:', error);
         sendResponse({ success: false, error: error.message, privacy: null });
+      }
+    });
+    return true;
+  }
+
+  if (request.action === 'getSyncSettings') {
+    chrome.storage.local.get(['userId'], async (storageData) => {
+      const userId = storageData.userId || null;
+      if (!userId) {
+        sendResponse({ success: false, error: 'User ID not found', settings: null });
+        return;
+      }
+      try {
+        const settings = await getSyncSettingsForUser(userId);
+        sendResponse({ success: true, settings });
+      } catch (error) {
+        console.error('[Background] getSyncSettings failed:', error);
+        sendResponse({ success: false, error: error.message, settings: null });
       }
     });
     return true;
@@ -566,6 +589,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     
     return true; // Keep channel open for async response
+  }
+
+  if (request.action === 'getDealPipelines') {
+    chrome.storage.local.get(['userId'], async (storageData) => {
+      const userId = storageData.userId || null;
+      if (!userId) {
+        sendResponse({ success: false, error: 'Not authenticated', pipelines: [] });
+        return;
+      }
+      try {
+        const result = await callHubSpotOAuthEdgeFunction('getDealPipelines', { userId });
+        sendResponse({
+          success: true,
+          pipelines: result?.pipelines || [],
+          warning: result?.warning,
+        });
+      } catch (error) {
+        console.error('[Background] getDealPipelines failed:', error);
+        sendResponse({ success: false, error: error.message, pipelines: [] });
+      }
+    });
+    return true;
   }
   
   if (request.action === 'getHubSpotTasks') {
@@ -2144,8 +2189,12 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
   console.log('[Background] Creating HubSpot contact via edge function:', contactData);
   
   try {
+    const contactDataWithOwner = userId
+      ? await applyContactOwnerAssignment(contactData, userId)
+      : contactData;
+
     // Call edge function to create contact
-    const result = await callHubSpotEdgeFunction('createContact', contactData);
+    const result = await callHubSpotEdgeFunction('createContact', contactDataWithOwner);
     
     console.log('[Background] Edge function response:', result);
     
@@ -2158,7 +2207,7 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
       
       // Log to Supabase if userId and accessToken are provided
       if (userId && accessToken) {
-        await logContactCreationToSupabase(userId, accessToken, contactData, createdContact);
+        await logContactCreationToSupabase(userId, accessToken, contactDataWithOwner, createdContact);
       } else {
         console.warn('[Background] Missing userId or accessToken, skipping Supabase log');
         console.warn('[Background] userId:', userId, 'accessToken:', accessToken ? 'present' : 'missing');
@@ -2268,6 +2317,89 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
     console.error('[Background] Error checking HubSpot integration status:', error);
     throw error;
   }
+}
+
+const DEFAULT_SYNC_SETTINGS = {
+  auto_sync_contacts: false,
+  auto_create_companies: false,
+  enrich_before_create: true,
+  attach_message_history: false,
+  contact_owner_assignment: 'round_robin',
+  default_pipeline_id: null,
+  default_stage_id: null,
+  mask_phone_numbers: true,
+  redact_media_files: true,
+  data_retention_days: 90,
+};
+
+async function getCreatorEmailFromStorage() {
+  try {
+    const storage = await chrome.storage.local.get(['external_auth_session']);
+    const session = storage.external_auth_session;
+    const email = session?.user?.email || session?.email || null;
+    return typeof email === 'string' && email.trim() ? email.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getSyncSettingsViaEdgeFunction(userId) {
+  const result = await callHubSpotOAuthEdgeFunction('getSyncSettings', { userId });
+  return result?.settings ? { ...DEFAULT_SYNC_SETTINGS, ...result.settings } : { ...DEFAULT_SYNC_SETTINGS };
+}
+
+async function getSyncSettingsForUser(userId) {
+  const now = Date.now();
+  if (syncSettingsCache && syncSettingsCache.userId === userId && (now - syncSettingsCache.cachedAt) < SYNC_SETTINGS_CACHE_MS) {
+    return syncSettingsCache.settings;
+  }
+
+  try {
+    const settings = await getSyncSettingsViaEdgeFunction(userId);
+    syncSettingsCache = { userId, settings, cachedAt: now };
+    try {
+      await chrome.storage.local.set({ [SYNC_SETTINGS_STORAGE_KEY]: settings });
+    } catch { /* ignore */ }
+    return settings;
+  } catch (error) {
+    console.warn('[Background] getSyncSettings API failed, using storage fallback:', error);
+    try {
+      const stored = await chrome.storage.local.get(SYNC_SETTINGS_STORAGE_KEY);
+      const fromStorage = stored[SYNC_SETTINGS_STORAGE_KEY];
+      if (fromStorage && typeof fromStorage === 'object') {
+        const settings = { ...DEFAULT_SYNC_SETTINGS, ...fromStorage };
+        syncSettingsCache = { userId, settings, cachedAt: now };
+        return settings;
+      }
+    } catch { /* ignore */ }
+    return { ...DEFAULT_SYNC_SETTINGS };
+  }
+}
+
+/**
+ * Applies Integrations → Contact Owner Assignment when hubspot_owner_id is not set manually.
+ * Resolution runs on the server (hubspot-oauth resolveContactOwner) for a single source of truth.
+ */
+async function applyContactOwnerAssignment(contactData, userId) {
+  const properties = { ...(contactData?.properties || {}) };
+  const manualOwner = properties.hubspot_owner_id;
+  if (manualOwner != null && String(manualOwner).trim() !== '') {
+    return contactData;
+  }
+
+  const creatorEmail = await getCreatorEmailFromStorage();
+  const result = await callHubSpotOAuthEdgeFunction('resolveContactOwner', { userId, creatorEmail });
+  if (result?.warning) {
+    console.warn('[Background] Contact owner resolution:', result.warning);
+  }
+
+  if (result?.ownerId) {
+    properties.hubspot_owner_id = String(result.ownerId);
+  } else {
+    delete properties.hubspot_owner_id;
+  }
+
+  return { ...contactData, properties };
 }
 
 // Fetch privacy settings from settings edge function (with short cache)
@@ -2613,6 +2745,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Listen for storage changes to start/stop session checking
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
+    if (changes[SYNC_SETTINGS_STORAGE_KEY]) {
+      syncSettingsCache = null;
+    }
     if (changes.userLoggedIn) {
       const isLoggedIn = changes.userLoggedIn.newValue === true;
       if (isLoggedIn) {

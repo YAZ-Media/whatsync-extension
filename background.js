@@ -29,6 +29,28 @@ const SETTINGS_EDGE_URL = `${SUPABASE_URL}/functions/v1/settings`;
 const PRIVACY_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 let privacySettingsCache = null; // { userId, privacy, cachedAt }
 
+const SYNC_FAILURE_REPORT_MS = 15 * 60 * 1000; // throttle failure emails
+let lastSyncFailureReportAt = 0;
+
+async function reportSyncFailure(userId, context, message) {
+  if (!userId) return;
+  const now = Date.now();
+  if (now - lastSyncFailureReportAt < SYNC_FAILURE_REPORT_MS) return;
+  lastSyncFailureReportAt = now;
+  try {
+    await fetch(SETTINGS_EDGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY },
+      body: JSON.stringify({
+        action: 'reportSyncFailure',
+        data: { userId, context, message: String(message || 'Unknown error').slice(0, 500) },
+      }),
+    });
+  } catch (e) {
+    console.warn('[Background] reportSyncFailure failed:', e);
+  }
+}
+
 // HubSpot sync settings (from hubspot-oauth getSyncSettings)
 const SYNC_SETTINGS_STORAGE_KEY = 'whatsync.syncSettings';
 const SYNC_SETTINGS_CACHE_MS = 5 * 60 * 1000; // 5 minutes
@@ -131,6 +153,12 @@ async function callHubSpotEdgeFunction(action, data) {
       console.error('[Background] Error stack:', error.stack);
     }
     console.log('[Background] ======================================');
+    try {
+      const userId = data?.userId || data?.user_id;
+      if (userId) {
+        reportSyncFailure(userId, action, error.message);
+      }
+    } catch (_) { /* noop */ }
     throw error;
   }
 }

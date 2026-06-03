@@ -7825,7 +7825,7 @@ let currentContactData = null;
 let currentPhoneNumber = null;
 
 /** Fallback when backend privacy is unavailable (e.g. error path in renderDefaultAboutSection) */
-const DEFAULT_PRIVACY = { mask_phone: true, mask_media: false, allowed_properties: ['first_name', 'last_name', 'company', 'email', 'phone'] };
+const DEFAULT_PRIVACY = { mask_phone: true, mask_media: false, allowed_properties: ['firstname_lastname', 'phone', 'email', 'company'] };
 /** When rendering media/attachments, check (await getPrivacySettings()).mask_media and skip rendering if true */
 
 /**
@@ -7871,7 +7871,7 @@ async function getPrivacySettings() {
   return {
     mask_phone: true,
     mask_media: false,
-    allowed_properties: ['first_name', 'last_name', 'company', 'email', 'phone']
+    allowed_properties: ['firstname_lastname', 'phone', 'email', 'company']
   };
 }
 

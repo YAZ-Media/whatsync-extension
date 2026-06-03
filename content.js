@@ -7492,6 +7492,19 @@ function setupCreateContactForm(phoneNumber) {
   
   if (!form || !createBtn || !messageDiv) return;
 
+  const contactNameFromWhatsApp = getCurrentContactName();
+  if (contactNameFromWhatsApp) {
+    const nameParts = contactNameFromWhatsApp.trim().split(/\s+/);
+    const firstNameInput = document.getElementById('firstName');
+    const lastNameInput = document.getElementById('lastName');
+    if (firstNameInput && !firstNameInput.value && nameParts[0]) {
+      firstNameInput.value = nameParts[0];
+    }
+    if (lastNameInput && !lastNameInput.value && nameParts.length > 1) {
+      lastNameInput.value = nameParts.slice(1).join(' ');
+    }
+  }
+
   getSyncSettings().then((syncSettings) => {
     const mode = syncSettings?.contact_owner_assignment || 'round_robin';
     if (ownerHint) {
@@ -7539,14 +7552,20 @@ function setupCreateContactForm(phoneNumber) {
     const rawPhone = phoneField?.getAttribute('data-phone-full') || phoneNumber || phoneField?.value || '';
     const hubspotPhoneFormat = formatPhoneForHubSpot(rawPhone);
     
+    const firstName = document.getElementById('firstName').value.trim();
+    const lastName = document.getElementById('lastName').value.trim();
+    const contactName = `${firstName} ${lastName}`.trim() || getCurrentContactName() || '';
+
     const contactData = {
-      properties: {
-        firstname: document.getElementById('firstName').value.trim(),
-        lastname: document.getElementById('lastName').value.trim(),
+      sourceData: {
+        phone: hubspotPhoneFormat || undefined,
+        contact_name: contactName,
+        last_message_date: Date.now(),
         email: document.getElementById('email').value.trim() || undefined,
-        phone: hubspotPhoneFormat || undefined, // Format: +971-50-569-7410 (HubSpot format)
         company: document.getElementById('company').value.trim() || undefined,
-        jobtitle: document.getElementById('jobTitle').value.trim() || undefined,
+        job_title: document.getElementById('jobTitle').value.trim() || undefined,
+      },
+      properties: {
         hubspot_owner_id: (() => {
           const manual = document.getElementById('contactOwner')?.value?.trim();
           return manual || undefined;

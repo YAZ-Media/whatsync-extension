@@ -1530,123 +1530,68 @@ async function logNoteCreationToSupabase(userId, accessToken, noteData, requestD
   }
 }
 
-// Function to log contact creation to Supabase
-async function logContactCreationToSupabase(userId, accessToken, contactData, hubspotContact) {
+// Function to log contact creation to external activity table (via hubspot edge function)
+async function logContactCreationToSupabase(userId, accessToken, contactData, hubspotContact, syncSettings = null) {
   if (!userId) {
     console.warn('[Background] No userId provided, skipping log');
     return;
   }
-  
-  if (!accessToken) {
-    console.warn('[Background] No access token provided, skipping log (RLS requires auth)');
-    return;
-  }
-  
+
   try {
+    const settings = syncSettings || await getSyncSettingsForUser(userId);
+    const shouldMaskPhone = settings?.mask_phone_numbers !== false;
+
     const hubspotContactId = hubspotContact?.id || hubspotContact?.properties?.id || hubspotContact?.objectId || null;
     const properties = hubspotContact?.properties || contactData?.properties || {};
-    
-    // Build contact name for title and description
-    const firstName = properties.firstname || properties.first_name || '';
-    const lastName = properties.lastname || properties.last_name || '';
-    const fullName = `${firstName} ${lastName}`.trim() || 'Unknown Contact';
+
+    const firstName = properties.firstname || properties.first_name || null;
+    const lastName = properties.lastname || properties.last_name || null;
+    const fullName = `${firstName || ''} ${lastName || ''}`.trim() || 'Unknown Contact';
     const email = properties.email || null;
-    const phone = properties.phone || contactData?.properties?.phone || null;
-    
-    // Build description with contact details
+    let phone = properties.phone || properties.mobilephone || contactData?.properties?.phone || null;
+    const company = properties.company || null;
+    const jobTitle = properties.jobtitle || properties.job_title || null;
+
+    const phoneForLog = shouldMaskPhone && phone ? maskPhoneForActivityLog(phone) : phone;
+
     const descriptionParts = [];
     if (fullName !== 'Unknown Contact') descriptionParts.push(fullName);
     if (email) descriptionParts.push(email);
-    if (phone) descriptionParts.push(phone);
-    const description = descriptionParts.length > 0 ? descriptionParts.join(' • ') : 'Contact created in HubSpot';
-    
-    // Prepare metadata with all contact details
-    const metadata = {
-      phone_number: phone,
-      first_name: firstName || null,
-      last_name: lastName || null,
-      email: email,
-      company: properties.company || null,
-      job_title: properties.jobtitle || properties.job_title || null,
-      raw_contact: hubspotContact || null,
-      raw_contact_data: contactData || null
-    };
-    
+    if (phoneForLog) descriptionParts.push(phoneForLog);
+    const description = descriptionParts.length > 0
+      ? descriptionParts.join(' • ')
+      : 'Contact created in HubSpot';
+
     const logData = {
-      user_id: userId,
-      activity_type: 'contact_created',
-      hubspot_object_id: hubspotContactId || null,
-      hubspot_object_type: 'contact',
+      userId,
+      hubspotContactId: hubspotContactId ? String(hubspotContactId) : null,
+      phoneNumber: phoneForLog,
+      firstName,
+      lastName,
+      email,
+      company,
+      jobTitle,
       title: 'Contact created',
-      description: description,
-      metadata: metadata
-    };
-    
-    console.log('[Background] Logging contact creation to Supabase:', logData);
-    
-    // Try to get a fresh token before logging
-    let freshAccessToken = await getFreshAccessToken(userId, accessToken);
-    
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/hubspot_contact_logs`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${freshAccessToken}`, // Use fresh access token for RLS
-        'Prefer': 'return=minimal'
+      description,
+      metadata: {
+        phone_number: phoneForLog,
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        company,
+        job_title: jobTitle,
+        raw_contact: hubspotContact || null,
+        raw_contact_data: contactData || null,
+        phone_masked: shouldMaskPhone,
       },
-      body: JSON.stringify(logData)
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorData = null;
-      try {
-        errorData = JSON.parse(errorText);
-      } catch (e) {
-        // Not JSON, use raw text
-      }
-      
-      // If token expired, try to get a fresh one from storage
-      if (response.status === 401 && (errorData?.message?.includes('JWT expired') || errorData?.code === 'PGRST303')) {
-        console.warn('[Background] Access token expired, attempting to get fresh token from storage');
-        
-        // Get latest token from storage (might have been refreshed by popup)
-        const storageData = await chrome.storage.local.get(['accessToken']);
-        const updatedToken = storageData.accessToken;
-        
-        if (updatedToken && updatedToken !== freshAccessToken) {
-          console.log('[Background] Retrying with updated token from storage');
-          // Retry with updated token
-          const retryResponse = await fetch(`${SUPABASE_URL}/rest/v1/hubspot_contact_logs`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': SUPABASE_ANON_KEY,
-              'Authorization': `Bearer ${updatedToken}`,
-              'Prefer': 'return=minimal'
-            },
-            body: JSON.stringify(logData)
-          });
-          
-          if (retryResponse.ok) {
-            console.log('[Background] ✅ Contact creation logged to Supabase successfully (after token refresh)');
-            return;
-          } else {
-            console.error('[Background] Failed to log contact even after token refresh:', retryResponse.status);
-          }
-        }
-      }
-      
-      console.error('[Background] Failed to log to Supabase:', response.status, response.statusText);
-      console.error('[Background] Error details:', errorText);
-      // Don't throw - logging failure shouldn't break the contact creation
-    } else {
-      console.log('[Background] ✅ Contact creation logged to Supabase successfully');
-    }
+    };
+
+    console.log('[Background] Logging contact creation via edge function:', logData);
+    const result = await callHubSpotEdgeFunction('logContactCreation', logData);
+    console.log('[Background] ✅ Contact creation logged successfully via edge function:', result);
+    return result;
   } catch (error) {
-    console.error('[Background] Error logging to Supabase:', error);
-    // Don't throw - logging failure shouldn't break the contact creation
+    console.error('[Background] Error logging contact creation:', error);
   }
 }
 
@@ -2189,12 +2134,24 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
   console.log('[Background] Creating HubSpot contact via edge function:', contactData);
   
   try {
-    const contactDataWithOwner = userId
-      ? await applyContactOwnerAssignment(contactData, userId)
-      : contactData;
+    let payload = contactData;
+    if (userId) {
+      const syncSettings = await getSyncSettingsForUser(userId);
+      const sourceData = contactData?.sourceData || {};
+      const mappedProperties = applyFieldMappings(
+        sourceData,
+        syncSettings.field_mappings,
+        contactData?.properties || {}
+      );
+      payload = {
+        ...contactData,
+        properties: mappedProperties,
+      };
+      payload = await applyContactOwnerAssignment(payload, userId);
+    }
 
     // Call edge function to create contact
-    const result = await callHubSpotEdgeFunction('createContact', contactDataWithOwner);
+    const result = await callHubSpotEdgeFunction('createContact', payload);
     
     console.log('[Background] Edge function response:', result);
     
@@ -2207,7 +2164,8 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
       
       // Log to Supabase if userId and accessToken are provided
       if (userId && accessToken) {
-        await logContactCreationToSupabase(userId, accessToken, contactDataWithOwner, createdContact);
+        const syncSettings = await getSyncSettingsForUser(userId);
+        await logContactCreationToSupabase(userId, accessToken, payload, createdContact, syncSettings);
       } else {
         console.warn('[Background] Missing userId or accessToken, skipping Supabase log');
         console.warn('[Background] userId:', userId, 'accessToken:', accessToken ? 'present' : 'missing');
@@ -2330,7 +2288,99 @@ const DEFAULT_SYNC_SETTINGS = {
   mask_phone_numbers: true,
   redact_media_files: true,
   data_retention_days: 90,
+  field_mappings: [
+    { source: 'phone', target: 'phone', enabled: true },
+    { source: 'contact_name', target: 'firstname', enabled: true, splitName: true },
+    { source: 'last_message_date', target: 'notes_last_contacted', enabled: false },
+    { source: 'email', target: 'email', enabled: true },
+    { source: 'company', target: 'company', enabled: true },
+    { source: 'job_title', target: 'jobtitle', enabled: true },
+  ],
 };
+
+function normalizeFieldMappings(raw) {
+  const defaults = DEFAULT_SYNC_SETTINGS.field_mappings;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return defaults.map((m) => ({ ...m }));
+  }
+
+  const allowedSources = new Set(defaults.map((m) => m.source));
+  const bySource = new Map();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const source = String(item.source || '');
+    const target = String(item.target || '').trim();
+    if (!allowedSources.has(source) || !target) continue;
+    bySource.set(source, item);
+  }
+
+  return defaults.map((fallback) => {
+    const existing = bySource.get(fallback.source);
+    return existing
+      ? {
+          source: fallback.source,
+          target: String(existing.target || fallback.target),
+          enabled: existing.enabled !== false,
+          ...(fallback.source === 'contact_name'
+            ? { splitName: existing.splitName !== false }
+            : {}),
+        }
+      : { ...fallback };
+  });
+}
+
+function splitContactName(name) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return { first: '', last: '' };
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return { first: parts[0], last: '' };
+  return { first: parts[0], last: parts.slice(1).join(' ') };
+}
+
+function applyFieldMappings(sourceData, mappings, extraProperties = {}) {
+  const properties = { ...extraProperties };
+  const normalizedMappings = normalizeFieldMappings(mappings);
+
+  for (const mapping of normalizedMappings) {
+    if (!mapping.enabled) continue;
+    const value = sourceData[mapping.source];
+    if (value == null || value === '') continue;
+
+    if (mapping.source === 'contact_name' && mapping.splitName !== false) {
+      const { first, last } = splitContactName(value);
+      if (mapping.target === 'firstname' || mapping.target === 'lastname') {
+        if (first) properties.firstname = first;
+        if (last) properties.lastname = last;
+      } else {
+        properties[mapping.target] = String(value);
+      }
+      continue;
+    }
+
+    if (mapping.source === 'last_message_date') {
+      const timestamp = typeof value === 'number'
+        ? value
+        : new Date(value).getTime();
+      if (!Number.isNaN(timestamp)) {
+        properties[mapping.target] = String(timestamp);
+      }
+      continue;
+    }
+
+    properties[mapping.target] = String(value);
+  }
+
+  return properties;
+}
+
+function maskPhoneForActivityLog(phone) {
+  if (!phone || typeof phone !== 'string') return phone;
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length <= 4) return phone;
+  const last4 = digits.slice(-4);
+  const prefix = phone.trim().startsWith('+') ? '+' : '';
+  return `${prefix}*** *** ${last4}`;
+}
 
 async function getCreatorEmailFromStorage() {
   try {
@@ -2345,7 +2395,14 @@ async function getCreatorEmailFromStorage() {
 
 async function getSyncSettingsViaEdgeFunction(userId) {
   const result = await callHubSpotOAuthEdgeFunction('getSyncSettings', { userId });
-  return result?.settings ? { ...DEFAULT_SYNC_SETTINGS, ...result.settings } : { ...DEFAULT_SYNC_SETTINGS };
+  if (!result?.settings) {
+    return { ...DEFAULT_SYNC_SETTINGS, field_mappings: normalizeFieldMappings(DEFAULT_SYNC_SETTINGS.field_mappings) };
+  }
+  return {
+    ...DEFAULT_SYNC_SETTINGS,
+    ...result.settings,
+    field_mappings: normalizeFieldMappings(result.settings.field_mappings),
+  };
 }
 
 async function getSyncSettingsForUser(userId) {
@@ -2357,6 +2414,7 @@ async function getSyncSettingsForUser(userId) {
   try {
     const settings = await getSyncSettingsViaEdgeFunction(userId);
     syncSettingsCache = { userId, settings, cachedAt: now };
+    privacySettingsCache = null;
     try {
       await chrome.storage.local.set({ [SYNC_SETTINGS_STORAGE_KEY]: settings });
     } catch { /* ignore */ }
@@ -2402,24 +2460,45 @@ async function applyContactOwnerAssignment(contactData, userId) {
   return { ...contactData, properties };
 }
 
-// Fetch privacy settings from settings edge function (with short cache)
+// Fetch privacy settings from settings edge function + HubSpot integration settings
 async function getPrivacySettingsViaEdgeFunction(userId) {
   const now = Date.now();
   if (privacySettingsCache && privacySettingsCache.userId === userId && (now - privacySettingsCache.cachedAt) < PRIVACY_CACHE_MS) {
     return privacySettingsCache.privacy;
   }
-  const res = await fetch(SETTINGS_EDGE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
-    body: JSON.stringify({ action: 'getPrivacySettings', data: { userId } })
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err || `Settings API ${res.status}`);
+
+  let workspacePrivacy = { mask_phone: true, mask_media: false, allowed_properties: [] };
+  try {
+    const res = await fetch(SETTINGS_EDGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+      body: JSON.stringify({ action: 'getPrivacySettings', data: { userId } })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      workspacePrivacy = data.privacy || workspacePrivacy;
+    }
+  } catch (error) {
+    console.warn('[Background] workspace privacy fetch failed, using defaults:', error);
   }
-  const data = await res.json();
-  const privacy = data.privacy || { mask_phone: false, mask_media: false, allowed_properties: [] };
-  privacySettingsCache = { userId, privacy, cachedAt: Date.now() };
+
+  let syncSettings = { ...DEFAULT_SYNC_SETTINGS };
+  try {
+    syncSettings = await getSyncSettingsForUser(userId);
+  } catch (error) {
+    console.warn('[Background] sync settings fetch failed for privacy merge:', error);
+  }
+
+  const privacy = {
+    mask_phone: syncSettings.mask_phone_numbers ?? workspacePrivacy.mask_phone ?? true,
+    mask_media: syncSettings.redact_media_files ?? workspacePrivacy.mask_media ?? false,
+    allowed_properties: Array.isArray(workspacePrivacy.allowed_properties)
+      ? workspacePrivacy.allowed_properties
+      : [],
+    data_retention_days: syncSettings.data_retention_days ?? 90,
+  };
+
+  privacySettingsCache = { userId, privacy, cachedAt: now };
   return privacy;
 }
 

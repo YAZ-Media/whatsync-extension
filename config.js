@@ -1,11 +1,11 @@
 // Supabase Configuration
 const SUPABASE_CONFIG = {
-  url: 'https://cxzeixolbajmgyzedylt.supabase.co',
+  url: 'https://ogsvchujqpayuckxuwdf.supabase.co',
   // Replace with your Supabase anon/public key from Project Settings > API
-  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4emVpeG9sYmFqbWd5emVkeWx0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs',
+  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M',
   // Redirect URL after email confirmation - Update this to your actual redirect page
   // For Chrome extensions, you can use a simple web page or disable email confirmation
-  redirectUrl: 'https://cxzeixolbajmgyzedylt.supabase.co/auth/v1/callback'
+  redirectUrl: 'https://ogsvchujqpayuckxuwdf.supabase.co/auth/v1/callback'
 };
 
 // HubSpot Configuration

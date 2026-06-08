@@ -1,5 +1,167 @@
 // Content script that runs only on web.whatsapp.com
-console.log('WhatsApp Web Extension loaded!');
+
+// ==================== Extension runtime guards ====================
+
+let extensionContextInvalidated = false;
+let sidebarFieldsPollingInterval = null;
+let extensionListenersRegistered = false;
+
+function isExtensionRuntimeAvailable() {
+  try {
+    return !!(
+      typeof chrome !== 'undefined' &&
+      chrome?.runtime?.id &&
+      chrome?.storage?.local
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isExtensionContextInvalidated(error) {
+  const msg = error?.message || String(error || '');
+  return (
+    msg.includes('Extension context invalidated') ||
+    msg.includes('Receiving end does not exist') ||
+    msg.includes('Could not establish connection') ||
+    msg.includes('message channel closed') ||
+    msg.includes('asynchronous response') ||
+    msg.includes("reading 'local'") ||
+    msg.includes("reading 'onMessage'")
+  );
+}
+
+async function extensionStorageGet(keys) {
+  if (!isExtensionRuntimeAvailable()) {
+    markExtensionContextInvalidated();
+    return {};
+  }
+  try {
+    return await chrome.storage.local.get(keys);
+  } catch (error) {
+    if (isExtensionContextInvalidated(error)) {
+      markExtensionContextInvalidated();
+    }
+    return {};
+  }
+}
+
+function showExtensionReloadBanner() {
+  if (document.getElementById('whatsync-reload-banner')) return;
+  if (!document.body) {
+    document.addEventListener('DOMContentLoaded', showExtensionReloadBanner, { once: true });
+    return;
+  }
+
+  const banner = document.createElement('div');
+  banner.id = 'whatsync-reload-banner';
+  banner.setAttribute('role', 'alert');
+  banner.innerHTML = `
+    <span>WhatSync was updated. Refresh this page (F5) to reconnect the extension.</span>
+    <button type="button" id="whatsync-reload-btn">Refresh now</button>
+  `;
+  Object.assign(banner.style, {
+    position: 'fixed',
+    top: '56px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: '1000000',
+    background: '#fef3c7',
+    color: '#92400e',
+    border: '1px solid #f59e0b',
+    borderRadius: '8px',
+    padding: '10px 14px',
+    fontSize: '13px',
+    fontFamily: 'system-ui, sans-serif',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+  });
+
+  const btn = banner.querySelector('#whatsync-reload-btn');
+  Object.assign(btn.style, {
+    border: 'none',
+    background: '#f59e0b',
+    color: '#fff',
+    borderRadius: '6px',
+    padding: '6px 10px',
+    cursor: 'pointer',
+    fontWeight: '600',
+  });
+  btn.addEventListener('click', () => window.location.reload());
+
+  document.body.appendChild(banner);
+}
+
+function markExtensionContextInvalidated() {
+  if (extensionContextInvalidated) return;
+  extensionContextInvalidated = true;
+  showExtensionReloadBanner();
+  if (sidebarFieldsPollingInterval) {
+    clearInterval(sidebarFieldsPollingInterval);
+    sidebarFieldsPollingInterval = null;
+  }
+}
+
+async function sendExtensionMessage(message) {
+  if (extensionContextInvalidated) {
+    return null;
+  }
+
+  try {
+    if (!chrome?.runtime?.id) {
+      markExtensionContextInvalidated();
+      return null;
+    }
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    if (isExtensionContextInvalidated(error)) {
+      markExtensionContextInvalidated();
+    }
+    return null;
+  }
+}
+
+// ==================== Supabase / Edge function auth ====================
+
+const HUBSPOT_EDGE_FUNCTION_URL =
+  typeof EDGE_FUNCTIONS_CONFIG !== 'undefined'
+    ? `${EDGE_FUNCTIONS_CONFIG.url}/functions/v1/hubspot`
+    : 'https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot';
+const HUBSPOT_ANON_KEY =
+  typeof EDGE_FUNCTIONS_CONFIG !== 'undefined'
+    ? EDGE_FUNCTIONS_CONFIG.anonKey
+    : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs';
+
+async function getExtensionSession() {
+  const result = await extensionStorageGet('external_auth_session');
+  return result.external_auth_session || null;
+}
+
+async function getExtensionAuthHeaders() {
+  const session = await getExtensionSession();
+  const token = session?.session?.access_token || session?.access_token || null;
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: HUBSPOT_ANON_KEY,
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function callHubSpotEdgeFromContent(action, data) {
+  const headers = await getExtensionAuthHeaders();
+  const response = await fetch(HUBSPOT_EDGE_FUNCTION_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ action, data }),
+  });
+  const json = await response.json().catch(() => ({}));
+  return { ok: response.ok, status: response.status, json };
+}
 
 // ==================== Automation Manager ====================
 
@@ -7,16 +169,32 @@ const AUTOMATION_SUPABASE_URL = typeof EDGE_FUNCTIONS_CONFIG !== 'undefined'
   ? EDGE_FUNCTIONS_CONFIG.url
   : 'https://dizxmubrpwwfrjepcttb.supabase.co';
 
+async function getExtensionUserId() {
+  const result = await extensionStorageGet(['external_auth_session', 'userId', 'userLoggedIn']);
+  if (!result.userLoggedIn) return null;
+  return result.external_auth_session?.user?.id || result.userId || null;
+}
+
+async function hasExtensionAuthToken() {
+  try {
+    const result = await extensionStorageGet(['userLoggedIn', 'accessToken', 'external_auth_session']);
+    if (!result.userLoggedIn) return false;
+    const session = result.external_auth_session;
+    const token =
+      result.accessToken ||
+      session?.access_token ||
+      session?.accessToken ||
+      session?.session?.access_token ||
+      null;
+    return !!token;
+  } catch {
+    return false;
+  }
+}
+
 class AutomationManager {
   async getUserId() {
-    try {
-      const result = await chrome.storage.local.get('external_auth_session');
-      const session = result.external_auth_session;
-      return session?.user?.id || null;
-    } catch (error) {
-      console.error('[Automations] Error getting userId:', error);
-      return null;
-    }
+    return getExtensionUserId();
   }
 
   async trigger(triggerType, context) {
@@ -27,21 +205,16 @@ class AutomationManager {
     }
 
     try {
-      const response = await fetch(`${AUTOMATION_SUPABASE_URL}/functions/v1/hubspot`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'evaluateAutomations',
-          data: { userId, triggerType, context }
-        })
+      const { ok, status, json: result } = await callHubSpotEdgeFromContent('evaluateAutomations', {
+        userId,
+        triggerType,
+        context,
       });
 
-      if (!response.ok) {
-        console.error(`[Automations] Error response: ${response.status} ${response.statusText}`);
-        return { success: false, error: `HTTP ${response.status}` };
+      if (!ok) {
+        console.error(`[Automations] Error response: ${status}`);
+        return { success: false, error: `HTTP ${status}` };
       }
-
-      const result = await response.json();
       return result;
     } catch (error) {
       console.error('[Automations] Error:', error);
@@ -214,7 +387,22 @@ function looksLikePhoneNumber(text) {
 }
 
 function parsePhoneFromWhatsAppDataId(dataId) {
-  if (!dataId || !dataId.startsWith('false_')) return null;
+  if (!dataId || typeof dataId !== 'string') return null;
+
+  // Message / chat JIDs: false_971501234567@c.us_ABC or true_971501234567@c.us_ABC
+  const jidMatch = dataId.match(/^(?:true|false)_(\d+)@(?:c\.us|s\.whatsapp\.net)/);
+  if (jidMatch) {
+    const digits = jidMatch[1];
+    if (digits.length >= 7) return `+${digits}`;
+  }
+
+  // Generic @c.us anywhere in data-id
+  const genericJid = dataId.match(/(\d{7,})@(?:c\.us|s\.whatsapp\.net)/);
+  if (genericJid) {
+    return `+${genericJid[1]}`;
+  }
+
+  if (!dataId.startsWith('false_') && !dataId.startsWith('true_')) return null;
 
   const parts = dataId.split('_');
   if (parts.length < 2) return null;
@@ -233,8 +421,86 @@ function parsePhoneFromWhatsAppDataId(dataId) {
   return null;
 }
 
+function extractPhoneFromDataIdOnElement(el) {
+  if (!el) return null;
+  let node = el;
+  for (let depth = 0; node && depth < 8; depth++) {
+    const dataId = node.getAttribute?.('data-id');
+    if (dataId) {
+      const phone = parsePhoneFromWhatsAppDataId(dataId);
+      if (phone) return phone;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
 function getActiveChatPanel() {
-  return document.querySelector('div#main');
+  return (
+    document.querySelector('div#main') ||
+    document.querySelector('[data-testid="conversation-panel-wrapper"]') ||
+    document.querySelector('[data-testid="conversation-panel-body"]')?.parentElement ||
+    null
+  );
+}
+
+function getChatListContainer() {
+  return (
+    document.querySelector('[aria-label="Chat list"]') ||
+    document.querySelector('#pane-side') ||
+    null
+  );
+}
+
+function findSelectedChatListRow(chatList) {
+  if (!chatList) return null;
+
+  const selectedEl = chatList.querySelector('[aria-selected="true"]');
+  if (selectedEl) {
+    return (
+      selectedEl.closest('[role="listitem"]') ||
+      selectedEl.closest('[role="row"]') ||
+      selectedEl.closest('[role="gridcell"]') ||
+      selectedEl
+    );
+  }
+
+  const byAria =
+    chatList.querySelector('[role="gridcell"][aria-selected="true"]') ||
+    chatList.querySelector('[role="row"][aria-selected="true"]');
+  if (byAria) return byAria;
+
+  const focusedRow = chatList.querySelector(
+    '[role="listitem"]:focus-within, [role="row"]:focus-within, [data-testid="cell-frame-container"]:focus-within'
+  );
+  if (focusedRow) {
+    return (
+      focusedRow.closest('[role="listitem"]') ||
+      focusedRow.closest('[role="row"]') ||
+      focusedRow
+    );
+  }
+
+  return null;
+}
+
+function extractPhoneFromElementAttributes(root) {
+  if (!root) return null;
+
+  const attrs = ['data-id', 'data-chat-id', 'data-jid', 'data-peer', 'id', 'aria-label', 'title'];
+  const nodes = [root, ...root.querySelectorAll('*')];
+
+  for (const node of nodes) {
+    for (const attr of attrs) {
+      const val = node.getAttribute?.(attr);
+      if (!val) continue;
+      if (looksLikePhoneNumber(val)) return val.trim();
+      const fromId = parsePhoneFromWhatsAppDataId(val);
+      if (fromId) return fromId;
+    }
+  }
+
+  return null;
 }
 
 function extractPhoneFromConversationHeader(root) {
@@ -278,11 +544,17 @@ function extractPhoneFromMessageComposer(root) {
 }
 
 function extractPhoneFromSelectedChatListRow() {
-  const chatList = document.querySelector('[aria-label="Chat list"]');
+  const chatList = getChatListContainer();
   if (!chatList) return null;
 
-  const selected = chatList.querySelector('[role="gridcell"][aria-selected="true"]');
+  const selected = findSelectedChatListRow(chatList);
   if (!selected) return null;
+
+  const fromAttrs = extractPhoneFromElementAttributes(selected);
+  if (fromAttrs) return fromAttrs;
+
+  const fromDataId = extractPhoneFromDataIdOnElement(selected);
+  if (fromDataId) return fromDataId;
 
   const candidates = [];
   selected.querySelectorAll('[title], span[dir="auto"]').forEach((el) => {
@@ -299,14 +571,69 @@ function extractPhoneFromSelectedChatListRow() {
   return null;
 }
 
+function extractPhoneFromOpenContactDrawer() {
+  const drawer =
+    document.querySelector('[data-testid="contact-info-drawer"]') ||
+    document.querySelector('[data-testid="drawer-right"]') ||
+    document.querySelector('section[data-animate-drawer-title]');
+
+  if (!drawer) return null;
+  return extractPhoneFromElementAttributes(drawer);
+}
+
+/** Close WhatsApp's contact-info drawer so it does not fight the HubSpot sidebar for width. */
+function closeWhatsAppContactDrawer() {
+  const drawer =
+    document.querySelector('[data-testid="contact-info-drawer"]') ||
+    document.querySelector('[data-testid="drawer-right"]');
+  if (!drawer) return;
+
+  const backBtn =
+    drawer.querySelector('[data-testid="back"]') ||
+    drawer.querySelector('[data-icon="back"]')?.closest('button, div[role="button"]') ||
+    document.querySelector('[data-testid="back"]');
+  backBtn?.click();
+}
+
+/** Match chat list row by saved contact name and read JID from data-id (no drawer click). */
+function extractPhoneFromChatListByName() {
+  const contactName = getCurrentContactName()?.trim();
+  if (!contactName) return null;
+
+  const chatList = getChatListContainer();
+  if (!chatList) return null;
+
+  const rows = chatList.querySelectorAll('[role="listitem"], [role="row"], [role="gridcell"]');
+  for (const row of rows) {
+    const titles = [];
+    row.querySelectorAll('[title], span[dir="auto"]').forEach((el) => {
+      titles.push(el.getAttribute('title'), el.textContent);
+    });
+
+    const matchesName = titles.some((t) => (t || '').trim() === contactName);
+    if (!matchesName) continue;
+
+    const phone = extractPhoneFromElementAttributes(row);
+    if (phone) {
+      console.log('[Phone Extraction] ✅ Found phone from chat list row by name:', phone);
+      return phone;
+    }
+  }
+
+  return null;
+}
+
 function extractPhoneFromDataIdInPanel(root) {
   if (!root) return null;
 
   const seen = new Set();
-  const elements = root.querySelectorAll('[data-id^="false_"]');
+  const elements = root.querySelectorAll('[data-id]');
   for (const el of elements) {
     const dataId = el.getAttribute('data-id');
     if (!dataId || seen.has(dataId)) continue;
+    if (!dataId.includes('@c.us') && !dataId.startsWith('false_') && !dataId.startsWith('true_')) {
+      continue;
+    }
     seen.add(dataId);
 
     const phone = parsePhoneFromWhatsAppDataId(dataId);
@@ -320,8 +647,19 @@ function getCurrentContactPhone() {
   try {
     const maindiv = getActiveChatPanel();
 
-    // 1. Open conversation header (scoped to active chat panel only)
+    // 1. Open conversation header — visible phone (saved contact) or data-id JID (unsaved)
     if (maindiv) {
+      const header =
+        maindiv.querySelector('[data-testid="conversation-header"]') ||
+        maindiv.querySelector('header');
+      if (header) {
+        const fromHeaderJid = extractPhoneFromDataIdOnElement(header);
+        if (fromHeaderJid) {
+          console.log('[Phone Extraction] ✅ Found phone from header data-id:', fromHeaderJid);
+          return fromHeaderJid;
+        }
+      }
+
       const fromHeader = extractPhoneFromConversationHeader(maindiv);
       if (fromHeader) {
         console.log('[Phone Extraction] ✅ Found phone from conversation header:', fromHeader);
@@ -345,20 +683,45 @@ function getCurrentContactPhone() {
       return urlPhone;
     }
 
-    // 4. Selected row in chat list (header may show a saved name, not digits)
+    // 4. Selected chat list row (data-id JID for unsaved contacts, or visible phone)
     const fromSelectedRow = extractPhoneFromSelectedChatListRow();
     if (fromSelectedRow) {
       console.log('[Phone Extraction] ✅ Found phone from selected chat list row:', fromSelectedRow);
       return fromSelectedRow;
     }
 
-    // 5. data-id fallback — only inside #main, never the whole page/chat list
+    // 5. data-id on message bubbles inside active chat panel
     if (maindiv) {
       const fromDataId = extractPhoneFromDataIdInPanel(maindiv);
       if (fromDataId) {
         console.log('[Phone Extraction] ✅ Found phone from data-id in main panel:', fromDataId);
         return fromDataId;
       }
+    }
+
+    // 6. Message panel (alternate WhatsApp layout)
+    const messagePanel =
+      document.querySelector('[data-testid="conversation-panel-messages"]') ||
+      document.querySelector('[data-testid="conversation-panel-body"]');
+    if (messagePanel) {
+      const fromMessages = extractPhoneFromDataIdInPanel(messagePanel);
+      if (fromMessages) {
+        console.log('[Phone Extraction] ✅ Found phone from message panel data-id:', fromMessages);
+        return fromMessages;
+      }
+    }
+
+    // 7. Chat list row matched by saved contact name (header shows name, not phone)
+    const fromNameMatch = extractPhoneFromChatListByName();
+    if (fromNameMatch) {
+      return fromNameMatch;
+    }
+
+    // 8. Contact drawer only if user already opened it (never auto-click — breaks layout)
+    const fromDrawer = extractPhoneFromOpenContactDrawer();
+    if (fromDrawer) {
+      console.log('[Phone Extraction] ✅ Found phone from open contact drawer:', fromDrawer);
+      return fromDrawer;
     }
 
     console.log('[Phone Extraction] ❌ No phone number found using any method');
@@ -369,20 +732,88 @@ function getCurrentContactPhone() {
   }
 }
 
+const INVALID_CONTACT_NAME_PATTERNS = [
+  /click/i,
+  /contact info/i,
+  /tap here/i,
+  /add to contacts/i,
+  /view contact/i,
+  /business account/i,
+  /here for/i,
+];
+
+const JUNK_CONTACT_NAME_WORDS = new Set([
+  'click', 'here', 'for', 'contact', 'info', 'tap', 'add', 'to', 'view', 'the', 'a', 'an',
+]);
+
+function isValidContactName(name) {
+  const trimmed = (name || '').trim();
+  if (trimmed.length < 2) return false;
+  if (looksLikePhoneNumber(trimmed)) return false;
+  if (INVALID_CONTACT_NAME_PATTERNS.some((pattern) => pattern.test(trimmed))) return false;
+
+  const words = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length > 0 && words.every((word) => JUNK_CONTACT_NAME_WORDS.has(word))) {
+    return false;
+  }
+
+  return true;
+}
+
+function parseContactNameParts(contactName) {
+  const name = (contactName || '').trim();
+  if (!isValidContactName(name)) {
+    return { firstName: '', lastName: '' };
+  }
+
+  const parts = name.split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || '',
+    lastName: parts.length > 1 ? parts.slice(1).join(' ') : '',
+  };
+}
+
+function readContactNameFromHeaderElement(el) {
+  if (!el || el.closest('a, button, [role="button"]')) return '';
+
+  const fromTitle = el.getAttribute('title')?.trim();
+  if (fromTitle && isValidContactName(fromTitle)) return fromTitle;
+
+  const fromText = el.textContent?.trim();
+  if (fromText && isValidContactName(fromText)) return fromText;
+
+  return '';
+}
+
 /**
  * Get current contact name from WhatsApp chat
  */
 function getCurrentContactName() {
   try {
-    const header = document.querySelector('[data-testid="conversation-header"]');
-    if (header) {
-      const nameElement = header.querySelector('span[data-testid="conversation-info-header"] span[title]') ||
-                         header.querySelector('span[title]');
-      if (nameElement) {
-        return nameElement.getAttribute('title') || nameElement.textContent || '';
-      }
+    const header =
+      document.querySelector('[data-testid="conversation-header"]') ||
+      document.querySelector('div#main header');
+    if (!header) return '';
+
+    const infoHeader = header.querySelector('[data-testid="conversation-info-header"]');
+    if (infoHeader) {
+      const titleEl =
+        infoHeader.querySelector('span[title]') ||
+        infoHeader.querySelector('span[dir="auto"]');
+      const fromInfo = readContactNameFromHeaderElement(titleEl);
+      if (fromInfo) return fromInfo;
     }
-    return '';
+
+    const candidates = [];
+    header.querySelectorAll('span[title], span[dir="auto"]').forEach((el) => {
+      const name = readContactNameFromHeaderElement(el);
+      if (name) candidates.push(name);
+    });
+
+    if (candidates.length === 0) return '';
+
+    // Prefer the longest valid label (avoids short UI fragments).
+    return candidates.sort((a, b) => b.length - a.length)[0];
   } catch (error) {
     console.error('[Automations] Error getting contact name:', error);
     return '';
@@ -751,32 +1182,29 @@ function formatPhoneForHubSpot(phone) {
 
 async function extractPhoneFromChat() {
   console.log('[Phone Extraction] Starting phone extraction from chat...');
-  
-  // Use getCurrentContactPhone() which already has all the extraction logic including data-id
-  const phone = getCurrentContactPhone();
-  
+
+  let phone = getCurrentContactPhone();
   if (phone) {
     console.log('[Phone Extraction] ✅ Extracted phone:', phone);
     return phone;
   }
-  
-  // Fallback: Try the old method (header span)
-  const maindiv = document.querySelector("div#main");
-  const header = maindiv?.querySelector("header");
+
+  // Fallback: legacy header span (saved contacts)
+  const maindiv = getActiveChatPanel();
+  const header = maindiv?.querySelector('header');
   const span = header?.children[1]?.querySelector('span[dir="auto"]');
   const content = span?.innerHTML?.trim();
-  
-  if (content) {
-    const isPhoneNumber = /^\+?[\d\s\-()]+$/.test(content);
-    if (isPhoneNumber) {
-      console.log('[Phone Extraction] Found phone from header span:', content);
-      return content;
-    }
+
+  if (content && looksLikePhoneNumber(content)) {
+    console.log('[Phone Extraction] Found phone from header span:', content);
+    return content;
   }
-  
+
   console.log('[Phone Extraction] ❌ No phone number found');
   return null;
 }
+
+const HUBSPOT_SIDEBAR_WIDTH_PX = 420;
 
 // Function to adjust maindiv width based on sidebar state
 function widthSetting() {
@@ -784,7 +1212,13 @@ function widthSetting() {
   const sidebar = document.getElementById("hubspot-sidebar");
   if (!maindiv) return;
   const isOpen = sidebar && sidebar.classList.contains('open');
-  maindiv.style.width = isOpen ? `calc(100% - ${sidebar.offsetWidth || 400}px)` : '100%';
+  if (isOpen) {
+    maindiv.style.width = `calc(100% - ${HUBSPOT_SIDEBAR_WIDTH_PX}px)`;
+    maindiv.style.maxWidth = `calc(100% - ${HUBSPOT_SIDEBAR_WIDTH_PX}px)`;
+  } else {
+    maindiv.style.width = '';
+    maindiv.style.maxWidth = '';
+  }
 }
 
 // Function to create HubSpot contact via background script
@@ -792,7 +1226,7 @@ async function createHubSpotContact(contactData) {
   console.log('[Content] Sending create contact request:', contactData);
   
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'createHubSpotContact',
       contactData: contactData
     });
@@ -827,7 +1261,7 @@ async function createHubSpotContact(contactData) {
 // Fetch deal pipelines from HubSpot (via background → hubspot-oauth)
 async function fetchHubSpotDealPipelines() {
   try {
-    const response = await chrome.runtime.sendMessage({ action: 'getDealPipelines' });
+    const response = await sendExtensionMessage({ action: 'getDealPipelines' });
     if (response?.success && Array.isArray(response.pipelines)) {
       return response.pipelines;
     }
@@ -906,30 +1340,22 @@ async function fetchHubSpotOwners() {
   try {
     console.log('[Content] Fetching HubSpot owners...');
     
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'getHubSpotOwners'
     });
-    
-    console.log('[Content] Owners fetch response:', response);
-    
-    if (response && response.success && response.data) {
-      const owners = response.data;
-      console.log('[Content] ✅ Owners fetched successfully:', owners.length, 'owners found');
-      return owners;
-    } else {
-      console.error('[Content] ❌ Failed to fetch owners:', response?.error);
-      return [];
+
+    if (!response) return [];
+
+    if (response?.success && response.data) {
+      return response.data;
     }
-  } catch (error) {
-    console.error('[Content] ❌ Error fetching owners:', error);
+    return [];
+  } catch {
     return [];
   }
 }
 
 // ==================== Template Fetching ====================
-
-// Supabase Edge Function URL for HubSpot operations
-const HUBSPOT_EDGE_FUNCTION_URL = 'https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot';
 
 /**
  * Fetches user templates from the backend
@@ -941,7 +1367,7 @@ async function fetchUserTemplates() {
   try {
     // Get userId from chrome.storage.local
     console.log('[Templates] Checking chrome.storage.local for external_auth_session...');
-    const storageResult = await chrome.storage.local.get('external_auth_session');
+    const storageResult = await extensionStorageGet('external_auth_session');
     const session = storageResult.external_auth_session;
     
     if (!session) {
@@ -969,27 +1395,17 @@ async function fetchUserTemplates() {
     
     // Call edge function to get templates
     console.log('[Templates] Sending POST request to edge function...');
-    const response = await fetch(HUBSPOT_EDGE_FUNCTION_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
+    const { ok, status, json: apiResult } = await callHubSpotEdgeFromContent('getTemplates', { userId });
+
     console.log('[Templates] Response received');
-    console.log('[Templates] Status:', response.status, response.statusText);
-    console.log('[Templates] Headers:', Object.fromEntries(response.headers.entries()));
-    
-    if (!response.ok) {
-      const errorText = await response.text();
+    console.log('[Templates] Status:', status);
+
+    if (!ok) {
       console.error('[Templates] ❌ Failed to fetch templates');
-      console.error('[Templates] Status:', response.status, response.statusText);
-      console.error('[Templates] Error response:', errorText);
+      console.error('[Templates] Status:', status);
       return { templates: [] };
     }
-    
-    const apiResult = await response.json();
+
     console.log('[Templates] ✅ Response parsed successfully');
     console.log('[Templates] Response data:', apiResult);
     
@@ -1423,7 +1839,7 @@ function setupMoreActionsDropdown() {
       console.log('[More Actions] ✅ Dropdown displayed');
       
       // Get userId
-      const storageResult = await chrome.storage.local.get('external_auth_session');
+      const storageResult = await extensionStorageGet('external_auth_session');
       const session = storageResult.external_auth_session;
       const userId = session?.user?.id || null;
       
@@ -1549,8 +1965,6 @@ function setupMoreActionsDropdown() {
     });
   }
   
-  // Initialize realtime subscription for action fields
-  initializeActionFieldsRealtime();
 }
 
 /**
@@ -1569,7 +1983,7 @@ async function refreshActionFieldsDropdown() {
   console.log('[Action Fields Realtime] 🔄 Refreshing dropdown with updated action fields...');
   
   // Get userId
-  const storageResult = await chrome.storage.local.get('external_auth_session');
+  const storageResult = await extensionStorageGet('external_auth_session');
   const session = storageResult.external_auth_session;
   const userId = session?.user?.id || null;
   
@@ -3210,7 +3624,7 @@ async function refreshNotesCount(contactId, notesSection) {
       return 0;
     }
     
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'fetchContactNotes',
       contactId: contactIdStr
     });
@@ -3255,7 +3669,7 @@ async function loadContactNotes(contactId, notesSection) {
     notesEmpty.style.display = 'none';
     
     // Fetch notes from background script
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'fetchContactNotes',
       contactId: contactId
     });
@@ -3965,7 +4379,7 @@ async function fetchTasksFromHubSpot(contactId) {
   try {
     console.log('[Content] Fetching tasks for contact:', contactId);
     
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'getHubSpotTasks',
       contactId: contactId
     });
@@ -6482,7 +6896,7 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
     console.log('[Content] Task payload:', taskPayload);
     
     // Call edge function to create task
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'createHubSpotTask',
       data: taskPayload
     });
@@ -6575,7 +6989,7 @@ async function createHubSpotTicket(ticketData, contactId) {
     console.log('[Content] Sending ticket creation request to background...');
     console.log('[Content] Payload:', JSON.stringify(ticketPayload, null, 2));
     
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'createHubSpotTicket',
       ticketData: ticketPayload,
       contactId: contactId // Pass contactId for logging
@@ -6846,7 +7260,7 @@ async function associateDealWithContact(dealId, contactId) {
 async function logDealActivityToSupabase(activityData) {
   try {
     // Get userId from storage
-    const storageResult = await chrome.storage.local.get('external_auth_session');
+    const storageResult = await extensionStorageGet('external_auth_session');
     const session = storageResult.external_auth_session;
     const userId = session?.user?.id;
     
@@ -6882,7 +7296,7 @@ async function logDealActivityToSupabase(activityData) {
     console.log('[Content] Log data:', JSON.stringify(logData, null, 2));
     
     // Send to background script to handle logging (same pattern as tickets/tasks/notes)
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'logDealCreation',
       data: logData
     });
@@ -7048,7 +7462,7 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
         console.error('[Ticket Modal] Error fetching all tickets:', error);
         // Try alternative: use getHubSpotTickets with fetchAll flag
         try {
-          const response = await chrome.runtime.sendMessage({
+          const response = await sendExtensionMessage({
             action: 'getHubSpotTickets',
             contactId: null,
             fetchAll: true
@@ -7281,7 +7695,7 @@ async function fetchTicketsFromHubSpot(contactId) {
     console.log('[Content] Fetching tickets from HubSpot for contact:', contactId);
     
     // Call edge function to get tickets
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'getHubSpotTickets',
       contactId: contactId
     });
@@ -7313,7 +7727,7 @@ async function fetchDealsFromHubSpot(contactId) {
     console.log('[Content] Calling background script with contactId:', contactIdStr);
     
     // Call edge function to get deals
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'getHubSpotDeals',
       contactId: contactIdStr
     });
@@ -7351,7 +7765,7 @@ async function searchTicketsInHubSpot(searchTerm, contactId) {
     console.log('[Content] Searching tickets in HubSpot:', searchTerm);
     
     // Call edge function to search tickets
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'searchHubSpotTickets',
       searchTerm: searchTerm,
       contactId: contactId
@@ -7374,7 +7788,7 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     console.log('[Content] Fetching all tickets from HubSpot (not filtered by contact)');
     
     // Try using getAllHubSpotTickets first
-    let response = await chrome.runtime.sendMessage({
+    let response = await sendExtensionMessage({
       action: 'getAllHubSpotTickets',
       contactId: null, // Pass null to indicate we want ALL tickets
       fetchAll: true
@@ -7387,7 +7801,7 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     
     // Fallback 1: Use getHubSpotTickets with fetchAll flag
     console.log('[Content] Fallback 1: Trying getHubSpotTickets with fetchAll flag');
-    response = await chrome.runtime.sendMessage({
+    response = await sendExtensionMessage({
       action: 'getHubSpotTickets',
       contactId: null,
       fetchAll: true // Flag to fetch all tickets, not just associated ones
@@ -7400,7 +7814,7 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     
     // Fallback 2: Use search with wildcard pattern
     console.log('[Content] Fallback 2: Trying search with wildcard');
-    response = await chrome.runtime.sendMessage({
+    response = await sendExtensionMessage({
       action: 'searchHubSpotTickets',
       searchTerm: '*', // Wildcard to get all
       contactId: null,
@@ -7414,7 +7828,7 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     
     // Fallback 3: Use search with empty term
     console.log('[Content] Fallback 3: Trying search with empty term');
-    response = await chrome.runtime.sendMessage({
+    response = await sendExtensionMessage({
       action: 'searchHubSpotTickets',
       searchTerm: '',
       contactId: null,
@@ -7439,7 +7853,7 @@ async function associateTicketsWithContact(contactId, ticketIds) {
   try {
     console.log('[Content] Associating tickets with contact:', contactId, ticketIds);
     
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'associateTicketsWithContact',
       contactId: contactId,
       ticketIds: ticketIds
@@ -7462,7 +7876,7 @@ async function disassociateTicketsFromContact(contactId, ticketIds) {
   try {
     console.log('[Content] Disassociating tickets from contact:', contactId, ticketIds);
     
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'disassociateTicketsFromContact',
       contactId: contactId,
       ticketIds: ticketIds
@@ -7519,17 +7933,16 @@ function setupCreateContactForm(phoneNumber) {
   
   if (!form || !createBtn || !messageDiv) return;
 
-  const contactNameFromWhatsApp = getCurrentContactName();
-  if (contactNameFromWhatsApp) {
-    const nameParts = contactNameFromWhatsApp.trim().split(/\s+/);
-    const firstNameInput = document.getElementById('firstName');
-    const lastNameInput = document.getElementById('lastName');
-    if (firstNameInput && !firstNameInput.value && nameParts[0]) {
-      firstNameInput.value = nameParts[0];
-    }
-    if (lastNameInput && !lastNameInput.value && nameParts.length > 1) {
-      lastNameInput.value = nameParts.slice(1).join(' ');
-    }
+  const { firstName: defaultFirst, lastName: defaultLast } = parseContactNameParts(
+    getCurrentContactName()
+  );
+  const firstNameInput = document.getElementById('firstName');
+  const lastNameInput = document.getElementById('lastName');
+  if (firstNameInput && !firstNameInput.value && defaultFirst) {
+    firstNameInput.value = defaultFirst;
+  }
+  if (lastNameInput && !lastNameInput.value && defaultLast) {
+    lastNameInput.value = defaultLast;
   }
 
   getSyncSettings().then((syncSettings) => {
@@ -7680,7 +8093,7 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo) {
   
   try {
     console.log('[Content] Sending message to background script...');
-    const response = await chrome.runtime.sendMessage(messagePayload);
+    const response = await sendExtensionMessage(messagePayload);
     
     console.log('[Content] Response received from background script');
     console.log('[Content] Response success:', response?.success);
@@ -7718,7 +8131,7 @@ async function checkHubSpotContact(phoneNumber) {
   console.log('[Content] Sending HubSpot search request for phone:', phoneNumber);
   
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'checkHubSpotContact',
       phoneNumber: phoneNumber
     });
@@ -7749,9 +8162,12 @@ async function checkHubSpotContact(phoneNumber) {
 }
 
 // Function to format create contact form HTML (respects privacy mask_phone for display)
-async function formatCreateContactForm(phoneNumber) {
+async function formatCreateContactForm(phoneNumber, options = {}) {
+  const { manualPhoneEntry = false } = options;
+  const contactName = getCurrentContactName()?.trim() || '';
   // Convert phone number to HubSpot format (with dashes) for display
   const hubspotPhoneFormat = phoneNumber ? formatPhoneForHubSpot(phoneNumber) : '';
+  const phoneReadonly = hubspotPhoneFormat && !manualPhoneEntry;
   const privacy = await getPrivacySettings();
   const displayPhone = privacy.mask_phone && hubspotPhoneFormat
     ? maskPhoneForPrivacy(hubspotPhoneFormat)
@@ -7764,21 +8180,32 @@ async function formatCreateContactForm(phoneNumber) {
     masked: privacy.mask_phone && !!hubspotPhoneFormat
   });
 
+  const heading = manualPhoneEntry
+    ? (contactName ? `No contact found for ${escapeHtml(contactName)}` : 'No Phone Number')
+    : 'No Contact Found';
+  const subtext = manualPhoneEntry
+    ? (contactName
+      ? `Could not read ${contactName}'s phone from WhatsApp. Enter it below to search or create them in HubSpot.`
+      : 'Could not read a phone number from this chat. Enter it below to search or create in HubSpot.')
+    : 'This phone number is not in your HubSpot CRM.';
+
+  const { firstName: defaultFirstName, lastName: defaultLastName } = parseContactNameParts(contactName);
+
   return `
     <div class="no-contact-found">
-      <h4>No Contact Found</h4>
-      <p>This phone number is not in your HubSpot CRM.</p>
+      <h4>${heading}</h4>
+      <p>${subtext}</p>
       
       <div class="create-contact-section">
         <h5>Create New Contact</h5>
         <form id="createContactForm" class="create-contact-form">
           <div class="form-group">
             <label for="firstName">First Name *</label>
-            <input type="text" id="firstName" name="firstName" required>
+            <input type="text" id="firstName" name="firstName" value="${escapeHtml(defaultFirstName)}" required>
           </div>
           <div class="form-group">
             <label for="lastName">Last Name *</label>
-            <input type="text" id="lastName" name="lastName" required>
+            <input type="text" id="lastName" name="lastName" value="${escapeHtml(defaultLastName)}" required>
           </div>
           <div class="form-group">
             <label for="email">Email</label>
@@ -7786,7 +8213,7 @@ async function formatCreateContactForm(phoneNumber) {
           </div>
           <div class="form-group">
             <label for="phone">Phone</label>
-            <input type="tel" id="phone" name="phone" value="${escapeHtml(displayPhone)}" data-phone-full="${escapeHtml(hubspotPhoneFormat)}" readonly>
+            <input type="tel" id="phone" name="phone" value="${escapeHtml(displayPhone)}" data-phone-full="${escapeHtml(hubspotPhoneFormat)}" placeholder="${manualPhoneEntry ? 'Enter phone number' : ''}" ${phoneReadonly ? 'readonly' : ''}>
           </div>
           <div class="form-group">
             <label for="company">Company</label>
@@ -7860,12 +8287,19 @@ const DEFAULT_PRIVACY = { mask_phone: true, mask_media: false, allowed_propertie
  */
 async function getSyncSettings() {
   try {
-    const response = await chrome.runtime.sendMessage({ action: 'getSyncSettings' });
+    const response = await sendExtensionMessage({ action: 'getSyncSettings' });
+    if (!response) return {
+      contact_owner_assignment: 'round_robin',
+      default_pipeline_id: null,
+      default_stage_id: null,
+    };
     if (response?.success && response.settings) {
       return response.settings;
     }
   } catch (error) {
-    console.warn('[Content] getSyncSettings failed:', error);
+    if (!isExtensionContextInvalidated(error)) {
+      console.warn('[Content] getSyncSettings failed:', error);
+    }
   }
   return {
     contact_owner_assignment: 'round_robin',
@@ -7882,7 +8316,8 @@ const CONTACT_OWNER_ASSIGNMENT_HINTS = {
 
 async function getPrivacySettings() {
   try {
-    const response = await chrome.runtime.sendMessage({ action: 'getPrivacySettings' });
+    const response = await sendExtensionMessage({ action: 'getPrivacySettings' });
+    if (!response) return DEFAULT_PRIVACY;
     if (response?.success && response.privacy) {
       console.log('[Privacy] Fetched from backend:', response.privacy);
       const p = response.privacy;
@@ -7893,13 +8328,11 @@ async function getPrivacySettings() {
       };
     }
   } catch (err) {
-    console.warn('[Privacy] Failed to fetch from backend:', err);
+    if (!isExtensionContextInvalidated(err)) {
+      console.warn('[Privacy] Failed to fetch from backend:', err);
+    }
   }
-  return {
-    mask_phone: true,
-    mask_media: false,
-    allowed_properties: ['firstname_lastname', 'phone', 'email', 'company']
-  };
+  return DEFAULT_PRIVACY;
 }
 
 /**
@@ -7948,18 +8381,25 @@ const fieldLabels = {
  * Fetch sidebar field config via background (includes user session token).
  */
 async function fetchSidebarFieldsFromBackend(userId) {
-  if (!userId) {
+  if (!userId || extensionContextInvalidated) {
+    return { contactFields: [], actionFields: [] };
+  }
+
+  if (!(await hasExtensionAuthToken())) {
     return { contactFields: [], actionFields: [] };
   }
 
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendExtensionMessage({
       action: 'getSidebarFields',
       data: { userId }
     });
 
+    if (!response) {
+      return { contactFields: [], actionFields: [] };
+    }
+
     if (!response?.success) {
-      console.error('[Sidebar Fields] Error:', response?.error || 'Unknown error');
       return { contactFields: [], actionFields: [] };
     }
 
@@ -7968,8 +8408,7 @@ async function fetchSidebarFieldsFromBackend(userId) {
       contactFields: (data.contactFields || []).filter((f) => f.enabled),
       actionFields: (data.actionFields || []).filter((f) => f.enabled)
     };
-  } catch (error) {
-    console.error('[Sidebar Fields] Error fetching enabled fields:', error);
+  } catch {
     return { contactFields: [], actionFields: [] };
   }
 }
@@ -8124,7 +8563,7 @@ async function renderAboutSection(contact, userId) {
       </div>
     `;
   } catch (error) {
-    console.error('[Sidebar Fields] Error rendering about section:', error);
+    console.warn('[Sidebar Fields] Error rendering about section:', error);
     return renderDefaultAboutSection(contact.properties || {}, DEFAULT_PRIVACY);
   }
 }
@@ -8142,7 +8581,7 @@ async function refreshAboutSection() {
     console.log('[Sidebar Refresh] 🔄 Refreshing about section...');
     
     // Get userId
-    const result = await chrome.storage.local.get('external_auth_session');
+    const result = await extensionStorageGet('external_auth_session');
     const session = result.external_auth_session;
     const userId = session?.user?.id || null;
     
@@ -8217,704 +8656,57 @@ function renderDefaultAboutSection(props, privacy = DEFAULT_PRIVACY) {
   `;
 }
 
-// ==================== Realtime Sidebar Fields Subscription ====================
+// ==================== Sidebar Fields Polling ====================
 
-let sidebarFieldsSubscription = null;
-
-/**
- * Initialize realtime subscription for sidebar fields changes
- */
-async function initializeSidebarFieldsRealtime() {
-  let userId = null;
-  try {
-    // Get userId
-    const result = await chrome.storage.local.get('external_auth_session');
-    const session = result.external_auth_session;
-    userId = session?.user?.id;
-    
-    if (!userId) {
-      return;
-    }
-    
-    
-    const supabaseUrl = SUPABASE_CONFIG.url;
-    const supabaseKey = SUPABASE_CONFIG.anonKey;
-    
-    // Load Supabase client if not already loaded
-    if (typeof supabase === 'undefined') {
-      await injectSupabaseScript();
-    }
-    
-    // Setup subscription
-    await setupRealtimeSubscription(supabaseUrl, supabaseKey, userId);
-    
-    // Also start polling as fallback (in case realtime doesn't work)
-    setTimeout(() => {
-      startSidebarFieldsPolling(userId);
-    }, 10000); // Start polling after 10 seconds
-    
-  } catch (error) {
-    console.error('[Realtime] Error initializing realtime subscription:', error);
-    // If realtime fails, use polling
-    if (userId) {
-      startSidebarFieldsPolling(userId);
-    }
-  }
+async function initializeSidebarFieldsSync() {
+  if (extensionContextInvalidated) return;
+  const userId = await getExtensionUserId();
+  if (!userId) return;
+  startSidebarFieldsPolling(userId);
 }
 
-/**
- * Setup the actual realtime subscription in page context
- */
-async function setupRealtimeSubscription(supabaseUrl, supabaseKey, userId) {
-  try {
-    // Use chrome.scripting.executeScript to inject code into page context (avoids CSP violation)
-    // Get tab ID with fallback to background script
-    let tabId = null;
-    try {
-      if (chrome.tabs && chrome.tabs.query) {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs && tabs.length > 0) {
-          tabId = tabs[0].id;
-        }
-      } else {
-        // Fallback: get tab ID from background script
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      }
-    } catch (e) {
-      // Try background script as fallback
-      try {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      } catch (e2) {
-        console.error('[Realtime] Could not get tab ID:', e2);
-        return;
-      }
-    }
-    
-    if (!tabId) {
-      console.error('[Realtime] Could not get current tab');
-      return;
-    }
-    
-    // Create the function to inject
-    const setupFunction = function(supabaseUrl, supabaseKey, userId) {
-      if (window.__sidebarRealtimeSetup) {
-        return;
-      }
-      window.__sidebarRealtimeSetup = true;
-      
-      function waitForSupabase() {
-        return new Promise((resolve) => {
-          if (typeof supabase !== 'undefined') {
-            resolve();
-            return;
-          }
-          let attempts = 0;
-          const maxAttempts = 50;
-          const checkInterval = setInterval(() => {
-            attempts++;
-            if (typeof supabase !== 'undefined') {
-              clearInterval(checkInterval);
-              resolve();
-            } else if (attempts >= maxAttempts) {
-              console.error('[Realtime] Supabase loading timeout');
-              clearInterval(checkInterval);
-              resolve();
-            }
-          }, 100);
-        });
-      }
-      
-      waitForSupabase().then(() => {
-        if (typeof supabase === 'undefined') {
-          console.error('[Realtime] Supabase not available in page context after waiting');
-          return;
-        }
-        
-        const supabaseClient = supabase.createClient(supabaseUrl, supabaseKey);
-        const channelName = 'sidebar-fields-changes-' + userId;
-        
-        const channel = supabaseClient
-          .channel(channelName)
-          .on('postgres_changes', {
-            event: '*',
-            schema: 'public',
-            table: 'sidebar_fields'
-          }, (payload) => {
-            const event = new CustomEvent('sidebarFieldsChanged', { 
-              detail: { ...payload, table: 'sidebar_fields' },
-              bubbles: true
-            });
-            window.dispatchEvent(event);
-          })
-          .on('postgres_changes', {
-            event: '*',
-            schema: 'public',
-            table: 'hubspot_sidebar_fields',
-            filter: 'user_id=eq.' + userId
-          }, (payload) => {
-            const event = new CustomEvent('sidebarFieldsChanged', { 
-              detail: { ...payload, table: 'hubspot_sidebar_fields' },
-              bubbles: true
-            });
-            window.dispatchEvent(event);
-          })
-          .subscribe((status, err) => {
-            if (err) {
-              console.error('[Realtime] Subscription error:', err);
-            }
-            if (status === 'CHANNEL_ERROR') {
-              console.error('[Realtime] Channel error - subscription failed');
-            } else if (status === 'TIMED_OUT') {
-              console.error('[Realtime] Subscription timed out');
-            }
-          });
-        
-        window.__sidebarRealtimeChannel = channel;
-      });
-    };
-    
-    // Use background script to execute script (avoids CSP violation)
-    // Convert function to string for serialization
-    try {
-      const response = await chrome.runtime.sendMessage({
-        action: 'executeScript',
-        tabId: tabId,
-        funcString: setupFunction.toString(),
-        args: [supabaseUrl, supabaseKey, userId],
-        world: 'MAIN'
-      });
-      
-      if (!response || !response.success) {
-        console.warn('[Realtime] Scripting API failed, realtime subscription disabled:', response?.error);
-        return;
-      }
-    } catch (scriptError) {
-      console.warn('[Realtime] Scripting API failed, realtime subscription disabled:', scriptError);
-      return;
-    }
-    
-    // Listen for the custom event from page context
-    const eventHandler = async (event) => {
-      await refreshAboutSection();
-    };
-    
-    window.addEventListener('sidebarFieldsChanged', eventHandler);
-      
-  } catch (error) {
-    console.error('[Realtime] Error setting up subscription:', error);
-  }
-}
-
-/**
- * Inject Supabase script into the page context (not content script context).
- * Skips injection if extension URL is invalid to avoid HEAD chrome-extension://invalid/ net::ERR_FAILED.
- */
-function injectSupabaseScript() {
-  return new Promise((resolve, reject) => {
-    // Only inject when we have a valid extension context (avoids chrome-extension://invalid/ HEAD errors)
-    try {
-      if (!chrome?.runtime?.id) {
-        console.warn('[Realtime] Extension context invalid, skipping Supabase script injection');
-        resolve();
-        return;
-      }
-      const scriptUrl = chrome.runtime.getURL('supabase.js');
-      if (!scriptUrl || scriptUrl.includes('invalid')) {
-        console.warn('[Realtime] Extension script URL invalid, skipping injection:', scriptUrl);
-        resolve();
-        return;
-      }
-    } catch (e) {
-      console.warn('[Realtime] Could not get extension URL:', e);
-      resolve();
-      return;
-    }
-
-    // Check if already injected
-    const existing = document.querySelector('script[data-supabase-realtime-injected]');
-    if (existing) {
-      // Wait a bit to ensure it's loaded
-      setTimeout(() => {
-        if (typeof window.supabase !== 'undefined') {
-          resolve();
-        } else {
-          // Try again
-          existing.remove();
-          injectSupabaseScript().then(resolve).catch(reject);
-        }
-      }, 500);
-      return;
-    }
-
-    // Inject script into page context
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('supabase.js');
-    script.setAttribute('data-supabase-realtime-injected', 'true');
-    script.onload = async () => {
-      // Wait a bit more for it to initialize
-      await new Promise(resolveTimeout => setTimeout(resolveTimeout, 300));
-      
-      // Check if supabase is available in page context using chrome.scripting.executeScript
-      let tabId = null;
-      try {
-        if (chrome.tabs && chrome.tabs.query) {
-          const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (tabs && tabs.length > 0) {
-            tabId = tabs[0].id;
-          }
-        } else {
-          const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-          if (response && response.tabId) {
-            tabId = response.tabId;
-          }
-        }
-      } catch (e) {
-        try {
-          const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-          if (response && response.tabId) {
-            tabId = response.tabId;
-          }
-        } catch (e2) {
-          // Fallback: assume loaded after timeout
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('supabaseLoaded'));
-          }, 500);
-          resolve();
-          return;
-        }
-      }
-      
-      if (tabId) {
-        try {
-        const response = await chrome.runtime.sendMessage({
-          action: 'executeScript',
-          tabId: tabId,
-          funcString: function() {
-            if (typeof supabase !== 'undefined') {
-              window.dispatchEvent(new CustomEvent('supabaseLoaded'));
-            } else {
-              window.dispatchEvent(new CustomEvent('supabaseLoadFailed'));
-            }
-          }.toString(),
-          world: 'MAIN'
-        });
-          
-          if (!response || !response.success) {
-            // Fallback: assume loaded after timeout
-            setTimeout(() => {
-              window.dispatchEvent(new CustomEvent('supabaseLoaded'));
-            }, 500);
-          }
-        } catch (e) {
-          // Fallback: assume loaded after timeout
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('supabaseLoaded'));
-          }, 500);
-        }
-      } else {
-        // Fallback: assume loaded after timeout
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('supabaseLoaded'));
-        }, 500);
-      }
-      resolve();
-    };
-    script.onerror = (error) => {
-      console.error('[Realtime] ❌ Failed to inject Supabase script:', error);
-      script.remove(); // Remove failed script so nothing retries HEAD to invalid URL
-      reject(new Error('Failed to load Supabase script'));
-    };
-    (document.head || document.documentElement).appendChild(script);
-  });
-}
-
-/**
- * Cleanup realtime subscription
- */
-async function cleanupSidebarFieldsRealtime() {
-  try {
-    // Stop polling
-    stopSidebarFieldsPolling();
-    
-    // Cleanup in page context using background script
-    let tabId = null;
-    try {
-      if (chrome.tabs && chrome.tabs.query) {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs && tabs.length > 0) {
-          tabId = tabs[0].id;
-        }
-      } else {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      }
-    } catch (e) {
-      try {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      } catch (e2) {
-        // Silent fail
-      }
-    }
-    
-    if (tabId) {
-      try {
-        await chrome.runtime.sendMessage({
-          action: 'executeScript',
-          tabId: tabId,
-          funcString: function() {
-            if (window.__sidebarRealtimeChannel) {
-              window.__sidebarRealtimeChannel.unsubscribe();
-              window.__sidebarRealtimeChannel = null;
-            }
-          }.toString(),
-          world: 'MAIN'
-        });
-      } catch (e) {
-        // Silent fail
-      }
-    }
-  } catch (error) {
-    console.error('[Realtime] Error during cleanup:', error);
-  }
-}
-
-// Initialize realtime when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(initializeSidebarFieldsRealtime, 2000); // Wait 2 seconds for page to fully load
+    setTimeout(initializeSidebarFieldsSync, 2000);
   });
 } else {
-  // DOM already loaded
-  setTimeout(initializeSidebarFieldsRealtime, 2000);
+  setTimeout(initializeSidebarFieldsSync, 2000);
 }
 
-// Cleanup on page unload
-window.addEventListener('beforeunload', cleanupSidebarFieldsRealtime);
+function cleanupSidebarFieldsSync() {
+  stopSidebarFieldsPolling();
+}
 
-// Test function to manually trigger refresh (for debugging)
+window.addEventListener('beforeunload', cleanupSidebarFieldsSync);
+
 window.testSidebarFieldsRefresh = async function() {
   await refreshAboutSection();
 };
 
-// ==================== Action Fields Realtime Subscription ====================
-
-/**
- * Initialize realtime subscription for action fields
- */
-async function initializeActionFieldsRealtime() {
-  try {
-    // Get userId
-    const result = await chrome.storage.local.get('external_auth_session');
-    const session = result.external_auth_session;
-    const userId = session?.user?.id;
-    
-    if (!userId) {
-      return;
-    }
-    
-    
-    const supabaseUrl = SUPABASE_CONFIG.url;
-    const supabaseKey = SUPABASE_CONFIG.anonKey;
-    
-    // Load Supabase client if not already loaded
-    if (typeof supabase === 'undefined') {
-      await injectSupabaseScript();
-    }
-    
-    // Setup subscription
-    await setupActionFieldsRealtimeSubscription(supabaseUrl, supabaseKey, userId);
-    
-  } catch (error) {
-    console.error('[Action Fields Realtime] Error initializing realtime subscription:', error);
-  }
-}
-
-/**
- * Setup the actual realtime subscription for action fields in page context
- */
-async function setupActionFieldsRealtimeSubscription(supabaseUrl, supabaseKey, userId) {
-  try {
-    // Use chrome.scripting.executeScript via background script to inject code (avoids CSP violation)
-    // Get tab ID by sending message to background script
-    let tabId = null;
-    try {
-      if (chrome.tabs && chrome.tabs.query) {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs && tabs.length > 0) {
-          tabId = tabs[0].id;
-        }
-      } else {
-        // Fallback: get tab ID from background script
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      }
-    } catch (e) {
-      // Try background script as fallback
-      try {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      } catch (e2) {
-        console.warn('[Action Fields Realtime] Could not get tab ID:', e2);
-        return;
-      }
-    }
-    
-    if (!tabId) {
-      console.warn('[Action Fields Realtime] Could not get tab ID');
-      return;
-    }
-    
-    // Create the function to inject
-    const setupFunction = function(supabaseUrl, supabaseKey, userId) {
-      if (window.__actionFieldsRealtimeSetup) {
-        return;
-      }
-      window.__actionFieldsRealtimeSetup = true;
-      
-      function waitForSupabase() {
-        return new Promise((resolve) => {
-          if (typeof supabase !== 'undefined') {
-            resolve();
-            return;
-          }
-          let attempts = 0;
-          const maxAttempts = 50;
-          const checkInterval = setInterval(() => {
-            attempts++;
-            if (typeof supabase !== 'undefined') {
-              clearInterval(checkInterval);
-              resolve();
-            } else if (attempts >= maxAttempts) {
-              console.error('[Action Fields Realtime] Supabase loading timeout');
-              clearInterval(checkInterval);
-              resolve();
-            }
-          }, 100);
-        });
-      }
-      
-      waitForSupabase().then(() => {
-        if (typeof supabase === 'undefined') {
-          console.error('[Action Fields Realtime] Supabase not available in page context after waiting');
-          return;
-        }
-        
-        const supabaseClient = supabase.createClient(supabaseUrl, supabaseKey);
-        const channelName = 'action-fields-changes-' + userId;
-        
-        const channel = supabaseClient
-          .channel(channelName)
-          .on('postgres_changes', {
-            event: '*',
-            schema: 'public',
-            table: 'hubspot_sidebar_fields',
-            filter: 'user_id=eq.' + userId
-          }, (payload) => {
-            const newRecord = payload.new;
-            const oldRecord = payload.old;
-            const isActionField = (newRecord && newRecord.field_type === 'action') || 
-                                 (oldRecord && oldRecord.field_type === 'action');
-            
-            if (!isActionField) {
-              return;
-            }
-            
-            const event = new CustomEvent('actionFieldsChanged', { 
-              detail: { ...payload, table: 'hubspot_sidebar_fields' },
-              bubbles: true
-            });
-            window.dispatchEvent(event);
-          })
-          .subscribe((status, err) => {
-            if (err) {
-              console.error('[Action Fields Realtime] Subscription error:', err);
-            }
-            if (status === 'CHANNEL_ERROR') {
-              console.error('[Action Fields Realtime] Channel error - subscription failed');
-            } else if (status === 'TIMED_OUT') {
-              console.error('[Action Fields Realtime] Subscription timed out');
-            }
-          });
-        
-        window.__actionFieldsRealtimeChannel = channel;
-      });
-    };
-    
-    try {
-      const response = await chrome.runtime.sendMessage({
-        action: 'executeScript',
-        tabId: tabId,
-        funcString: setupFunction.toString(),
-        args: [supabaseUrl, supabaseKey, userId],
-        world: 'MAIN'
-      });
-      
-      if (!response || !response.success) {
-        console.warn('[Action Fields Realtime] Scripting API failed:', response?.error);
-        return;
-      }
-    } catch (scriptError) {
-      console.warn('[Action Fields Realtime] Scripting API failed:', scriptError);
-      return;
-    }
-    
-    // Listen for the custom event from page context
-    const eventHandler = async (event) => {
-      await refreshActionFieldsDropdown();
-    };
-    
-    window.addEventListener('actionFieldsChanged', eventHandler);
-      
-  } catch (error) {
-    console.error('[Action Fields Realtime] Error setting up subscription:', error);
-  }
-}
-
-/**
- * Cleanup action fields realtime subscription
- */
-async function cleanupActionFieldsRealtime() {
-  try {
-    // Cleanup in page context using chrome.scripting.executeScript
-    let tabId = null;
-    try {
-      if (chrome.tabs && chrome.tabs.query) {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs && tabs.length > 0) {
-          tabId = tabs[0].id;
-        }
-      } else {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      }
-    } catch (e) {
-      try {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      } catch (e2) {
-        // Silent fail
-      }
-    }
-    
-    if (tabId) {
-      try {
-        await chrome.runtime.sendMessage({
-          action: 'executeScript',
-          tabId: tabId,
-          funcString: function() {
-            if (window.__actionFieldsRealtimeChannel) {
-              window.__actionFieldsRealtimeChannel.unsubscribe();
-              window.__actionFieldsRealtimeChannel = null;
-            }
-          }.toString(),
-          world: 'MAIN'
-        });
-      } catch (e) {
-        // Silent fail
-      }
-    }
-  } catch (error) {
-    // Silent fail
-  }
-}
-
-// Cleanup on page unload
-window.addEventListener('beforeunload', cleanupActionFieldsRealtime);
-
-// Expose refresh function globally for testing
 window.refreshAboutSection = refreshAboutSection;
 
-// Expose test function to check subscription status (using chrome.scripting.executeScript)
-window.checkRealtimeSubscription = async function() {
-  try {
-    let tabId = null;
-    try {
-      if (chrome.tabs && chrome.tabs.query) {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tabs && tabs.length > 0) {
-          tabId = tabs[0].id;
-        }
-      } else {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      }
-    } catch (e) {
-      try {
-        const response = await chrome.runtime.sendMessage({ action: 'getCurrentTabId' });
-        if (response && response.tabId) {
-          tabId = response.tabId;
-        }
-      } catch (e2) {
-        console.error('[Realtime] Error getting tab ID:', e2);
-        return;
-      }
-    }
-    
-    if (tabId) {
-      try {
-        await chrome.runtime.sendMessage({
-          action: 'executeScript',
-          tabId: tabId,
-          funcString: function() {
-            console.log('[Realtime] Channel exists:', !!window.__sidebarRealtimeChannel);
-            console.log('[Realtime] Supabase available:', typeof supabase !== 'undefined');
-            console.log('[Realtime] Setup flag:', window.__sidebarRealtimeSetup);
-            if (window.__sidebarRealtimeChannel) {
-              console.log('[Realtime] Channel state:', window.__sidebarRealtimeChannel.state);
-              console.log('[Realtime] Channel topic:', window.__sidebarRealtimeChannel.topic);
-            }
-          }.toString(),
-          world: 'MAIN'
-        });
-      } catch (e) {
-        console.error('[Realtime] Error checking subscription:', e);
-      }
-    }
-  } catch (e) {
-    console.error('[Realtime] Error checking subscription:', e);
-  }
-};
-
-// Fallback: Polling mechanism if realtime fails
-let sidebarFieldsPollingInterval = null;
 let lastSidebarFieldsHash = null;
 
 /**
- * Poll for sidebar fields changes as fallback
+ * Poll for sidebar fields changes from dashboard config
  */
 async function startSidebarFieldsPolling(userId) {
-  
+  if (extensionContextInvalidated) return;
+
   // Get initial state
   try {
     const { contactFields } = await getEnabledSidebarFields(userId);
     lastSidebarFieldsHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
-  } catch (error) {
-    console.error('[Realtime] Error getting initial sidebar fields:', error);
+  } catch {
+    // use defaults
   }
-  
+
   // Poll every 5 seconds
   sidebarFieldsPollingInterval = setInterval(async () => {
+    if (extensionContextInvalidated) {
+      stopSidebarFieldsPolling();
+      return;
+    }
     try {
       const { contactFields } = await getEnabledSidebarFields(userId);
       const currentHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
@@ -8924,10 +8716,10 @@ async function startSidebarFieldsPolling(userId) {
       }
       
       lastSidebarFieldsHash = currentHash;
-    } catch (error) {
-      console.error('[Realtime] Error polling sidebar fields:', error);
+    } catch {
+      // ignore transient polling errors
     }
-  }, 5000); // Poll every 5 seconds
+  }, 5000);
 }
 
 /**
@@ -8939,8 +8731,6 @@ function stopSidebarFieldsPolling() {
     sidebarFieldsPollingInterval = null;
   }
 }
-
-// ==================== End Realtime Sidebar Fields Subscription ====================
 
 // ==================== End Dynamic Sidebar Fields ====================
 
@@ -8965,7 +8755,7 @@ async function formatContactDetails(contacts, phoneNumber) {
   // Get userId for dynamic sidebar fields
   let userId = null;
   try {
-    const result = await chrome.storage.local.get('external_auth_session');
+    const result = await extensionStorageGet('external_auth_session');
     const session = result.external_auth_session;
     userId = session?.user?.id || null;
   } catch (error) {
@@ -9293,6 +9083,8 @@ let sidebarContentUpdateToken = 0;
 function updateSidebarContent() {
   const sidebar = document.getElementById("hubspot-sidebar");
   if (!sidebar) return;
+
+  closeWhatsAppContactDrawer();
   
   const sidebarContent = sidebar.querySelector(".sidebar-content");
   if (!sidebarContent) return;
@@ -9435,13 +9227,8 @@ function updateSidebarContent() {
         }
       } else {
         if (updateToken !== sidebarContentUpdateToken) return;
-        sidebarContent.innerHTML = `
-          <div class="no-contact-found">
-            <div class="no-contact-icon">📱</div>
-            <h4>No Phone Number</h4>
-            <p>Could not extract phone number from this chat.</p>
-          </div>
-        `;
+        sidebarContent.innerHTML = await formatCreateContactForm(null, { manualPhoneEntry: true });
+        setupCreateContactForm('');
       }
     }).catch(error => {
       if (updateToken !== sidebarContentUpdateToken) return;
@@ -9503,6 +9290,9 @@ function setupSidebarToggle() {
     checkOpenchat.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+
+      // WhatsApp contact drawer + HubSpot sidebar together crush the chat column
+      closeWhatsAppContactDrawer();
       
       const currentSidebar = document.getElementById("hubspot-sidebar");
       if (!currentSidebar) {
@@ -9577,34 +9367,35 @@ function removeNavbar() {
   
   // Reset inline width styles on div#main that might have been set by widthSetting()
   const maindiv = document.querySelector("div#main");
-  if (maindiv && maindiv.style.width) {
+  if (maindiv) {
     maindiv.style.width = '';
+    maindiv.style.maxWidth = '';
   }
 }
 
 // Function to check HubSpot integration status via edge function
 async function checkHubSpotIntegrationStatus() {
-  try {
-    const response = await chrome.runtime.sendMessage({
-      action: 'checkHubSpotIntegration'
-    });
-    
-    if (response && response.success && response.data) {
-      // status === 'active' or 'connected' means HubSpot is connected (gate sync features)
-      const status = response.data.status;
-      return status === 'active' || status === 'connected';
-    }
-    return false;
-  } catch (error) {
-    console.error('[Content] Error checking HubSpot integration status:', error);
+  const response = await sendExtensionMessage({
+    action: 'checkHubSpotIntegration',
+  });
+
+  if (!response?.success || !response.data) {
     return false;
   }
+
+  const status = response.data.status;
+  return status === 'active' || status === 'connected';
 }
 
 // Function to check login state and inject/remove navbar (gate on HubSpot connected)
 async function checkLoginStateAndInjectNavbar() {
   try {
-    const result = await chrome.storage.local.get(['userLoggedIn', 'userId']);
+    if (!isExtensionRuntimeAvailable() || extensionContextInvalidated) {
+      markExtensionContextInvalidated();
+      return;
+    }
+
+    const result = await extensionStorageGet(['userLoggedIn', 'userId']);
     const isLoggedIn = result.userLoggedIn === true && result.userId;
 
     if (!isLoggedIn) {
@@ -9612,55 +9403,103 @@ async function checkLoginStateAndInjectNavbar() {
       return;
     }
 
-    // Gate extension features: only show navbar if HubSpot is connected (uses cached getConnectionStatus)
     const hubspotConnected = await checkHubSpotIntegrationStatus();
     if (!hubspotConnected) {
-      console.log('[Content] HubSpot not connected — please connect HubSpot first');
       removeNavbar();
       return;
     }
 
-    const appRoot = document.getElementById("app") || document.querySelector("#app");
+    const appRoot = document.getElementById('app') || document.querySelector('#app');
     if (appRoot) {
       injectNavbar();
-    } else {
-      let checkCount = 0;
-      const maxChecks = 50;
-      const checkAppRoot = setInterval(() => {
-        checkCount++;
-        const root = document.getElementById("app") || document.querySelector("#app");
-        if (root) {
-          clearInterval(checkAppRoot);
-          injectNavbar();
-        } else if (checkCount >= maxChecks) {
-          clearInterval(checkAppRoot);
-          console.log('App root not found after waiting');
-        }
-      }, 100);
+      return;
     }
-  } catch (error) {
-    console.error('Error checking login state:', error);
+
+    let checkCount = 0;
+    const maxChecks = 50;
+    const checkAppRoot = setInterval(() => {
+      checkCount++;
+      const root = document.getElementById('app') || document.querySelector('#app');
+      if (root) {
+        clearInterval(checkAppRoot);
+        injectNavbar();
+      } else if (checkCount >= maxChecks) {
+        clearInterval(checkAppRoot);
+      }
+    }, 100);
+  } catch {
+    if (!isExtensionRuntimeAvailable()) {
+      markExtensionContextInvalidated();
+    }
     removeNavbar();
   }
 }
 
-// Example: Add a custom style or functionality
 function initExtension() {
-  // Check if we're on the correct page
-  if (window.location.hostname === 'web.whatsapp.com') {
-    console.log('Extension is active on WhatsApp Web');
-    
-    // Add a custom class to the body
-    document.body.classList.add('whatsapp-extension-active');
-    
-    // Check login state and inject navbar if logged in
-    checkLoginStateAndInjectNavbar();
-    
-    // Initialize chat list row observer (with delay to ensure DOM is ready)
-    setTimeout(() => {
-      initializeChatListRowObserver();
-    }, 500);
+  if (!isExtensionRuntimeAvailable() || extensionContextInvalidated) {
+    markExtensionContextInvalidated();
+    return;
   }
+
+  if (window.location.hostname !== 'web.whatsapp.com') {
+    return;
+  }
+
+  document.body.classList.add('whatsapp-extension-active');
+  checkLoginStateAndInjectNavbar();
+
+  setTimeout(() => {
+    if (isExtensionRuntimeAvailable() && !extensionContextInvalidated) {
+      initializeChatListRowObserver();
+    }
+  }, 500);
+}
+
+function registerExtensionListeners() {
+  if (extensionListenersRegistered || !isExtensionRuntimeAvailable()) {
+    return;
+  }
+
+  try {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.action === 'extensionUpdated') {
+        window.location.reload();
+        sendResponse({ success: true });
+        return true;
+      }
+      if (message.action === 'userLoggedIn') {
+        checkLoginStateAndInjectNavbar();
+        sendResponse({ success: true });
+      } else if (message.action === 'userLoggedOut') {
+        removeNavbar();
+        sendResponse({ success: true });
+      }
+      return true;
+    });
+
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace === 'local' && changes.userLoggedIn) {
+        if (changes.userLoggedIn.newValue === true) {
+          checkLoginStateAndInjectNavbar();
+        } else {
+          removeNavbar();
+        }
+      }
+    });
+
+    extensionListenersRegistered = true;
+  } catch {
+    markExtensionContextInvalidated();
+  }
+}
+
+function bootstrapExtension() {
+  if (!isExtensionRuntimeAvailable()) {
+    markExtensionContextInvalidated();
+    return;
+  }
+  initExtension();
+  registerExtensionListeners();
 }
 
 // MutationObserver for chat list to detect chat clicks
@@ -9842,9 +9681,9 @@ function retriggerSidebar() {
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initExtension);
+  document.addEventListener('DOMContentLoaded', bootstrapExtension);
 } else {
-  initExtension();
+  bootstrapExtension();
 }
 
 // Listen for navigation changes (WhatsApp Web uses SPA)
@@ -9853,10 +9692,11 @@ new MutationObserver(() => {
   const url = location.href;
   if (url !== lastUrl) {
     lastUrl = url;
-    initExtension();
-    // Reinitialize chat list row observer after navigation
+    bootstrapExtension();
     setTimeout(() => {
-      initializeChatListRowObserver();
+      if (isExtensionRuntimeAvailable() && !extensionContextInvalidated) {
+        initializeChatListRowObserver();
+      }
     }, 1000);
   }
 }).observe(document, { subtree: true, childList: true });
@@ -9877,30 +9717,3 @@ window.testChatObserver = function() {
   retriggerSidebar();
 };
 
-// Listen for messages from popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'userLoggedIn') {
-    console.log('User logged in - injecting navbar');
-    checkLoginStateAndInjectNavbar();
-    sendResponse({ success: true });
-  } else if (message.action === 'userLoggedOut') {
-    console.log('User logged out - removing navbar');
-    removeNavbar();
-    sendResponse({ success: true });
-  }
-  return true;
-});
-
-// Listen for storage changes
-chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === 'local' && changes.userLoggedIn) {
-    const isLoggedIn = changes.userLoggedIn.newValue === true;
-    if (isLoggedIn) {
-      console.log('Login state changed to logged in, injecting navbar');
-      checkLoginStateAndInjectNavbar();
-    } else {
-      console.log('Login state changed to logged out, removing navbar and sidebar');
-      removeNavbar();
-    }
-  }
-});

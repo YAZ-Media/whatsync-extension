@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WhatsApp Web Extension",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "Extension that only works on web.whatsapp.com",
   "permissions": [
     "activeTab",

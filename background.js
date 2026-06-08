@@ -63,130 +63,87 @@ let syncSettingsCache = null; // { userId, settings, cachedAt }
 // All HubSpot API calls are routed through the edge function - no token in extension code
 
 // Function to call HubSpot via edge function
+function readAccessTokenFromSession(sessionValue) {
+  if (!sessionValue) return null;
+  try {
+    const parsed = typeof sessionValue === 'string' ? JSON.parse(sessionValue) : sessionValue;
+    return (
+      parsed?.access_token ||
+      parsed?.accessToken ||
+      parsed?.session?.access_token ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function getStoredAccessToken() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['accessToken', 'external_auth_session'], (storageData) => {
-      let token = storageData.accessToken || null;
-      if (!token && storageData.external_auth_session) {
-        try {
-          const parsed = typeof storageData.external_auth_session === 'string'
-            ? JSON.parse(storageData.external_auth_session)
-            : storageData.external_auth_session;
-          token = parsed?.session?.access_token || null;
-        } catch {
-          token = null;
-        }
+    chrome.storage.local.get(['accessToken', 'external_auth_session', 'userLoggedIn'], (storageData) => {
+      if (!storageData.userLoggedIn) {
+        resolve(null);
+        return;
       }
-      resolve(token);
+      const token =
+        storageData.accessToken ||
+        readAccessTokenFromSession(storageData.external_auth_session);
+      resolve(token || null);
     });
   });
 }
 
-async function callHubSpotEdgeFunction(action, data) {
+function edgeRequestRequiresAuth(data) {
+  return !!(data?.userId || data?.user_id);
+}
+
+async function callHubSpotEdgeFunction(action, data = {}) {
   const requestBody = { action, data };
+  const needsAuth = edgeRequestRequiresAuth(data);
   const accessToken = await getStoredAccessToken();
-  const headers = {
-    'Content-Type': 'application/json',
-    apikey: EDGE_FUNCTIONS_ANON_KEY
-  };
-  if (accessToken) {
-    headers['Authorization'] = `Bearer ${accessToken}`;
+
+  if (needsAuth && !accessToken) {
+    throw new Error('Not authenticated');
   }
 
-  console.log('[Background] ===== CALLING EDGE FUNCTION =====');
-  console.log('[Background] URL:', HUBSPOT_TOKEN_ENDPOINT);
-  console.log('[Background] Method: POST');
-  console.log('[Background] Action:', action);
-  console.log('[Background] Request body:', JSON.stringify(requestBody, null, 2));
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: EDGE_FUNCTIONS_ANON_KEY,
+  };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
 
   try {
     const response = await fetch(HUBSPOT_TOKEN_ENDPOINT, {
       method: 'POST',
       headers,
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify(requestBody),
     });
 
-    console.log('[Background] Response status:', response.status, response.statusText);
-    console.log('[Background] Response headers:', Object.fromEntries(response.headers.entries()));
-    
     if (!response.ok) {
-      let error;
-      let errorText;
+      let message = `HTTP ${response.status}: ${response.statusText}`;
       try {
-        errorText = await response.text();
-        console.error('[Background] ❌ Error response text:', errorText);
-        error = JSON.parse(errorText);
-        console.error('[Background] ❌ Error response JSON:', JSON.stringify(error, null, 2));
-        
-        // Check if HubSpot provided details about missing properties
-        if (error.context && error.context.properties) {
-          console.error('[Background] ❌❌❌ MISSING REQUIRED PROPERTIES (from HubSpot):');
-          error.context.properties.forEach(prop => {
-            console.error('[Background]   - Missing:', prop);
-          });
-          console.error('[Background] ❌❌❌');
-        }
-        
-        // Check if edge function provided details about missing properties
-        if (error.missingFields) {
-          console.error('[Background] ❌❌❌ MISSING REQUIRED PROPERTIES (from Edge Function):');
-          if (Array.isArray(error.missingFields)) {
-            error.missingFields.forEach(field => {
-              console.error('[Background]   - Missing:', field);
-            });
-          } else {
-            console.error('[Background]   - Missing:', error.missingFields);
-          }
-          console.error('[Background] ❌❌❌');
-        }
-        
-        // Log what we sent vs what might be expected
-        console.error('[Background] 📋 DEBUGGING INFO:');
-        console.error('[Background]   - We sent contactId:', requestBody.data?.contactId, '(Type:', typeof requestBody.data?.contactId + ')');
-        console.error('[Background]   - We sent note:', requestBody.data?.note, '(Length:', requestBody.data?.note?.length || 0 + ')');
-        console.error('[Background]   - We sent noteBody:', requestBody.data?.noteBody, '(Length:', requestBody.data?.noteBody?.length || 0 + ')');
-        console.error('[Background]   - We sent body:', requestBody.data?.body, '(Length:', requestBody.data?.body?.length || 0 + ')');
-        console.error('[Background]   - We sent timestamp:', requestBody.data?.timestamp, '(Type:', typeof requestBody.data?.timestamp + ')');
-        console.error('[Background]   - We sent createTodo:', requestBody.data?.createTodo);
-        console.error('[Background]');
-        console.error('[Background] 🔍 EDGE FUNCTION VALIDATION CHECK:');
-        console.error('[Background]   - contactId check (!contactId):', !requestBody.data?.contactId);
-        console.error('[Background]   - timestamp check (!timestamp):', !requestBody.data?.timestamp);
-        console.error('[Background]   - note check (!note):', !requestBody.data?.note);
-        console.error('[Background]   - noteBody check (!noteBody):', !requestBody.data?.noteBody);
-        console.error('[Background]   - body check (!body):', !requestBody.data?.body);
-        console.error('[Background]   - Any note text check (!note && !noteBody && !body):', !requestBody.data?.note && !requestBody.data?.noteBody && !requestBody.data?.body);
-        console.error('[Background]   - Edge function might expect different field names or validation logic');
-        
-      } catch (e) {
-        console.error('[Background] ❌ Could not parse error response as JSON:', e);
-        error = { error: `HTTP ${response.status}: ${response.statusText}` };
+        const errorBody = await response.json();
+        message = errorBody.error || errorBody.message || message;
+      } catch {
+        // ignore parse errors
       }
-      throw new Error(error.error || error.message || `HTTP ${response.status}: ${response.statusText}`);
+      throw new Error(message);
     }
-    
-    const result = await response.json();
-    console.log('[Background] ✅ Edge function response received');
-    console.log('[Background] Response type:', typeof result);
-    console.log('[Background] Response keys:', result ? Object.keys(result) : 'null/undefined');
-    console.log('[Background] Response:', JSON.stringify(result, null, 2));
-    console.log('[Background] ======================================');
-    
-    return result;
+
+    return await response.json();
   } catch (error) {
-    console.error('[Background] ❌ Edge function call failed');
-    console.error('[Background] Error type:', error.constructor.name);
-    console.error('[Background] Error message:', error.message);
-    if (error.stack) {
-      console.error('[Background] Error stack:', error.stack);
+    const message = error?.message || 'Edge function call failed';
+    if (message !== 'Not authenticated') {
+      console.warn(`[Background] ${action} failed:`, message);
+      try {
+        const userId = data?.userId || data?.user_id;
+        if (userId) {
+          reportSyncFailure(userId, action, message);
+        }
+      } catch (_) { /* noop */ }
     }
-    console.log('[Background] ======================================');
-    try {
-      const userId = data?.userId || data?.user_id;
-      if (userId) {
-        reportSyncFailure(userId, action, error.message);
-      }
-    } catch (_) { /* noop */ }
     throw error;
   }
 }
@@ -305,89 +262,93 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'checkHubSpotIntegration') {
-    console.log('[Background] Received HubSpot integration status check request');
-    
-    // Get userId from storage for per-user integration check
-    chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
-      const userId = storageData.userId || null;
-      const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] ===== INTEGRATION STATUS CHECK =====');
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] ====================================');
-      
-      if (!userId) {
-        console.error('[Background] ❌ User ID not found in storage');
-        hubspotConnectionCache = null;
-        sendResponse({ success: false, error: 'User ID not found. Please log in again.' });
-        return;
-      }
+    (async () => {
+      try {
+        const storageData = await chrome.storage.local.get(['userId', 'userLoggedIn']);
+        const userId = storageData.userId || null;
 
-      // Check integration status via edge function (uses 5-min cache)
-      checkHubSpotIntegrationStatusViaEdgeFunction(userId)
-        .then(result => {
-          console.log('[Background] HubSpot integration status check completed. Result:', result);
-          sendResponse({ success: true, data: result });
-        })
-        .catch(error => {
-          console.error('[Background] HubSpot integration status check failed:', error);
-          sendResponse({ success: false, error: error.message });
-        });
-    });
-    
-    return true; // Keep channel open for async response
+        if (!userId || !storageData.userLoggedIn) {
+          hubspotConnectionCache = null;
+          sendResponse({ success: true, data: { status: 'disconnected' } });
+          return;
+        }
+
+        const result = await checkHubSpotIntegrationStatusViaEdgeFunction(userId);
+        sendResponse({ success: true, data: result });
+      } catch {
+        sendResponse({ success: true, data: { status: 'disconnected' } });
+      }
+    })();
+
+    return true;
   }
 
   if (request.action === 'getPrivacySettings') {
-    chrome.storage.local.get(['userId'], async (storageData) => {
+    chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
+      const defaultPrivacy = { mask_phone: true, mask_media: false, allowed_properties: ['firstname_lastname', 'phone', 'email', 'company'] };
       const userId = storageData.userId || null;
-      if (!userId) {
-        sendResponse({ success: false, error: 'User ID not found', privacy: null });
+      if (!userId || !storageData.userLoggedIn || !(await getStoredAccessToken())) {
+        sendResponse({ success: true, privacy: defaultPrivacy });
         return;
       }
       try {
         const privacy = await getPrivacySettingsViaEdgeFunction(userId);
         sendResponse({ success: true, privacy });
-      } catch (error) {
-        console.error('[Background] getPrivacySettings failed:', error);
-        sendResponse({ success: false, error: error.message, privacy: null });
+      } catch {
+        sendResponse({ success: true, privacy: defaultPrivacy });
       }
     });
     return true;
   }
 
   if (request.action === 'getSyncSettings') {
-    chrome.storage.local.get(['userId'], async (storageData) => {
+    chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
+      const defaultSettings = {
+        contact_owner_assignment: 'round_robin',
+        default_pipeline_id: null,
+        default_stage_id: null,
+      };
       const userId = storageData.userId || null;
-      if (!userId) {
-        sendResponse({ success: false, error: 'User ID not found', settings: null });
+      if (!userId || !storageData.userLoggedIn || !(await getStoredAccessToken())) {
+        sendResponse({ success: true, settings: defaultSettings });
         return;
       }
       try {
         const settings = await getSyncSettingsForUser(userId);
         sendResponse({ success: true, settings });
-      } catch (error) {
-        console.error('[Background] getSyncSettings failed:', error);
-        sendResponse({ success: false, error: error.message, settings: null });
+      } catch {
+        sendResponse({ success: true, settings: defaultSettings });
       }
     });
     return true;
   }
 
   if (request.action === 'getSidebarFields') {
-    chrome.storage.local.get(['userId'], async (storageData) => {
+    chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
       const userId = request.data?.userId || storageData.userId || null;
-      if (!userId) {
-        sendResponse({ success: false, error: 'User ID not found', data: null });
+      const emptyFields = { contactFields: [], actionFields: [] };
+
+      if (!userId || !storageData.userLoggedIn) {
+        sendResponse({ success: true, data: emptyFields });
         return;
       }
+
+      const token = await getStoredAccessToken();
+      if (!token) {
+        sendResponse({ success: true, data: emptyFields });
+        return;
+      }
+
       try {
         const data = await callHubSpotEdgeFunction('getSidebarFields', { userId });
         sendResponse({ success: true, data });
       } catch (error) {
-        console.error('[Background] getSidebarFields failed:', error);
-        sendResponse({ success: false, error: error.message, data: null });
+        const message = error?.message || 'Failed to load sidebar fields';
+        if (message === 'Not authenticated') {
+          sendResponse({ success: true, data: emptyFields });
+          return;
+        }
+        sendResponse({ success: false, error: message, data: emptyFields });
       }
     });
     return true;
@@ -2973,3 +2934,23 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
 // Check session expiration on service worker startup
 checkAndHandleSessionExpiration();
+
+// After install/update, refresh open WhatsApp tabs so content scripts reconnect
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason !== 'install' && details.reason !== 'update') return;
+
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+    for (const tab of tabs) {
+      if (!tab.id) continue;
+      try {
+        await chrome.tabs.sendMessage(tab.id, { action: 'extensionUpdated' });
+      } catch {
+        // Stale content script cannot receive messages — reload to inject fresh code
+        await chrome.tabs.reload(tab.id);
+      }
+    }
+  } catch (error) {
+    console.warn('[Background] Could not refresh WhatsApp tabs after extension update:', error);
+  }
+});

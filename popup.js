@@ -116,6 +116,75 @@ document.addEventListener('DOMContentLoaded', async () => {
     inlineErrorMessage.classList.remove('show');
   }
 
+  function formatLoginError(errorMessage) {
+    const msg = String(errorMessage || '').toLowerCase();
+    if (msg.includes('invalid login credentials') || msg.includes('invalid email or password')) {
+      return 'Invalid email or password. Use the same credentials as the WhatSync dashboard, or reset your password there.';
+    }
+    if (msg.includes('email not confirmed') || msg.includes('confirm your email')) {
+      return 'Please confirm your email before logging in. Check your inbox for the verification link.';
+    }
+    if (msg.includes('external supabase not configured')) {
+      return 'Login service is not configured. Please contact your administrator.';
+    }
+    return errorMessage || 'Login failed. Please try again.';
+  }
+
+  function buildProfileFromUser(user, email, existingProfile) {
+    if (existingProfile) return existingProfile;
+    const metadata = user?.user_metadata || {};
+    return {
+      user_id: user?.id,
+      email: user?.email || email || '',
+      first_name: metadata.first_name || '',
+      last_name: metadata.last_name || '',
+      company: metadata.company || '',
+    };
+  }
+
+  async function getStoredAuthSession() {
+    const storageData = await chrome.storage.local.get([
+      'userLoggedIn',
+      'userId',
+      'accessToken',
+      'loginTimestamp',
+      'external_auth_session',
+      'userProfile',
+    ]);
+    return storageData;
+  }
+
+  async function clearStoredAuthSession() {
+    await chrome.storage.local.set({
+      userLoggedIn: false,
+      userId: null,
+      accessToken: null,
+      loginTimestamp: null,
+      external_auth_session: null,
+      userProfile: null,
+    });
+  }
+
+  /** Same auth path as the Harmony dashboard (external-auth edge function). */
+  async function signInViaExternalAuth(email, password) {
+    const edgeUrl = `${EDGE_FUNCTIONS_CONFIG.url}/functions/v1/external-auth`;
+    const response = await fetch(edgeUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: EDGE_FUNCTIONS_CONFIG.anonKey,
+        Authorization: `Bearer ${EDGE_FUNCTIONS_CONFIG.anonKey}`,
+      },
+      body: JSON.stringify({ action: 'signIn', email, password }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || `Login request failed (${response.status})`);
+    }
+    return data;
+  }
+
   async function isEmailRegistered(email) {
     const normalizedEmail = String(email || '').trim().toLowerCase();
     if (!normalizedEmail) return false;
@@ -200,23 +269,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Function to perform automatic logout
   async function performAutoLogout() {
     try {
-      // Sign out from Supabase
-      const { error } = await supabaseClient.auth.signOut();
-      
-      if (error) {
-        console.error('Auto-logout error:', error);
-      } else {
-        console.log('User automatically logged out due to session expiration');
-      }
-      
-      // Clear all login-related data from chrome.storage
-      await chrome.storage.local.set({ 
-        userLoggedIn: false,
-        userId: null,
-        accessToken: null,
-        loginTimestamp: null,
-        external_auth_session: null
-      });
+      console.log('User automatically logged out due to session expiration');
+      await clearStoredAuthSession();
       
       // Notify content script about logout
       try {
@@ -251,8 +305,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (integrationNotice) { integrationNotice.style.display = 'none'; }
 
       const response = await chrome.runtime.sendMessage({
-        action: 'checkHubSpotIntegration'
-      });
+        action: 'checkHubSpotIntegration',
+      }).catch(() => null);
 
       if (response && response.success && response.data) {
         const status = (response.data.status || 'disconnected').toLowerCase();
@@ -443,80 +497,49 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
         
-        const { data, error } = await supabaseClient.auth.signInWithPassword({
-          email: email,
-          password: password
-        });
-        
-        if (error) {
-          if (error.message && error.message.toLowerCase().includes('invalid login credentials')) {
-            showInlineError('Invalid email or password. Please check your details and try again.');
-          } else {
-            showInlineError('Login failed: ' + error.message);
-          }
+        let authResult;
+        try {
+          authResult = await signInViaExternalAuth(email, password);
+        } catch (authError) {
+          console.error('Login via external-auth failed:', authError);
+          showInlineError(formatLoginError(authError.message));
           submitBtn.disabled = false;
           submitBtn.textContent = submitBtnText;
           return;
         }
-        
-        // Get user profile
-        let { data: profile, error: profileError } = await supabaseClient
-          .from('user_profiles')
-          .select('*')
-          .eq('user_id', data.user.id)
-          .single();
-        
-        // If profile doesn't exist, create it automatically
-        if (profileError && profileError.code === 'PGRST116') {
-          // Profile doesn't exist, create it
-          const userMetadata = data.user.user_metadata || {};
-          const { error: createError } = await supabaseClient
-            .from('user_profiles')
-            .insert({
-              user_id: data.user.id,
-              first_name: userMetadata.first_name || '',
-              last_name: userMetadata.last_name || '',
-              email: data.user.email || email
-            });
-          
-          if (!createError) {
-            // Fetch the newly created profile
-            const { data: newProfile } = await supabaseClient
-              .from('user_profiles')
-              .select('*')
-              .eq('user_id', data.user.id)
-              .single();
-            profile = newProfile;
-          }
-        } else if (profileError) {
-          console.error('Error fetching profile:', profileError);
+
+        if (authResult.error) {
+          showInlineError(formatLoginError(authResult.error));
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitBtnText;
+          return;
         }
-        
-        // Show logged-in state
+
+        if (!authResult.user || !authResult.session) {
+          showInlineError('Login failed: unexpected server response. Please try again.');
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitBtnText;
+          return;
+        }
+
+        const data = { user: authResult.user, session: authResult.session };
+        const profile = buildProfileFromUser(data.user, email, authResult.profile);
+
         console.log('User logged in:', data.user);
-        
-        // Get session for access token (data.session should be available after signInWithPassword)
-        let session = data.session;
-        let accessToken = null;
-        if (session && session.access_token) {
-          accessToken = session.access_token;
-        } else {
-          // Fallback: get session explicitly
-          const { data: { session: currentSession } } = await supabaseClient.auth.getSession();
-          session = currentSession;
-          accessToken = currentSession?.access_token || null;
-        }
-        
+
+        const session = data.session;
+        const accessToken = session?.access_token || null;
+
         console.log('Storing access token:', accessToken ? 'present' : 'missing');
-        
-        // Store login state, user ID, access token, login timestamp, and full session in chrome.storage for content script
+
         const loginTimestamp = Date.now();
-        await chrome.storage.local.set({ 
+        await chrome.storage.local.set({
           userLoggedIn: true,
           userId: data.user.id,
           accessToken: accessToken,
           loginTimestamp: loginTimestamp,
-          external_auth_session: session // Store full session for template fetching
+          external_auth_session: { ...session, user: data.user },
+          userProfile: profile,
         });
         
         // Notify content script about login
@@ -684,49 +707,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
   
-  // Check if user is already logged in (require valid Supabase session + non-expired loginTimestamp)
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  const storageData = await chrome.storage.local.get(['userLoggedIn', 'loginTimestamp']);
+  // Restore session from chrome.storage (same source used by content/background scripts)
+  const storageData = await getStoredAuthSession();
+  const storedSession = storageData.external_auth_session;
+  const storedUser = storedSession?.user || (storageData.userId ? { id: storageData.userId } : null);
 
-  if (!session || !session.user) {
-    // No Supabase session — ensure clean state and show login form
-    await chrome.storage.local.set({
-      userLoggedIn: false,
-      userId: null,
-      accessToken: null,
-      loginTimestamp: null,
-      external_auth_session: null
-    });
+  if (!storageData.userLoggedIn || !storedSession?.access_token || !storedUser) {
+    await clearStoredAuthSession();
     showLoginForm();
     return;
   }
 
-  // Supabase session exists (may be cached from weeks ago). Only trust it if we have a valid stored login.
   const hasValidStoredLogin = storageData.loginTimestamp && isSessionWithinTimeout(storageData.loginTimestamp);
   if (!hasValidStoredLogin) {
-    // Stale session (no timestamp, or expired inactivity) — require fresh login
     console.log('Session expired or missing login timestamp — requiring fresh login');
     await performAutoLogout();
     return;
   }
 
-  // Valid session and within inactivity timeout — restore logged-in state (do not refresh loginTimestamp)
-  console.log('User already logged in:', session.user);
-  await chrome.storage.local.set({
-    userLoggedIn: true,
-    userId: session.user.id,
-    accessToken: session.access_token || null,
-    loginTimestamp: storageData.loginTimestamp,
-    external_auth_session: session
-  });
-
-  const { data: profile } = await supabaseClient
-    .from('user_profiles')
-    .select('*')
-    .eq('user_id', session.user.id)
-    .single();
-
-  showLoggedInState(session.user, profile || null);
+  console.log('User already logged in:', storedUser);
+  showLoggedInState(
+    storedUser,
+    storageData.userProfile || buildProfileFromUser(storedUser, storedUser.email)
+  );
   
   // Logout functionality
   logoutBtn.addEventListener('click', async () => {
@@ -738,48 +741,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     logoutBtn.textContent = 'Logging out...';
     
     try {
-      const { error } = await supabaseClient.auth.signOut();
-      
-      if (error) {
-        console.error('Logout error:', error);
-        // Reset button state on error
-        logoutBtn.disabled = false;
-        logoutBtn.textContent = originalText;
-        alert('Logout failed: ' + error.message);
-      } else {
-        console.log('User logged out successfully');
-        
-    // Clear login state, user ID, access token, login timestamp, and session from chrome.storage
-    await chrome.storage.local.set({ 
-      userLoggedIn: false,
-      userId: null,
-      accessToken: null,
-      loginTimestamp: null,
-      external_auth_session: null
-    });
-        
-        // Notify content script about logout
-        try {
-          const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
-          tabs.forEach(tab => {
-            chrome.tabs.sendMessage(tab.id, { action: 'userLoggedOut' }).catch(() => {
-              // Content script might not be ready, that's okay
-            });
+      console.log('User logged out successfully');
+      await clearStoredAuthSession();
+
+      // Notify content script about logout
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+        tabs.forEach(tab => {
+          chrome.tabs.sendMessage(tab.id, { action: 'userLoggedOut' }).catch(() => {
+            // Content script might not be ready, that's okay
           });
-        } catch (error) {
-          console.error('Error notifying content script:', error);
-        }
-        
-        // Reset button state before hiding section
-        logoutBtn.disabled = false;
-        logoutBtn.textContent = originalText;
-        
-        // Show login form
-        showLoginForm();
+        });
+      } catch (error) {
+        console.error('Error notifying content script:', error);
       }
+
+      logoutBtn.disabled = false;
+      logoutBtn.textContent = originalText;
+      showLoginForm();
     } catch (error) {
       console.error('Logout error:', error);
-      // Reset button state on error
       logoutBtn.disabled = false;
       logoutBtn.textContent = originalText;
       alert('An error occurred during logout: ' + error.message);

@@ -8,9 +8,12 @@ const HUBSPOT_CONFIG = {
   apiUrl: 'https://api.hubapi.com'
 };
 
-// Supabase Configuration for logging
+// External Supabase — auth + database (user_profiles, hubspot_contact_logs, etc.)
 const SUPABASE_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
+// Harmony/Lovable project — edge functions only (not the external DB)
+const EDGE_FUNCTIONS_URL = 'https://dizxmubrpwwfrjepcttb.supabase.co';
+const EDGE_FUNCTIONS_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs';
 
 // Session Configuration
 const SESSION_CONFIG = {
@@ -25,7 +28,7 @@ const HUBSPOT_CONNECTION_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 let hubspotConnectionCache = null; // { userId, status, portal_id, cachedAt }
 
 // Privacy settings (from settings edge function)
-const SETTINGS_EDGE_URL = `${SUPABASE_URL}/functions/v1/settings`;
+const SETTINGS_EDGE_URL = `${EDGE_FUNCTIONS_URL}/functions/v1/settings`;
 const PRIVACY_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 let privacySettingsCache = null; // { userId, privacy, cachedAt }
 
@@ -40,7 +43,7 @@ async function reportSyncFailure(userId, context, message) {
   try {
     await fetch(SETTINGS_EDGE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY },
+      headers: { 'Content-Type': 'application/json', apikey: EDGE_FUNCTIONS_ANON_KEY },
       body: JSON.stringify({
         action: 'reportSyncFailure',
         data: { userId, context, message: String(message || 'Unknown error').slice(0, 500) },
@@ -2574,7 +2577,7 @@ async function getPrivacySettingsViaEdgeFunction(userId) {
   try {
     const res = await fetch(SETTINGS_EDGE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+      headers: { 'Content-Type': 'application/json', 'apikey': EDGE_FUNCTIONS_ANON_KEY },
       body: JSON.stringify({ action: 'getPrivacySettings', data: { userId } })
     });
     if (res.ok) {

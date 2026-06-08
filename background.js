@@ -85,7 +85,10 @@ async function getStoredAccessToken() {
 async function callHubSpotEdgeFunction(action, data) {
   const requestBody = { action, data };
   const accessToken = await getStoredAccessToken();
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: EDGE_FUNCTIONS_ANON_KEY
+  };
   if (accessToken) {
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
@@ -367,6 +370,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } catch (error) {
         console.error('[Background] getSyncSettings failed:', error);
         sendResponse({ success: false, error: error.message, settings: null });
+      }
+    });
+    return true;
+  }
+
+  if (request.action === 'getSidebarFields') {
+    chrome.storage.local.get(['userId'], async (storageData) => {
+      const userId = request.data?.userId || storageData.userId || null;
+      if (!userId) {
+        sendResponse({ success: false, error: 'User ID not found', data: null });
+        return;
+      }
+      try {
+        const data = await callHubSpotEdgeFunction('getSidebarFields', { userId });
+        sendResponse({ success: true, data });
+      } catch (error) {
+        console.error('[Background] getSidebarFields failed:', error);
+        sendResponse({ success: false, error: error.message, data: null });
       }
     });
     return true;

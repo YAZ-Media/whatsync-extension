@@ -3,7 +3,9 @@ console.log('WhatsApp Web Extension loaded!');
 
 // ==================== Automation Manager ====================
 
-const AUTOMATION_SUPABASE_URL = 'https://dizxmubrpwwfrjepcttb.supabase.co';
+const AUTOMATION_SUPABASE_URL = typeof EDGE_FUNCTIONS_CONFIG !== 'undefined'
+  ? EDGE_FUNCTIONS_CONFIG.url
+  : 'https://dizxmubrpwwfrjepcttb.supabase.co';
 
 class AutomationManager {
   async getUserId() {
@@ -7943,6 +7945,36 @@ const fieldLabels = {
 };
 
 /**
+ * Fetch sidebar field config via background (includes user session token).
+ */
+async function fetchSidebarFieldsFromBackend(userId) {
+  if (!userId) {
+    return { contactFields: [], actionFields: [] };
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'getSidebarFields',
+      data: { userId }
+    });
+
+    if (!response?.success) {
+      console.error('[Sidebar Fields] Error:', response?.error || 'Unknown error');
+      return { contactFields: [], actionFields: [] };
+    }
+
+    const data = response.data || {};
+    return {
+      contactFields: (data.contactFields || []).filter((f) => f.enabled),
+      actionFields: (data.actionFields || []).filter((f) => f.enabled)
+    };
+  } catch (error) {
+    console.error('[Sidebar Fields] Error fetching enabled fields:', error);
+    return { contactFields: [], actionFields: [] };
+  }
+}
+
+/**
  * Function to fetch enabled action fields for a specific user
  */
 async function getEnabledActionFields(userId) {
@@ -7951,73 +7983,19 @@ async function getEnabledActionFields(userId) {
     return [];
   }
 
-  try {
-    console.log('[Action Fields] Fetching enabled action fields for userId:', userId);
-    const response = await fetch(
-      'https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY0NjA4ODUsImV4cCI6MjA4MjAzNjg4NX0.1WJbhFIJfmeoEK_QUNf9ppjF1XsJjAQAdW_zOyEaHuQ`
-        },
-        body: JSON.stringify({
-          action: 'getSidebarFields',
-          data: { userId }
-        })
-      }
-    );
-
-    const result = await response.json();
-
-    if (result.error) {
-      console.error('[Action Fields] ❌ Error fetching sidebar fields:', result.error);
-      return [];
-    }
-
-    // Filter only action fields that are enabled
-    const enabledActions = (result.actionFields || []).filter(
-      field => field.field_type === 'action' && field.enabled === true
-    );
-
-    console.log(`[Action Fields] ✅ Fetched ${enabledActions.length} enabled action fields for user`);
-    return enabledActions;
-
-  } catch (error) {
-    console.error('[Action Fields] ❌ Failed to fetch action fields:', error);
-    return [];
-  }
+  const { actionFields } = await fetchSidebarFieldsFromBackend(userId);
+  const enabledActions = actionFields.filter(
+    (field) => field.field_type === 'action' && field.enabled === true
+  );
+  console.log(`[Action Fields] ✅ Fetched ${enabledActions.length} enabled action fields for user`);
+  return enabledActions;
 }
 
 /**
  * Fetch enabled sidebar fields for current user
  */
 async function getEnabledSidebarFields(userId) {
-  try {
-    const response = await fetch('https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        action: 'getSidebarFields', 
-        data: { userId } 
-      })
-    });
-
-    if (!response.ok) {
-      console.error('[Sidebar Fields] Error response:', response.status, response.statusText);
-      return { contactFields: [], actionFields: [] };
-    }
-
-    const data = await response.json();
-    const contactFields = data.contactFields?.filter(f => f.enabled) || [];
-    const actionFields = data.actionFields?.filter(f => f.enabled) || [];
-    
-    
-    return { contactFields, actionFields };
-  } catch (error) {
-    console.error('[Sidebar Fields] Error fetching enabled fields:', error);
-    return { contactFields: [], actionFields: [] };
-  }
+  return fetchSidebarFieldsFromBackend(userId);
 }
 
 /**
@@ -8089,7 +8067,7 @@ async function renderAboutSection(contact, userId) {
     // Filter CRM fields by privacy.allowed_properties when set
     if (Array.isArray(privacy.allowed_properties) && privacy.allowed_properties.length > 0) {
       const allowedSet = new Set(privacy.allowed_properties.map(k => String(k).toLowerCase()));
-      contactFields = contactFields.filter(f => allowedSet.has(String(f.hubspot_property || '').toLowerCase()));
+      contactFields = contactFields.filter(f => allowedSet.has(String(f.hubspot_property || f.field_key || '').toLowerCase()));
     }
 
     if (!contactFields || contactFields.length === 0) {
@@ -8097,7 +8075,7 @@ async function renderAboutSection(contact, userId) {
     }
 
     const fieldsHtml = contactFields.map((field, index) => {
-      const property = field.hubspot_property;
+      const property = field.hubspot_property || field.field_key;
       const label = fieldLabels[property] || property.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       let value;
 
@@ -8259,9 +8237,8 @@ async function initializeSidebarFieldsRealtime() {
     }
     
     
-    // External Supabase — sidebar_fields / hubspot_sidebar_fields live here
-    const SUPABASE_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
+    const supabaseUrl = SUPABASE_CONFIG.url;
+    const supabaseKey = SUPABASE_CONFIG.anonKey;
     
     // Load Supabase client if not already loaded
     if (typeof supabase === 'undefined') {
@@ -8269,7 +8246,7 @@ async function initializeSidebarFieldsRealtime() {
     }
     
     // Setup subscription
-    await setupRealtimeSubscription(SUPABASE_URL, SUPABASE_ANON_KEY, userId);
+    await setupRealtimeSubscription(supabaseUrl, supabaseKey, userId);
     
     // Also start polling as fallback (in case realtime doesn't work)
     setTimeout(() => {
@@ -8647,9 +8624,8 @@ async function initializeActionFieldsRealtime() {
     }
     
     
-    // External Supabase — hubspot_sidebar_fields live here
-    const SUPABASE_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
+    const supabaseUrl = SUPABASE_CONFIG.url;
+    const supabaseKey = SUPABASE_CONFIG.anonKey;
     
     // Load Supabase client if not already loaded
     if (typeof supabase === 'undefined') {
@@ -8657,7 +8633,7 @@ async function initializeActionFieldsRealtime() {
     }
     
     // Setup subscription
-    await setupActionFieldsRealtimeSubscription(SUPABASE_URL, SUPABASE_ANON_KEY, userId);
+    await setupActionFieldsRealtimeSubscription(supabaseUrl, supabaseKey, userId);
     
   } catch (error) {
     console.error('[Action Fields Realtime] Error initializing realtime subscription:', error);

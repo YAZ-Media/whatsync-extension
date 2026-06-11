@@ -1,2 +1,3 @@
 # Documentation / notes (not required for extension)
 *.md
+dist/

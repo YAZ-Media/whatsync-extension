@@ -104,6 +104,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (loginSection) loginSection.classList.remove('initial-hide');
   }
 
+  // Safety net: never leave the user staring at "Checking login..." forever.
+  // If session restore hangs (storage error, etc.), fall back to the login form.
+  setTimeout(() => {
+    if (popupLoading && !popupLoading.classList.contains('hidden')) {
+      console.warn('Session check timed out — showing login form');
+      showLoginForm();
+    }
+  }, 4000);
+
+  function isValidEmailFormat(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+  }
+
   function showInlineError(message) {
     if (!inlineErrorMessage) return;
     inlineErrorMessage.textContent = message;
@@ -183,32 +196,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       throw new Error(data.error || `Login request failed (${response.status})`);
     }
     return data;
-  }
-
-  async function isEmailRegistered(email) {
-    const normalizedEmail = String(email || '').trim().toLowerCase();
-    if (!normalizedEmail) return false;
-
-    // RLS on user_profiles allows reading only own row (auth.uid() = user_id).
-    // During login, user is unauthenticated, so this lookup is not reliable.
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) {
-      return null;
-    }
-
-    const { data, error } = await supabaseClient
-      .from('user_profiles')
-      .select('id')
-      .ilike('email', normalizedEmail)
-      .limit(1);
-
-    // If lookup is blocked by RLS/policy, don't break login flow.
-    if (error) {
-      console.warn('Email lookup failed, falling back to direct login check:', error);
-      return null;
-    }
-
-    return Array.isArray(data) && data.length > 0;
   }
 
   function formatConnectedDate(value) {
@@ -405,19 +392,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
   
-  // Toggle password visibility
+  // Toggle password visibility (button wraps the SVG for keyboard access)
   togglePassword.addEventListener('click', () => {
     const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
     passwordInput.setAttribute('type', type);
-    
-    // Update icon
-    if (type === 'text') {
-      togglePassword.innerHTML = `
+
+    const showing = type === 'text';
+    togglePassword.setAttribute('aria-label', showing ? 'Hide password' : 'Show password');
+    togglePassword.setAttribute('aria-pressed', String(showing));
+
+    const icon = togglePassword.querySelector('svg');
+    if (!icon) return;
+    if (showing) {
+      icon.innerHTML = `
         <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
         <line x1="1" y1="1" x2="23" y2="23"></line>
       `;
     } else {
-      togglePassword.innerHTML = `
+      icon.innerHTML = `
         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
         <circle cx="12" cy="12" r="3"></circle>
       `;
@@ -489,14 +481,13 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
 
-        const emailRegistered = await isEmailRegistered(email);
-        if (emailRegistered === false) {
-          showInlineError('No account found for this email. Please sign up first.');
+        if (!isValidEmailFormat(email)) {
+          showInlineError('Please enter a valid email address');
           submitBtn.disabled = false;
           submitBtn.textContent = submitBtnText;
           return;
         }
-        
+
         let authResult;
         try {
           authResult = await signInViaExternalAuth(email, password);
@@ -525,18 +516,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         const data = { user: authResult.user, session: authResult.session };
         const profile = buildProfileFromUser(data.user, email, authResult.profile);
 
-        console.log('User logged in:', data.user);
-
         const session = data.session;
         const accessToken = session?.access_token || null;
-
-        console.log('Storing access token:', accessToken ? 'present' : 'missing');
+        const refreshToken = session?.refresh_token || null;
 
         const loginTimestamp = Date.now();
         await chrome.storage.local.set({
           userLoggedIn: true,
           userId: data.user.id,
           accessToken: accessToken,
+          refreshToken: refreshToken,
           loginTimestamp: loginTimestamp,
           external_auth_session: { ...session, user: data.user },
           userProfile: profile,
@@ -584,15 +573,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         const password = passwordInput.value;
         
         if (!firstName || !lastName || !email || !password) {
-          alert('Please fill in all fields');
+          showInlineError('Please fill in all fields');
           submitBtn.disabled = false;
           submitBtn.textContent = submitBtnText;
           return;
         }
-        
+
+        if (!isValidEmailFormat(email)) {
+          showInlineError('Please enter a valid email address');
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitBtnText;
+          return;
+        }
+
         // Validate password length (Supabase requires min 6 characters)
         if (password.length < 6) {
-          alert('Password must be at least 6 characters long');
+          showInlineError('Password must be at least 6 characters long');
           submitBtn.disabled = false;
           submitBtn.textContent = submitBtnText;
           return;
@@ -614,7 +610,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (authError) {
           // Check if user already exists
           if (authError.message.includes('already registered') || authError.message.includes('already exists')) {
-            alert('This email is already registered. Please try logging in instead.');
+            showInlineError('This email is already registered. Please log in instead.');
             // Switch to login mode
             isLoginMode = true;
             pageTitle.textContent = 'Log In.';
@@ -629,12 +625,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             firstNameInput.removeAttribute('required');
             lastNameInput.removeAttribute('required');
             emailInput.removeAttribute('required');
-            // Pre-fill email in login field
-            emailLoginInput.value = email;
+            // Reset first, then pre-fill the email in the login field
+            // (reset() after assignment would wipe the prefill)
             loginForm.reset();
-            passwordInput.value = '';
+            emailLoginInput.value = email;
           } else {
-            alert('Signup failed: ' + authError.message);
+            showInlineError('Signup failed: ' + authError.message);
           }
           submitBtn.disabled = false;
           submitBtn.textContent = submitBtnText;
@@ -675,8 +671,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             showSuccessMessage('Account Created Successfully!', 'Welcome, ' + firstName + '!');
           }
         }
-        
-        console.log('User signed up:', authData.user);
         
         // Switch to login mode (form will be hidden by success message, then reset when it disappears)
         isLoginMode = true;
@@ -725,7 +719,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  console.log('User already logged in:', storedUser);
   showLoggedInState(
     storedUser,
     storageData.userProfile || buildProfileFromUser(storedUser, storedUser.email)
@@ -763,7 +756,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.error('Logout error:', error);
       logoutBtn.disabled = false;
       logoutBtn.textContent = originalText;
-      alert('An error occurred during logout: ' + error.message);
+      showLoginForm();
+      showInlineError('An error occurred during logout: ' + error.message);
     }
   });
 

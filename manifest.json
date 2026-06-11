@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "WhatsApp Web Extension",
-  "version": "1.0.5",
-  "description": "Extension that only works on web.whatsapp.com",
+  "name": "WhatSync — WhatsApp to HubSpot Sync",
+  "version": "1.1.0",
+  "description": "Sync WhatsApp Web conversations with HubSpot: view contacts, log notes, and create tickets, tasks, and deals.",
   "permissions": [
     "activeTab",
     "storage",
@@ -15,9 +15,7 @@
     "https://whatsync.io/*",
     "https://www.whatsync.io/*",
     "https://ogsvchujqpayuckxuwdf.supabase.co/*",
-    "https://dizxmubrpwwfrjepcttb.supabase.co/*",
-    "https://*.supabase.co/*",
-    "https://api.hubapi.com/*"
+    "https://dizxmubrpwwfrjepcttb.supabase.co/*"
   ],
   "content_scripts": [
     {

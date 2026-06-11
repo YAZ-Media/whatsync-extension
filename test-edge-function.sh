@@ -1,89 +1,59 @@
 #!/bin/bash
+set -euo pipefail
 
-# Test script for Supabase Edge Function
-# This script tests the hubspot edge function's createNote action
+# Smoke test for the `hubspot` Supabase edge function.
+#
+# The function requires an authenticated Supabase session, so all inputs come
+# from environment variables — nothing is hardcoded:
+#
+#   EDGE_FUNCTION_URL   e.g. https://<project-ref>.supabase.co/functions/v1/hubspot
+#   SUPABASE_ANON_KEY   anon key of the edge-function project (apikey header)
+#   SUPABASE_JWT        access token of a logged-in test user
+#   TEST_CONTACT_ID     HubSpot contact id in the test portal to attach the note to
+#
+# Usage:
+#   EDGE_FUNCTION_URL=... SUPABASE_ANON_KEY=... SUPABASE_JWT=... TEST_CONTACT_ID=... ./test-edge-function.sh
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
-# Edge function URL
-EDGE_FUNCTION_URL="https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot"
+for var in EDGE_FUNCTION_URL SUPABASE_ANON_KEY SUPABASE_JWT TEST_CONTACT_ID; do
+  if [ -z "${!var:-}" ]; then
+    echo -e "${RED}Missing required environment variable: $var${NC}" >&2
+    exit 1
+  fi
+done
 
-echo -e "${YELLOW}Testing Supabase Edge Function: hubspot${NC}"
-echo "URL: $EDGE_FUNCTION_URL"
-echo ""
-
-# Generate current timestamp in milliseconds
 TIMESTAMP=$(date +%s000)
-
-# Test payload - matches what extension sends
 TEST_PAYLOAD=$(cat <<EOF
 {
   "action": "createNote",
   "data": {
-    "contactId": 646496038119,
-    "body": "Test note from script - $(date)",
-    "note": "Test note from script - $(date)",
-    "noteBody": "Test note from script - $(date)",
-    "timestamp": $TIMESTAMP,
-    "createTodo": false
+    "contactId": "$TEST_CONTACT_ID",
+    "note": "WhatSync edge-function smoke test - $(date)",
+    "timestamp": $TIMESTAMP
   }
 }
 EOF
 )
 
-echo -e "${YELLOW}Sending test request...${NC}"
-echo "Payload:"
-echo "$TEST_PAYLOAD" | jq '.' 2>/dev/null || echo "$TEST_PAYLOAD"
-echo ""
+echo -e "${YELLOW}Testing edge function: $EDGE_FUNCTION_URL${NC}"
 
-# Make the request
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$EDGE_FUNCTION_URL" \
   -H "Content-Type: application/json" \
+  -H "apikey: $SUPABASE_ANON_KEY" \
+  -H "Authorization: Bearer $SUPABASE_JWT" \
   -d "$TEST_PAYLOAD")
 
-# Extract HTTP status code (last line)
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-# Extract response body (all but last line)
 RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
 
-echo -e "${YELLOW}Response:${NC}"
 echo "HTTP Status: $HTTP_CODE"
-echo ""
+echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
 
 if [ "$HTTP_CODE" -eq 200 ]; then
-  echo -e "${GREEN}✅ Success!${NC}"
-  echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
-elif [ "$HTTP_CODE" -eq 400 ]; then
-  echo -e "${RED}❌ Bad Request (400)${NC}"
-  echo "This usually means:"
-  echo "  - Missing required fields"
-  echo "  - Invalid field names"
-  echo "  - Validation failed"
-  echo ""
-  echo "Response:"
-  echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
-elif [ "$HTTP_CODE" -eq 500 ]; then
-  echo -e "${RED}❌ Server Error (500)${NC}"
-  echo "This usually means:"
-  echo "  - HubSpot token not configured"
-  echo "  - HubSpot API error"
-  echo "  - Edge function error"
-  echo ""
-  echo "Response:"
-  echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
+  echo -e "${GREEN}✅ Success${NC}"
 else
-  echo -e "${RED}❌ Unexpected Status: $HTTP_CODE${NC}"
-  echo "Response:"
-  echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
+  echo -e "${RED}❌ Failed (status $HTTP_CODE)${NC}"
+  echo "Check: Supabase Dashboard → Edge Functions → hubspot → Logs"
+  exit 1
 fi
-
-echo ""
-echo -e "${YELLOW}Next Steps:${NC}"
-echo "1. Check Supabase Dashboard → Edge Functions → hubspot → Logs"
-echo "2. Verify the function code matches EDGE_FUNCTION_TEMPLATE.md"
-echo "3. Check HUBSPOT_ACCESS_TOKEN is set in Supabase secrets"
-echo "4. Review EDGE_FUNCTION_ACCESS_GUIDE.md for more help"

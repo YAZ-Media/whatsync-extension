@@ -98,6 +98,16 @@
       opacity: 0.5;
       transition: opacity 0.2s;
       color: #1a1a1a;
+      background: none;
+      border: none;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .password-toggle svg {
+      width: 18px;
+      height: 18px;
     }
     
     .password-toggle:hover {
@@ -563,7 +573,7 @@
       <div class="user-info">
         <div class="user-avatar" id="userAvatar">U</div>
         <h2 id="userName">User</h2>
-        <p id="userEmail">user@example.com</p>
+        <p id="userEmail"></p>
       </div>
       
       <!-- Integration Status -->
@@ -649,10 +659,12 @@
         <label for="password">Password</label>
         <div class="input-wrapper">
           <input type="password" id="password" name="password" placeholder="Enter your password" required>
-          <svg class="password-toggle" id="togglePassword" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-            <circle cx="12" cy="12" r="3"></circle>
-          </svg>
+          <button type="button" class="password-toggle" id="togglePassword" aria-label="Show password" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
         </div>
       </div>
       

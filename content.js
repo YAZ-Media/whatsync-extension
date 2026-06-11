@@ -1036,13 +1036,30 @@ function applyThemeToNavbarAndSidebar(theme) {
  * Initializes theme detection and applies theme
  * Also sets up a listener for theme changes
  */
+let themeObserver = null;
+let themeCheckInterval = null;
+
+function teardownThemeDetection() {
+  if (themeObserver) {
+    themeObserver.disconnect();
+    themeObserver = null;
+  }
+  if (themeCheckInterval) {
+    clearInterval(themeCheckInterval);
+    themeCheckInterval = null;
+  }
+}
+
 function initializeThemeDetection() {
+  // Tear down any previous observer/interval so re-injection never stacks them
+  teardownThemeDetection();
+
   // Detect and apply theme immediately
   const theme = detectWhatsAppTheme();
   applyThemeToNavbarAndSidebar(theme);
-  
+
   // Set up observer to watch for theme changes
-  const themeObserver = new MutationObserver(() => {
+  themeObserver = new MutationObserver(() => {
     const newTheme = detectWhatsAppTheme();
     const currentTheme = document.body.classList.contains('whatsapp-theme-dark') ? 'dark' : 'light';
     
@@ -1077,15 +1094,15 @@ function initializeThemeDetection() {
     });
   }
   
-  // Periodic check as fallback (every 2 seconds)
-  setInterval(() => {
+  // Periodic check as fallback (every 5 seconds; observers handle the fast path)
+  themeCheckInterval = setInterval(() => {
     const currentTheme = detectWhatsAppTheme();
     const appliedTheme = document.body.classList.contains('whatsapp-theme-dark') ? 'dark' : 'light';
-    
+
     if (currentTheme !== appliedTheme) {
       applyThemeToNavbarAndSidebar(currentTheme);
     }
-  }, 2000);
+  }, 5000);
   
   console.log('[Theme] Theme detection initialized');
 }
@@ -1145,39 +1162,17 @@ async function getPhoneFastAndInvisible() {
   return null;
 }
 
-// Function to extract phone number from chat
-// Function to convert phone number to HubSpot format (with dashes: +971-50-569-7410)
+// Function to convert a phone number to E.164 for HubSpot (+<countrycode><number>).
+// E.164 is country-agnostic and what HubSpot's phone normalization expects;
+// all lookup paths normalize to digits, so stored and searched values stay consistent.
 function formatPhoneForHubSpot(phone) {
   if (!phone) return phone;
-  
-  // Remove all spaces first
-  const cleaned = phone.replace(/\s+/g, '');
-  
-  // Check if it's a valid phone number starting with +
-  if (!/^\+?\d+$/.test(cleaned)) return phone;
-  
-  // Format: +971-50-569-7410 (country code, then groups of 2, 3, 4 digits)
-  // Try to match UAE format: +971 followed by 9 digits
-  const match = cleaned.match(/^(\+971)(\d{2})(\d{3})(\d{4})$/);
-  if (match) {
-    return `${match[1]}-${match[2]}-${match[3]}-${match[4]}`;
-  }
-  
-  // If format doesn't match, try to format with dashes in a general way
-  // Keep country code, then add dashes every few digits
-  const countryCodeMatch = cleaned.match(/^(\+\d{1,3})(\d+)$/);
-  if (countryCodeMatch) {
-    const countryCode = countryCodeMatch[1];
-    const rest = countryCodeMatch[2];
-    
-    // Format rest of number: XX-XXX-XXXX (UAE format)
-    if (rest.length === 9) {
-      return `${countryCode}-${rest.substring(0, 2)}-${rest.substring(2, 5)}-${rest.substring(5)}`;
-    }
-  }
-  
-  // If we can't format it, return original
-  return phone;
+
+  const digits = phone.replace(/[^\d]/g, '');
+  // E.164 numbers are 7-15 digits including the country code
+  if (digits.length < 7 || digits.length > 15) return phone;
+
+  return `+${digits}`;
 }
 
 async function extractPhoneFromChat() {
@@ -6987,8 +6982,7 @@ async function createHubSpotTicket(ticketData, contactId) {
     };
     
     console.log('[Content] Sending ticket creation request to background...');
-    console.log('[Content] Payload:', JSON.stringify(ticketPayload, null, 2));
-    
+
     const response = await sendExtensionMessage({
       action: 'createHubSpotTicket',
       ticketData: ticketPayload,
@@ -6997,12 +6991,13 @@ async function createHubSpotTicket(ticketData, contactId) {
     
     console.log('[Content] Response received from background script');
     console.log('[Content] Response success:', response?.success);
-    console.log('[Content] Response error:', response?.error);
-    console.log('[Content] Response data:', response?.data);
-    
+
+    if (!response) {
+      throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
+    }
+
     if (response.success) {
       console.log('[Content] ✅ Ticket created successfully!');
-      console.log('[Content] Result:', JSON.stringify(response.data, null, 2));
       
       // Trigger automation after successful ticket creation
       if (response.data && (response.data.id || response.data.hs_object_id)) {
@@ -8087,22 +8082,21 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo) {
     }
   };
   
-  console.log('[Content] Contact ID type:', typeof numericContactId, 'Value:', numericContactId);
-  
-  console.log('[Content] Message payload:', JSON.stringify(messagePayload, null, 2));
-  
+  console.log('[Content] Creating note for contact:', numericContactId);
+
   try {
     console.log('[Content] Sending message to background script...');
     const response = await sendExtensionMessage(messagePayload);
-    
+
     console.log('[Content] Response received from background script');
     console.log('[Content] Response success:', response?.success);
-    console.log('[Content] Response error:', response?.error);
-    console.log('[Content] Response data:', response?.data);
-    
+
+    if (!response) {
+      throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
+    }
+
     if (response.success) {
       console.log('[Content] ✅ Note created successfully!');
-      console.log('[Content] Result:', JSON.stringify(response.data, null, 2));
       return response.data;
     } else {
       const errorMsg = response.error || 'Failed to create note';
@@ -9268,7 +9262,10 @@ function injectSidebar() {
       </button>
     </div>
     <div class="sidebar-content">
-      <p>Sidebar content goes here</p>
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>Loading…</p>
+      </div>
     </div>
   `;
   
@@ -9351,6 +9348,7 @@ function setupSidebarClose() {
 
 // Function to remove navbar
 function removeNavbar() {
+  teardownThemeDetection();
   const existingNavbar = document.getElementById("hubspot-navbar");
   if (existingNavbar) {
     existingNavbar.remove();
@@ -9508,17 +9506,28 @@ let mainChatObserver = null;
 let sidebarRetriggerTimeout = null;
 let chatClickHandler = null;
 
+let chatListObserverRetries = 0;
+const CHAT_LIST_OBSERVER_MAX_RETRIES = 60;
+
 function initializeChatListRowObserver() {
+  if (extensionContextInvalidated) return;
+
   // Select the chat list container
   const chatList = document.querySelector('[aria-label="Chat list"]');
-  
+
   if (!chatList) {
-    console.log('[Chat List Observer] Chat list container not found, will retry...');
-    // Retry after a short delay
-    setTimeout(initializeChatListRowObserver, 1000);
+    // Retry for up to a minute (e.g. WhatsApp still loading or on QR screen),
+    // then stop — navigation/bootstrap will re-arm this when the UI appears.
+    if (chatListObserverRetries < CHAT_LIST_OBSERVER_MAX_RETRIES) {
+      chatListObserverRetries++;
+      setTimeout(initializeChatListRowObserver, 1000);
+    } else {
+      console.log('[Chat List Observer] Chat list not found after max retries — stopping.');
+    }
     return;
   }
-  
+  chatListObserverRetries = 0;
+
   console.log('[Chat List Observer] ✅ Chat list container found, initializing observer...');
   
   // Clean up existing observer if any
@@ -9537,6 +9546,12 @@ function initializeChatListRowObserver() {
     const gridcell = e.target.closest('[role="gridcell"]');
     if (gridcell) {
       console.log('[Chat List Observer] 🖱️ Chat clicked (via click event)');
+      // div#main only exists once a chat is open, and WhatsApp can recreate it —
+      // (re)arm its observer whenever the observed node is gone or detached
+      if (!observedMainChat || !observedMainChat.isConnected) {
+        mainChatObserverRetries = 0;
+        setupMainChatObserver();
+      }
       retriggerSidebar();
     }
   };
@@ -9597,15 +9612,26 @@ function initializeChatListRowObserver() {
 }
 
 // Observer for main chat area changes (when a chat is selected)
+let mainChatObserverRetries = 0;
+const MAIN_CHAT_OBSERVER_MAX_RETRIES = 30;
+let observedMainChat = null;
+
 function setupMainChatObserver() {
+  if (extensionContextInvalidated) return;
+
   const mainChat = document.querySelector('div#main');
-  
+
   if (!mainChat) {
-    console.log('[Chat List Observer] Main chat area not found, will retry...');
-    setTimeout(setupMainChatObserver, 1000);
+    // div#main doesn't exist until the user opens a chat. Retry briefly, then
+    // stop — the chat-list click handler re-arms this when a chat is opened.
+    if (mainChatObserverRetries < MAIN_CHAT_OBSERVER_MAX_RETRIES) {
+      mainChatObserverRetries++;
+      setTimeout(setupMainChatObserver, 1000);
+    }
     return;
   }
-  
+  mainChatObserverRetries = 0;
+
   // Clean up existing observer if any
   if (mainChatObserver) {
     mainChatObserver.disconnect();
@@ -9642,7 +9668,8 @@ function setupMainChatObserver() {
     childList: true,
     subtree: true
   });
-  
+  observedMainChat = mainChat;
+
   console.log('[Chat List Observer] ✅ Main chat area observer initialized');
 }
 
@@ -9686,9 +9713,15 @@ if (document.readyState === 'loading') {
   bootstrapExtension();
 }
 
-// Listen for navigation changes (WhatsApp Web uses SPA)
+// Listen for navigation changes (WhatsApp Web is an SPA). A lightweight URL
+// poll is far cheaper than a document-wide MutationObserver, which fired on
+// every DOM mutation on the page.
 let lastUrl = location.href;
-new MutationObserver(() => {
+const navigationCheckInterval = setInterval(() => {
+  if (extensionContextInvalidated) {
+    clearInterval(navigationCheckInterval);
+    return;
+  }
   const url = location.href;
   if (url !== lastUrl) {
     lastUrl = url;
@@ -9699,21 +9732,5 @@ new MutationObserver(() => {
       }
     }, 1000);
   }
-}).observe(document, { subtree: true, childList: true });
-
-// Expose function for manual testing in console
-window.testChatObserver = function() {
-  console.log('[Chat List Observer] 🧪 Manual test triggered');
-  const chatList = document.querySelector('[aria-label="Chat list"]');
-  const mainChat = document.querySelector('div#main');
-  console.log('[Chat List Observer] Chat list found:', !!chatList);
-  console.log('[Chat List Observer] Main chat found:', !!mainChat);
-  console.log('[Chat List Observer] Observer active:', !!chatListObserver);
-  console.log('[Chat List Observer] Main observer active:', !!mainChatObserver);
-  if (chatList) {
-    const gridcells = chatList.querySelectorAll('[role="gridcell"]');
-    console.log('[Chat List Observer] Gridcells found:', gridcells.length);
-  }
-  retriggerSidebar();
-};
+}, 1000);
 

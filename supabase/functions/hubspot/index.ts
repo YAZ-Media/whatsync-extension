@@ -95,7 +95,14 @@ async function getHubSpotToken(userId: string): Promise<string> {
   const res = await db(
     `hubspot_connections?user_id=eq.${userId}&select=id,user_id,access_token,refresh_token,expires_at,status&limit=1`,
   );
-  if (!res.ok) throw new HttpError(500, 'Failed to load HubSpot connection');
+  if (!res.ok) {
+    // Surface WHY so a misconfigured secret is obvious from the response/logs:
+    //   db 401  -> EXTERNAL_SUPABASE_SERVICE_ROLE_KEY is wrong/not the service_role key
+    //   db 404  -> EXTERNAL_SUPABASE_URL points at the wrong project
+    const body = await res.text().catch(() => '');
+    console.error('[hubspot] hubspot_connections read failed', res.status, body.slice(0, 200));
+    throw new HttpError(500, `Failed to load HubSpot connection (db ${res.status})`);
+  }
   const rows: HubSpotConnection[] = await res.json();
   const conn = rows[0];
 

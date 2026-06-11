@@ -2442,7 +2442,7 @@ function getPhoneVariations(phone) {
 }
 
 // Function to check HubSpot CRM for phone number match via edge function
-const CONTACT_LOOKUP_PROPERTIES = ['firstname', 'lastname', 'email', 'phone', 'mobilephone', 'company', 'associatedcompanyname', 'associatedcompanyid', 'jobtitle', 'lifecyclestage', 'hs_lead_status', 'createdate'];
+const CONTACT_LOOKUP_PROPERTIES = ['firstname', 'lastname', 'email', 'phone', 'mobilephone', 'company', 'associatedcompanyname', 'associatedcompanyid', 'jobtitle', 'lifecyclestage', 'hs_lead_status', 'hubspot_owner_id', 'createdate'];
 
 // Primary lookup: HubSpot's normalized, searchable calculated phone index.
 //

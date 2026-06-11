@@ -1175,24 +1175,138 @@ function formatPhoneForHubSpot(phone) {
   return `+${digits}`;
 }
 
+// Resolved-phone cache, keyed by saved-contact name, so we open the WhatsApp
+// contact-info panel at most once per contact instead of on every sidebar
+// refresh. Bounded to avoid unbounded growth on long sessions.
+const contactPanelPhoneCache = new Map();
+const CONTACT_PANEL_CACHE_MAX = 200;
+
+function cacheContactPanelPhone(name, phone) {
+  if (!name) return;
+  if (contactPanelPhoneCache.size >= CONTACT_PANEL_CACHE_MAX) {
+    const firstKey = contactPanelPhoneCache.keys().next().value;
+    contactPanelPhoneCache.delete(firstKey);
+  }
+  contactPanelPhoneCache.set(name, phone);
+}
+
+/**
+ * Collect E.164-style phone numbers that are visible in the WhatsApp
+ * contact-info panel. The panel is a separate pane to the right of #main, so we
+ * scan the whole document while EXCLUDING the chat list (#pane-side), the
+ * conversation/messages pane (#main — message text can contain numbers), and
+ * our own sidebar. Returns distinct numbers in DOM order.
+ */
+function collectContactPanelPhones() {
+  const phoneRe = /\+\d[\d\s\-().]{6,}\d/;
+  const found = new Map(); // normalized "+digits" -> display order preserved
+  const elements = document.querySelectorAll('span, h1, h2, div');
+
+  for (const el of elements) {
+    if (el.closest('#pane-side') || el.closest('[aria-label="Chat list"]')) continue;
+    if (el.closest('#main')) continue;            // conversation + message bubbles
+    if (el.closest('#hubspot-sidebar')) continue; // our own UI
+    if (el.querySelector('span, div, h1, h2')) continue; // leaf nodes only
+
+    const text = (el.textContent || '').trim();
+    if (text.length < 8 || text.length > 26) continue;
+    if (!phoneRe.test(text)) continue;
+
+    const digits = text.replace(/\D/g, '');
+    if (digits.length < 8 || digits.length > 15) continue;
+
+    const normalized = `+${digits}`;
+    if (!found.has(normalized)) found.set(normalized, true);
+  }
+
+  return [...found.keys()];
+}
+
+function dispatchEscapeKey() {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true,
+  }));
+}
+
+/**
+ * Saved-contact fallback. Modern WhatsApp no longer embeds the phone JID in any
+ * data-id, so for a saved contact (header shows a name, not a number) the only
+ * reliable source is the contact-info panel. We open it, read the number, and
+ * close it again. Groups (3+ numbers in the panel) are treated as ambiguous and
+ * skipped, so we never attribute a random participant's number to the chat.
+ */
+async function extractPhoneFromContactPanel() {
+  const contactName = getCurrentContactName()?.trim();
+
+  if (contactName && contactPanelPhoneCache.has(contactName)) {
+    return contactPanelPhoneCache.get(contactName) || null;
+  }
+
+  // If a panel is already open and shows exactly one number, read it with no
+  // visual disruption at all.
+  let phones = collectContactPanelPhones();
+  if (phones.length >= 1 && phones.length <= 2) {
+    const phone = phones[0];
+    cacheContactPanelPhone(contactName, phone);
+    return phone;
+  }
+  if (phones.length >= 3) {
+    cacheContactPanelPhone(contactName, null); // looks like a group
+    return null;
+  }
+
+  // Otherwise open the contact-info panel via the conversation header.
+  const header = getActiveChatPanel()?.querySelector('header');
+  const openTarget = header?.querySelector('div[role="button"]') || header;
+  if (!openTarget) return null;
+
+  const panelWasOpen = phones.length > 0;
+  openTarget.click();
+
+  let resolved = null;
+  for (let i = 0; i < 14; i++) {
+    await new Promise((r) => setTimeout(r, 70));
+    phones = collectContactPanelPhones();
+    if (phones.length >= 3) { resolved = null; break; }      // group — don't guess
+    if (phones.length >= 1) { resolved = phones[0]; break; } // contact number
+  }
+
+  // Close the panel we opened so it doesn't fight the HubSpot sidebar for width.
+  // Single Escape only — a second Escape can deselect the chat in WhatsApp.
+  if (!panelWasOpen) {
+    dispatchEscapeKey();
+  }
+
+  cacheContactPanelPhone(contactName, resolved);
+  return resolved;
+}
+
 async function extractPhoneFromChat() {
   console.log('[Phone Extraction] Starting phone extraction from chat...');
 
   let phone = getCurrentContactPhone();
   if (phone) {
-    console.log('[Phone Extraction] ✅ Extracted phone:', phone);
+    console.log('[Phone Extraction] ✅ Extracted phone (direct)');
     return phone;
   }
 
-  // Fallback: legacy header span (saved contacts)
+  // Fallback: legacy header span (older WhatsApp builds that still show a number)
   const maindiv = getActiveChatPanel();
   const header = maindiv?.querySelector('header');
   const span = header?.children[1]?.querySelector('span[dir="auto"]');
-  const content = span?.innerHTML?.trim();
-
+  const content = span?.textContent?.trim();
   if (content && looksLikePhoneNumber(content)) {
-    console.log('[Phone Extraction] Found phone from header span:', content);
+    console.log('[Phone Extraction] ✅ Extracted phone (header span)');
     return content;
+  }
+
+  // Saved-contact fallback: read the number from the contact-info panel.
+  // This is the path that handles contacts shown by name (e.g. saved contacts),
+  // which modern WhatsApp no longer exposes via data-id.
+  const fromPanel = await extractPhoneFromContactPanel();
+  if (fromPanel) {
+    console.log('[Phone Extraction] ✅ Extracted phone (contact panel)');
+    return fromPanel;
   }
 
   console.log('[Phone Extraction] ❌ No phone number found');

@@ -106,7 +106,9 @@ async function getHubSpotToken(userId: string): Promise<string> {
   const rows: HubSpotConnection[] = await res.json();
   const conn = rows[0];
 
-  if (!conn || conn.status === 'not_connected' || !conn.access_token) {
+  // 'active' is the connected state written by hubspot-oauth's oauthCallback.
+  // Anything else (not_connected, error, revoked, expired) means reconnect.
+  if (!conn || conn.status !== 'active' || !conn.access_token) {
     throw new HttpError(403, 'HubSpot account is not connected');
   }
 
@@ -133,7 +135,7 @@ async function getHubSpotToken(userId: string): Promise<string> {
     // Mark the connection so the dashboard can prompt a reconnect
     await db(`hubspot_connections?id=eq.${conn.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: 'expired' }),
+      body: JSON.stringify({ status: 'error' }),
     });
     throw new HttpError(403, 'HubSpot session expired — please reconnect your account');
   }
@@ -145,7 +147,7 @@ async function getHubSpotToken(userId: string): Promise<string> {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token ?? conn.refresh_token,
       expires_at: newExpiresAt,
-      status: 'connected',
+      status: 'active',
     }),
   });
   return tokens.access_token as string;

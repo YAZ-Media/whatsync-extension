@@ -9186,6 +9186,24 @@ async function formatContactDetails(contacts, phoneNumber) {
 
 // Incremented on each sidebar refresh so stale async updates are ignored
 let sidebarContentUpdateToken = 0;
+// Identity of the chat the sidebar is currently rendering, so observer-driven
+// retriggers (firing on scroll as WhatsApp loads messages) don't rebuild the
+// sidebar — or supersede an in-flight contact lookup — when the chat hasn't
+// actually changed.
+let lastRenderedChatKey = null;
+
+// A stable-per-chat key from the conversation header title (the saved-contact
+// name, or the phone number for unsaved contacts). Differs between chats,
+// constant while scrolling within one.
+function getCurrentChatHeaderKey() {
+  const header = document.querySelector('div#main header');
+  if (!header) return '';
+  const titleEl =
+    header.querySelector('span[dir="auto"][title]') ||
+    header.querySelector('span[dir="auto"]') ||
+    header.querySelector('[role="button"] span');
+  return (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
+}
 
 // Function to update sidebar content based on maindiv
 function updateSidebarContent() {
@@ -9193,9 +9211,13 @@ function updateSidebarContent() {
   if (!sidebar) return;
 
   closeWhatsAppContactDrawer();
-  
+
   const sidebarContent = sidebar.querySelector(".sidebar-content");
   if (!sidebarContent) return;
+
+  // Record which chat this render is for (synchronously, before any async work)
+  // so concurrent retriggers for the same chat are deduped instead of racing.
+  lastRenderedChatKey = getCurrentChatHeaderKey();
 
   const updateToken = ++sidebarContentUpdateToken;
   
@@ -9805,14 +9827,23 @@ function retriggerSidebar() {
     }
     
     const isSidebarOpen = sidebar.classList.contains('open');
-    
+
     if (!isSidebarOpen) {
       console.log('[Chat List Observer] ⏭️ Sidebar is not showing - skipping (not opening automatically)');
       return;
     }
-    
-    // Sidebar is showing, so update its content
-    console.log('[Chat List Observer] ✅ Sidebar is showing - updating content...');
+
+    // Skip if the chat hasn't changed since the last render. This is what makes
+    // scrolling a chat NOT rebuild the sidebar (WhatsApp loads messages on
+    // scroll, which fires the observer), and prevents those retriggers from
+    // discarding an in-progress contact lookup for the same chat.
+    const chatKey = getCurrentChatHeaderKey();
+    if (chatKey && chatKey === lastRenderedChatKey) {
+      return;
+    }
+
+    // Sidebar is showing and the chat changed — update its content.
+    console.log('[Chat List Observer] ✅ Chat changed - updating sidebar content...');
     updateSidebarContent();
     const maindiv = document.querySelector("div#main");
     if (maindiv) widthSetting(); // Adjust width if maindiv exists

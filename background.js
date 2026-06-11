@@ -2419,9 +2419,11 @@ async function getPrivacySettingsViaEdgeFunction(userId) {
 // Function to normalize phone number (remove spaces, dashes, keep only digits and +)
 function normalizePhoneNumber(phone) {
   if (!phone) return phone;
-  // Keep the + at the start if present, remove all other non-digits
-  const cleaned = phone.replace(/[^\d+]/g, '');
-  return cleaned.startsWith('+') ? cleaned : '+' + cleaned;
+  let cleaned = phone.replace(/[^\d+]/g, '');
+  if (cleaned.startsWith('+')) return cleaned;
+  // International "00" prefix (e.g. 00971…) is equivalent to "+"
+  if (cleaned.startsWith('00')) cleaned = cleaned.slice(2);
+  return '+' + cleaned;
 }
 
 // Function to generate phone number variations for lookup. Country-agnostic:
@@ -2442,25 +2444,31 @@ function getPhoneVariations(phone) {
 // Function to check HubSpot CRM for phone number match via edge function
 const CONTACT_LOOKUP_PROPERTIES = ['firstname', 'lastname', 'email', 'phone', 'mobilephone', 'company', 'associatedcompanyname', 'associatedcompanyid', 'jobtitle', 'lifecyclestage', 'hs_lead_status', 'createdate'];
 
-// Primary lookup: HubSpot's server-side CRM search. Works for portals of any
-// size, unlike scanning the first page of getContacts.
+// Primary lookup: HubSpot's normalized, searchable calculated phone index.
+//
+// A WhatsApp number can be stored in HubSpot's `phone` OR `mobilephone` field,
+// in any format the user typed (+971…, 00971…, with spaces/dashes). An exact
+// EQ on `phone`/`mobilephone` therefore misses almost everything. HubSpot
+// maintains hidden, normalized copies — hs_searchable_calculated_phone_number
+// and hs_searchable_calculated_mobile_number — that index the bare
+// international digits. CONTAINS_TOKEN against those, with a +-stripped,
+// digits-only value, is the only reliable phone match (verified against the
+// live portal: a number stored as "00971568577794" in mobilephone is found by
+// CONTAINS_TOKEN "971568577794", but by none of the phone/mobilephone EQ forms).
 async function searchHubSpotContactsByPhone(phoneVariations) {
-  // One OR'ed search request: each filter group matches one phone variation.
-  // HubSpot caps filterGroups at 5 — phone gets every variation, mobilephone
-  // gets the normalized E.164 form.
-  const normalized = phoneVariations[1] || phoneVariations[0];
-  const filterGroups = phoneVariations.slice(0, 4).map((value) => ({
-    filters: [{ propertyName: 'phone', operator: 'EQ', value }],
-  }));
-  if (filterGroups.length < 5) {
-    filterGroups.push({
-      filters: [{ propertyName: 'mobilephone', operator: 'EQ', value: normalized }],
-    });
-  }
+  // Derive the bare international digit string from any of the variations.
+  const raw = phoneVariations.find(Boolean) || '';
+  let digits = String(raw).replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.length < 7) return [];
 
   const result = await callHubSpotEdgeFunction('searchContacts', {
     searchRequest: {
-      filterGroups,
+      // Separate filterGroups are OR'ed: match the number in either field.
+      filterGroups: [
+        { filters: [{ propertyName: 'hs_searchable_calculated_phone_number', operator: 'CONTAINS_TOKEN', value: digits }] },
+        { filters: [{ propertyName: 'hs_searchable_calculated_mobile_number', operator: 'CONTAINS_TOKEN', value: digits }] },
+      ],
       properties: CONTACT_LOOKUP_PROPERTIES,
       limit: 10,
     },

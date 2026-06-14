@@ -8891,6 +8891,29 @@ const fieldLabels = {
 /**
  * Fetch sidebar field config via background (includes user session token).
  */
+// Canonical sidebar field catalog — must mirror the Sidebar Designer (useSidebarFields.ts).
+// The list lives here; the backend only stores each key's on/off preference.
+const SIDEBAR_CONTACT_CATALOG = [
+  { hubspot_property: 'firstname_lastname', column_name: 'Contact Name' },
+  { hubspot_property: 'phone', column_name: 'Phone' },
+  { hubspot_property: 'email', column_name: 'Email' },
+  { hubspot_property: 'company', column_name: 'Company' },
+  { hubspot_property: 'jobtitle', column_name: 'Job Title' },
+  { hubspot_property: 'hubspot_owner_id', column_name: 'Contact Owner' },
+  { hubspot_property: 'lifecyclestage', column_name: 'Lifecycle Stage' },
+  { hubspot_property: 'hs_lead_status', column_name: 'Lead Status' },
+  { hubspot_property: 'createdate', column_name: 'Create Date' },
+];
+const SIDEBAR_LOCKED_FIELDS = ['firstname_lastname', 'phone'];
+
+// Map of field_key -> enabled. null until loaded; missing keys default to enabled.
+let sidebarPrefsCache = null;
+function isSidebarFieldEnabled(key) {
+  if (SIDEBAR_LOCKED_FIELDS.includes(key)) return true;
+  if (!sidebarPrefsCache) return true; // default visible until prefs load
+  return sidebarPrefsCache[key] !== false;
+}
+
 async function fetchSidebarFieldsFromBackend(userId) {
   if (!userId || extensionContextInvalidated) {
     return { contactFields: [], actionFields: [] };
@@ -8906,19 +8929,22 @@ async function fetchSidebarFieldsFromBackend(userId) {
       data: { userId }
     });
 
-    if (!response) {
-      return { contactFields: [], actionFields: [] };
-    }
+    const data = response?.data || {};
 
-    if (!response?.success) {
-      return { contactFields: [], actionFields: [] };
-    }
+    // Build the prefs cache from the flat fields list (key -> enabled).
+    const prefs = {};
+    (data.fields || []).forEach((f) => {
+      const key = f.field_key || f.hubspot_property;
+      if (key) prefs[key] = (f.is_enabled ?? f.enabled) !== false;
+    });
+    sidebarPrefsCache = prefs;
 
-    const data = response.data || {};
-    return {
-      contactFields: (data.contactFields || []).filter((f) => f.enabled),
-      actionFields: (data.actionFields || []).filter((f) => f.enabled)
-    };
+    // Return the canonical About contact fields, filtered by prefs (locked always on).
+    const contactFields = SIDEBAR_CONTACT_CATALOG
+      .filter((f) => SIDEBAR_LOCKED_FIELDS.includes(f.hubspot_property) || isSidebarFieldEnabled(f.hubspot_property))
+      .map((f) => ({ ...f, field_type: 'contact_info', enabled: true }));
+
+    return { contactFields, actionFields: [] };
   } catch {
     return { contactFields: [], actionFields: [] };
   }
@@ -9097,7 +9123,7 @@ async function renderAboutSection(contact, userId) {
       (f) => (f.hubspot_property || f.field_key) === 'hubspot_owner_id'
     );
     let ownerRowHtml = '';
-    if (!hasOwnerField) {
+    if (!hasOwnerField && isSidebarFieldEnabled('hubspot_owner_id')) {
       const ownerId = getContactPropertyValue(props, 'hubspot_owner_id') || '';
       ownerRowHtml = `
         <div class="info-divider"></div>
@@ -9338,7 +9364,10 @@ async function formatContactDetails(contacts, phoneNumber) {
   } catch (error) {
     console.error('[Content] Error getting userId:', error);
   }
-  
+
+  // Warm the sidebar prefs cache so section/action visibility gating below is accurate.
+  try { if (userId) await fetchSidebarFieldsFromBackend(userId); } catch { /* defaults to visible */ }
+
   // Get the actual HubSpot contact ID (numeric)
   const hubspotContactId = contact.id || contact.hs_object_id || props.hs_object_id || '';
   
@@ -9414,33 +9443,38 @@ async function formatContactDetails(contacts, phoneNumber) {
           ` : ''}
         </div>
         <div class="contact-actions">
+            ${!isSidebarFieldEnabled('action_note') ? '' : `
             <button class="action-btn" id="create-note-btn" title="Create a note" data-name="${fullName}" data-email="${email}" data-contact-id="${hubspotContactId}" data-phone="${phoneNumber}">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
               </svg>
               <span>Note</span>
-            </button>
+            </button>`}
+            ${!isSidebarFieldEnabled('action_email') ? '' : `
             <button class="action-btn" id="create-email-btn" title="Create a Email" data-email="${email}" data-name="${fullName}">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
                 <polyline points="22,6 12,13 2,6"></polyline>
               </svg>
               <span>Email</span>
-            </button>
+            </button>`}
+            ${!isSidebarFieldEnabled('action_log_whatsapp') ? '' : `
             <button class="action-btn action-btn-whatsapp" id="log-whatsapp-message-btn" title="Log a WhatsApp message">
               <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <path fill="#25D366" d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.945C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 0 1 8.413 3.488 11.824 11.824 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 0 0 1.51 5.26l-.999 3.648 3.738-.981v-.026zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.521.149-.174.198-.298.298-.497.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
               </svg>
               <span>Log</span>
-            </button>
+            </button>`}
+            ${!isSidebarFieldEnabled('action_task') ? '' : `
             <button class="action-btn" id="create-task-btn" title="Create a Task" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="9 11 12 14 22 4"></polyline>
                 <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
               </svg>
               <span>Task</span>
-            </button>
+            </button>`}
+            ${!isSidebarFieldEnabled('action_meeting') ? '' : `
             <button class="action-btn" id="schedule-meeting-btn" title="Schedule a meeting" data-email="${email}" data-name="${fullName}">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -9449,7 +9483,7 @@ async function formatContactDetails(contacts, phoneNumber) {
                 <line x1="3" y1="10" x2="21" y2="10"></line>
               </svg>
               <span>Meeting</span>
-            </button>
+            </button>`}
             <div class="more-actions-wrapper">
               <button class="action-btn" id="more-actions-btn" title="More">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -9475,6 +9509,7 @@ async function formatContactDetails(contacts, phoneNumber) {
                   </div>
                   <span>Log a WhatsApp message</span>
                 </div>
+                ${!isSidebarFieldEnabled('action_ticket') ? '' : `
                 <div class="more-actions-option" id="more-create-ticket-option" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}">
                   <div class="more-actions-option-icon">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -9486,13 +9521,14 @@ async function formatContactDetails(contacts, phoneNumber) {
                     </svg>
                   </div>
                   <span>Create Ticket</span>
-                </div>
+                </div>`}
               </div>
             </div>
           </div>
         </div>
       </div>
       ${await renderAboutSection(contact, userId)}
+      ${!isSidebarFieldEnabled('section_activity') ? '' : `
       <div class="activities-section" data-contact-id="${hubspotContactId}">
         <div class="activities-header">
           <div class="activities-title">
@@ -9508,6 +9544,8 @@ async function formatContactDetails(contacts, phoneNumber) {
           </div>
         </div>
       </div>
+      `}
+      ${!isSidebarFieldEnabled('section_notes') ? '' : `
       <div class="notes-section" data-contact-id="${hubspotContactId}">
         <div class="notes-header">
           <div class="notes-title">
@@ -9546,6 +9584,8 @@ async function formatContactDetails(contacts, phoneNumber) {
           </div>
         </div>
       </div>
+      `}
+      ${!isSidebarFieldEnabled('section_tickets') ? '' : `
       <div class="tickets-section" data-contact-id="${hubspotContactId}">
         <div class="tickets-header">
           <div class="tickets-title">
@@ -9592,8 +9632,9 @@ async function formatContactDetails(contacts, phoneNumber) {
           </button>
         </div>
       </div>
-      
+      `}
       <!-- Tasks Section -->
+      ${!isSidebarFieldEnabled('section_tasks') ? '' : `
       <div class="tasks-section" data-contact-id="${hubspotContactId}">
         <div class="tasks-header">
           <div class="tasks-title">
@@ -9632,8 +9673,9 @@ async function formatContactDetails(contacts, phoneNumber) {
           </div>
         </div>
       </div>
-      
+      `}
       <!-- Deals Section -->
+      ${!isSidebarFieldEnabled('section_deals') ? '' : `
       <div class="deals-section" data-contact-id="${hubspotContactId}">
         <div class="deals-header">
           <div class="deals-title">
@@ -9672,6 +9714,7 @@ async function formatContactDetails(contacts, phoneNumber) {
           </div>
         </div>
       </div>
+      `}
     </div>
   `;
 }

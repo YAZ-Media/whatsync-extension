@@ -1,9 +1,9 @@
 // Background service worker for handling API calls
 
 // Supabase Functions Edge Function URL for HubSpot token
-const HUBSPOT_TOKEN_ENDPOINT = 'https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot';
+const HUBSPOT_TOKEN_ENDPOINT = 'https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/hubspot';
 // Supabase Functions Edge Function URL for HubSpot OAuth operations (connection status, etc.)
-const HUBSPOT_OAUTH_ENDPOINT = 'https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot-oauth';
+const HUBSPOT_OAUTH_ENDPOINT = 'https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/hubspot-oauth';
 const HUBSPOT_CONFIG = {
   apiUrl: 'https://api.hubapi.com'
 };
@@ -12,7 +12,7 @@ const HUBSPOT_CONFIG = {
 const SUPABASE_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
 // Harmony/Lovable project — edge functions only (not the external DB)
-const EDGE_FUNCTIONS_URL = 'https://dizxmubrpwwfrjepcttb.supabase.co';
+const EDGE_FUNCTIONS_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
 const EDGE_FUNCTIONS_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs';
 
 // Session Configuration
@@ -1101,43 +1101,29 @@ async function getHubSpotDealsViaEdgeFunction(contactId, userId, accessToken) {
     let deals = result?.results || result?.data || (Array.isArray(result) ? result : []);
     console.log('[Background] Result count:', deals.length);
     
-    // Additional filtering: Ensure deals are actually associated with this contact
-    // This is a safety check in case the edge function doesn't filter properly
+    // The edge function returns deals already scoped to this contact (via the
+    // contact -> deals association lookup), so trust them. Only apply a secondary
+    // association check when the deals actually carry association data; otherwise we
+    // would wrongly drop every deal, since batch-read deals don't include reverse
+    // contact associations. (That over-filtering was the cause of deals showing 0.)
     if (Array.isArray(deals) && deals.length > 0) {
-      console.log('[Background] Filtering deals to ensure they belong to contact:', contactIdStr);
-      console.log('[Background] Total deals before filtering:', deals.length);
-      
-      // Filter deals that have this contact in their associations
-      // Note: This assumes the edge function returns deals with association data
-      // If the edge function already filters correctly, this won't remove any deals
-      const filteredDeals = deals.filter(deal => {
-        // Check if deal has associations with this contact
-        const associations = deal?.associations || {};
-        const contactAssociations = associations?.contacts?.results || associations?.contact?.results || [];
-        
-        // Check if any association matches our contactId
-        const hasContact = contactAssociations.some(assoc => {
-          const assocId = String(assoc?.id || assoc?.toObjectId || '');
-          return assocId === contactIdStr;
+      const dealsWithAssoc = deals.filter(
+        (d) => d?.associations?.contacts?.results || d?.associations?.contact?.results
+      );
+      if (dealsWithAssoc.length > 0) {
+        const filteredDeals = deals.filter((deal) => {
+          const contactAssociations =
+            deal?.associations?.contacts?.results || deal?.associations?.contact?.results || [];
+          return contactAssociations.some(
+            (assoc) => String(assoc?.id || assoc?.toObjectId || '') === contactIdStr
+          );
         });
-        
-        // Also check if deal properties contain contactId (some formats)
-        const dealContactId = deal?.properties?.associatedcompanyid || deal?.properties?.hs_associated_contact_id;
-        if (dealContactId && String(dealContactId) === contactIdStr) {
-          return true;
+        // Only narrow if it didn't nuke everything the server already scoped.
+        if (filteredDeals.length > 0) {
+          deals = filteredDeals;
         }
-        
-        return hasContact;
-      });
-      
-      console.log('[Background] Deals after filtering:', filteredDeals.length);
-      
-      // If filtering removed deals, log a warning
-      if (filteredDeals.length < deals.length) {
-        console.warn('[Background] ⚠️ Filtered out', deals.length - filteredDeals.length, 'deals that were not associated with contact', contactIdStr);
       }
-      
-      deals = filteredDeals;
+      console.log('[Background] Deals belonging to contact', contactIdStr, ':', deals.length);
     }
     
     console.log('[Background] Extracted deals:', deals.length);
@@ -2464,10 +2450,16 @@ async function searchHubSpotContactsByPhone(phoneVariations) {
 
   const result = await callHubSpotEdgeFunction('searchContacts', {
     searchRequest: {
-      // Separate filterGroups are OR'ed: match the number in either field.
+      // Separate filterGroups are OR'ed: match the number in any phone field.
       filterGroups: [
+        // HubSpot's normalized/calculated copies (used when the portal populates them).
         { filters: [{ propertyName: 'hs_searchable_calculated_phone_number', operator: 'CONTAINS_TOKEN', value: digits }] },
         { filters: [{ propertyName: 'hs_searchable_calculated_mobile_number', operator: 'CONTAINS_TOKEN', value: digits }] },
+        // Raw phone fields — required because the calculated copies are empty in this portal
+        // (verified live: a number lives in `phone`/`mobilephone` but the calculated fields are blank).
+        { filters: [{ propertyName: 'phone', operator: 'CONTAINS_TOKEN', value: digits }] },
+        { filters: [{ propertyName: 'mobilephone', operator: 'CONTAINS_TOKEN', value: digits }] },
+        { filters: [{ propertyName: 'hs_whatsapp_phone_number', operator: 'CONTAINS_TOKEN', value: digits }] },
       ],
       properties: CONTACT_LOOKUP_PROPERTIES,
       limit: 10,

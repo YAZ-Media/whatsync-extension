@@ -15,7 +15,7 @@
     "https://whatsync.io/*",
     "https://www.whatsync.io/*",
     "https://ogsvchujqpayuckxuwdf.supabase.co/*",
-    "https://dizxmubrpwwfrjepcttb.supabase.co/*"
+    "https://ogsvchujqpayuckxuwdf.supabase.co/*"
   ],
   "content_scripts": [
     {

@@ -7,7 +7,7 @@ const SUPABASE_CONFIG = {
 
 // Harmony/Lovable project — edge functions only
 const EDGE_FUNCTIONS_CONFIG = {
-  url: 'https://dizxmubrpwwfrjepcttb.supabase.co',
+  url: 'https://ogsvchujqpayuckxuwdf.supabase.co',
   anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs'
 };
 

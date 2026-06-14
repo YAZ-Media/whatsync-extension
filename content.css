@@ -20,6 +20,23 @@ body.hubspot-navbar-active div#main {
     position: relative;
 }
 
+/* ==================== Docked sidebar layout ==================== */
+/* When the sidebar is open we shrink WhatsApp's app wrapper by the sidebar width so
+   the whole chat UI reflows into the remaining space instead of being covered by the
+   panel. Using vw (viewport) units avoids compounding when multiple containers match.
+   The sidebar itself is a fixed 420px column docked flush to the right edge. */
+body.hubspot-sidebar-open .app-wrapper-web,
+body.hubspot-sidebar-open #app .two {
+    width: calc(100vw - 420px) !important;
+    min-width: 0 !important;
+}
+
+/* Smoothly animate the reflow on open/close. */
+.app-wrapper-web,
+#app .two {
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 /* ==================== WhatsApp Theme Variables ==================== */
 /* Default (Light Theme) Variables */
 :root {
@@ -213,11 +230,6 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
     display: flex;
     align-items: center;
     gap: 8px;
-}
-
-#hubspot-sidebar .sidebar-header h3::before {
-    content: '💼';
-    font-size: 22px;
 }
 
 #hubspot-sidebar .sidebar-close {
@@ -434,6 +446,9 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
 
 #hubspot-sidebar .contact-name-section {
     flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 #hubspot-sidebar .contact-name-section h3 {
@@ -442,6 +457,400 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
     color: var(--sidebar-text, #1e3a8a);
     margin: 0;
     line-height: 1.3;
+}
+
+/* "Open in HubSpot" deep-link affordance on record cards */
+#hubspot-sidebar .hs-open-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #ff7a59; /* HubSpot orange */
+    opacity: 0.65;
+    text-decoration: none;
+    flex: 0 0 auto;
+    padding: 2px;
+    border-radius: 4px;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+#hubspot-sidebar .hs-open-link:hover {
+    opacity: 1;
+    background-color: rgba(255, 122, 89, 0.12);
+}
+
+/* Let the ticket title expand so the open-link sits at the far right
+   (deal title already has flex:1 defined below). */
+#hubspot-sidebar .ticket-item-title {
+    flex: 1;
+}
+
+/* Inline-editable enum fields (Lifecycle stage, Lead status) in the About section */
+#hubspot-sidebar .info-edit-select {
+    width: 100%;
+    max-width: 180px;
+    padding: 4px 8px;
+    font-size: 13px;
+    color: var(--sidebar-text, #1e3a8a);
+    background-color: #fff;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#hubspot-sidebar .info-edit-select:hover {
+    border-color: #9ca3af;
+}
+
+#hubspot-sidebar .info-edit-select:focus {
+    outline: none;
+    border-color: #25D366;
+    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.2);
+}
+
+#hubspot-sidebar .info-edit-select:disabled {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+#hubspot-sidebar .info-edit-select.edit-saved {
+    border-color: #25D366;
+    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.25);
+}
+
+#hubspot-sidebar .info-edit-select.edit-error {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25);
+}
+
+/* ==================== Sidebar state screens (sign-in / connect) ==================== */
+#hubspot-sidebar .ws-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 48px 28px;
+    gap: 6px;
+    animation: hubspotFadeInUp 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+#hubspot-sidebar .ws-state-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(37, 211, 102, 0.12);
+    color: #25D366;
+    margin-bottom: 10px;
+}
+
+#hubspot-sidebar .ws-state-icon-warn {
+    background: rgba(245, 158, 11, 0.14);
+    color: #f59e0b;
+}
+
+#hubspot-sidebar .ws-state h4 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--sidebar-text, #1a1a1a);
+}
+
+#hubspot-sidebar .ws-state p {
+    margin: 4px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--sidebar-text-secondary, #667781);
+    max-width: 280px;
+}
+
+#hubspot-sidebar .ws-state-btn {
+    margin-top: 18px;
+    padding: 11px 22px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(37, 211, 102, 0.3);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+#hubspot-sidebar .ws-state-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(37, 211, 102, 0.4);
+}
+
+#hubspot-sidebar .ws-state-btn:active {
+    transform: translateY(0);
+}
+
+#hubspot-sidebar .ws-state-hint {
+    margin-top: 14px;
+    font-size: 11.5px;
+    color: var(--sidebar-text-secondary, #8696a0);
+    opacity: 0.85;
+}
+
+/* ==================== Recent activity timeline ==================== */
+#hubspot-sidebar .activities-section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--sidebar-border, #e0e0e0);
+}
+
+#hubspot-sidebar .activities-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+}
+
+#hubspot-sidebar .activities-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--sidebar-text, #1a1a1a);
+}
+
+#hubspot-sidebar .activities-chevron {
+    transition: transform 0.2s ease;
+}
+
+#hubspot-sidebar .activities-content {
+    margin-top: 12px;
+}
+
+#hubspot-sidebar .activities-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    position: relative;
+}
+
+/* Vertical connector line for the timeline */
+#hubspot-sidebar .activity-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 0;
+    position: relative;
+}
+
+#hubspot-sidebar .activity-item:not(:last-child)::before {
+    content: '';
+    position: absolute;
+    left: 13px;
+    top: 32px;
+    bottom: -4px;
+    width: 2px;
+    background: var(--sidebar-border, #e5e7eb);
+}
+
+#hubspot-sidebar .activity-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    z-index: 1;
+}
+
+#hubspot-sidebar .activity-icon-note { background: #f59e0b; }
+#hubspot-sidebar .activity-icon-call { background: #25D366; }
+#hubspot-sidebar .activity-icon-email { background: #3b82f6; }
+#hubspot-sidebar .activity-icon-meeting { background: #8b5cf6; }
+#hubspot-sidebar .activity-icon-ticket { background: #6366f1; }
+#hubspot-sidebar .activity-icon-task { background: #10b981; }
+#hubspot-sidebar .activity-icon-deal { background: #ec4899; }
+#hubspot-sidebar .activity-icon-contact { background: #3b82f6; }
+#hubspot-sidebar .activity-icon-default { background: #94a3b8; }
+
+/* Loading skeleton rows */
+#hubspot-sidebar .activity-skeleton {
+    height: 36px;
+    margin: 8px 0;
+    border-radius: 8px;
+    background: linear-gradient(90deg,
+        var(--sidebar-hover-bg, #f0f4f8) 25%,
+        rgba(0, 0, 0, 0.04) 37%,
+        var(--sidebar-hover-bg, #f0f4f8) 63%);
+    background-size: 400% 100%;
+    animation: hubspotShimmer 1.4s ease infinite;
+}
+
+@keyframes hubspotShimmer {
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0 50%; }
+}
+
+/* The activity row's HubSpot open-link sits at the far right and is revealed on hover. */
+#hubspot-sidebar .activity-item .hs-open-link {
+    align-self: center;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+#hubspot-sidebar .activity-item:hover .hs-open-link {
+    opacity: 0.65;
+}
+
+/* ============================================================
+   A-tier UX polish: entrance animations, micro-interactions
+   ============================================================ */
+
+/* Staggered fade-in-up for the main content sections as a contact loads. */
+@keyframes hubspotFadeInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hubspotFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+#hubspot-sidebar .contact-details > * {
+    animation: hubspotFadeInUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+#hubspot-sidebar .contact-details > *:nth-child(1) { animation-delay: 0.02s; }
+#hubspot-sidebar .contact-details > *:nth-child(2) { animation-delay: 0.07s; }
+#hubspot-sidebar .contact-details > *:nth-child(3) { animation-delay: 0.12s; }
+#hubspot-sidebar .contact-details > *:nth-child(4) { animation-delay: 0.17s; }
+#hubspot-sidebar .contact-details > *:nth-child(5) { animation-delay: 0.22s; }
+#hubspot-sidebar .contact-details > *:nth-child(6) { animation-delay: 0.27s; }
+#hubspot-sidebar .contact-details > *:nth-child(7) { animation-delay: 0.32s; }
+
+/* Reveal animation when a collapsible section expands (display:none -> block
+   restarts the animation each time it is shown). */
+#hubspot-sidebar .contact-info,
+#hubspot-sidebar .activities-content,
+#hubspot-sidebar .notes-content,
+#hubspot-sidebar .tickets-content,
+#hubspot-sidebar .tasks-content,
+#hubspot-sidebar .deals-content {
+    animation: hubspotFadeIn 0.28s ease;
+}
+
+/* Section headers feel tappable. */
+#hubspot-sidebar .about-header,
+#hubspot-sidebar .activities-header,
+#hubspot-sidebar .notes-header,
+#hubspot-sidebar .tickets-header,
+#hubspot-sidebar .tasks-header,
+#hubspot-sidebar .deals-header {
+    border-radius: 8px;
+    transition: background-color 0.18s ease;
+}
+#hubspot-sidebar .about-header:hover,
+#hubspot-sidebar .activities-header:hover,
+#hubspot-sidebar .notes-header:hover,
+#hubspot-sidebar .tickets-header:hover,
+#hubspot-sidebar .tasks-header:hover,
+#hubspot-sidebar .deals-header:hover {
+    background-color: var(--sidebar-hover-bg, #f0f4f8);
+}
+
+/* List cards lift gently on hover. */
+#hubspot-sidebar .note-item,
+#hubspot-sidebar .ticket-item,
+#hubspot-sidebar .task-item,
+#hubspot-sidebar .deal-item,
+#hubspot-sidebar .activity-item {
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+#hubspot-sidebar .note-item:hover,
+#hubspot-sidebar .ticket-item:hover,
+#hubspot-sidebar .task-item:hover,
+#hubspot-sidebar .deal-item:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+/* Activity rows highlight on hover. */
+#hubspot-sidebar .activity-item {
+    padding-left: 6px;
+    padding-right: 6px;
+    border-radius: 8px;
+}
+#hubspot-sidebar .activity-item:hover {
+    background-color: var(--sidebar-hover-bg, #f0f4f8);
+}
+
+/* Crisp press feedback on action buttons. */
+#hubspot-sidebar .action-btn svg {
+    transition: background-color 0.2s ease, transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+#hubspot-sidebar .action-btn:active svg {
+    transform: scale(0.9);
+}
+
+/* Animated dropdown reveal for the More menu. */
+#hubspot-sidebar .more-actions-dropdown {
+    transform-origin: top right;
+    animation: hubspotDropdownIn 0.18s ease;
+}
+@keyframes hubspotDropdownIn {
+    from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Polished avatar pop-in. */
+#hubspot-sidebar .contact-avatar {
+    animation: hubspotAvatarPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+    animation-delay: 0.05s;
+}
+@keyframes hubspotAvatarPop {
+    from { opacity: 0; transform: scale(0.6); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+    #hubspot-sidebar .contact-details > *,
+    #hubspot-sidebar .contact-avatar,
+    #hubspot-sidebar .more-actions-dropdown,
+    #hubspot-sidebar .contact-info,
+    #hubspot-sidebar .activities-content,
+    #hubspot-sidebar .notes-content,
+    #hubspot-sidebar .tickets-content,
+    #hubspot-sidebar .tasks-content,
+    #hubspot-sidebar .deals-content {
+        animation: none !important;
+    }
+}
+
+#hubspot-sidebar .activity-body {
+    flex: 1;
+    min-width: 0;
+}
+
+#hubspot-sidebar .activity-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sidebar-text, #1a1a1a);
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+#hubspot-sidebar .activity-meta {
+    font-size: 11px;
+    color: var(--sidebar-text-secondary, #667781);
+    margin-top: 2px;
+}
+
+#hubspot-sidebar .activities-empty {
+    font-size: 12px;
+    color: var(--sidebar-text-secondary, #667781);
+    padding: 6px 0;
 }
 
 /* Row 2: Job */
@@ -507,45 +916,68 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
 /* Row 4: All action buttons in one row */
 #hubspot-sidebar .contact-actions {
     display: flex;
-    gap: 12px;
     width: 100%;
-    justify-content: flex-start;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 2px;
+    box-sizing: border-box;
+    overflow: visible;
 }
 
+/* Each action is a vertical stack: a uniform circular icon + a label beneath it.
+   The button itself is transparent; the circle lives on the SVG so every button is
+   the exact same size regardless of label length (no more stretched circles). */
 #hubspot-sidebar .action-btn {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 4px;
-    background: var(--navbar-hover-bg, #e0f2fe);
+    gap: 6px;
+    flex: 0 0 auto;
+    width: 52px;
+    background: transparent;
     border: none;
-    border-radius: 50%;
-    width: 56px;
-    height: 56px;
-    padding: 6px;
+    padding: 0;
     cursor: pointer;
-    transition: all 0.2s;
     color: var(--sidebar-text, #1e3a8a);
 }
 
 #hubspot-sidebar .action-btn svg {
     flex-shrink: 0;
-    width: 18px;
-    height: 18px;
+    width: 42px;
+    height: 42px;
+    padding: 10px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    background: var(--navbar-hover-bg, #e0f2fe);
     stroke-width: 2;
+    overflow: visible;
+    transition: background-color 0.2s ease, transform 0.2s ease;
 }
 
 #hubspot-sidebar .action-btn span {
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 500;
     color: var(--sidebar-text, #1e3a8a);
-    line-height: 1;
+    line-height: 1.2;
+    text-align: center;
+    white-space: nowrap;
 }
 
-#hubspot-sidebar .action-btn:hover {
+#hubspot-sidebar .action-btn:hover svg {
     background: var(--navbar-hover-bg, #bae6fd);
-    opacity: 0.8;
+    transform: translateY(-1px);
+}
+
+/* The WhatsApp log button keeps its brand-green icon on a subtle green tint.
+   The full logo fills its viewBox, so add a touch more padding to match the
+   visual weight of the stroke icons and stay centered. */
+#hubspot-sidebar .action-btn-whatsapp svg {
+    background: rgba(37, 211, 102, 0.12);
+    padding: 12px;
+}
+
+#hubspot-sidebar .action-btn-whatsapp:hover svg {
+    background: rgba(37, 211, 102, 0.2);
 }
 
 /* More Actions Dropdown */
@@ -635,6 +1067,54 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
     height: 20px;
 }
 
+/* ============ Message Selection "Focus Mode" ============ */
+/* Dim + blur everything except the conversation pane so the user's attention is pulled
+   to the messages they're picking. Uses filters (not a z-index overlay) so it works
+   regardless of WhatsApp's nested stacking contexts. */
+body.whatsapp-message-selection-mode #pane-side,
+body.whatsapp-message-selection-mode #side {
+    filter: blur(2.5px) brightness(0.5) saturate(0.85);
+    opacity: 0.6;
+    pointer-events: none;
+    transition: filter 0.35s ease, opacity 0.35s ease;
+}
+
+/* Soften the HubSpot sidebar too — it isn't needed while picking messages. */
+body.whatsapp-message-selection-mode #hubspot-sidebar {
+    filter: brightness(0.55) saturate(0.85);
+    opacity: 0.65;
+    pointer-events: none;
+    transition: filter 0.35s ease, opacity 0.35s ease;
+}
+
+/* Spotlight the conversation pane with an animated green frame. */
+body.whatsapp-message-selection-mode #main {
+    border-radius: 12px;
+    animation: hubspotFocusPulse 2.4s ease-in-out infinite;
+    transition: box-shadow 0.35s ease;
+}
+
+@keyframes hubspotFocusPulse {
+    0%, 100% {
+        box-shadow: inset 0 0 0 2.5px rgba(37, 211, 102, 0.55),
+                    0 0 28px rgba(37, 211, 102, 0.22);
+    }
+    50% {
+        box-shadow: inset 0 0 0 2.5px rgba(37, 211, 102, 0.9),
+                    0 0 46px rgba(37, 211, 102, 0.4);
+    }
+}
+
+/* Make each hovered message row lift slightly so it's clearly the click target. */
+body.whatsapp-message-selection-mode #main [data-id] {
+    transition: transform 0.12s ease, background-color 0.15s ease;
+}
+
+body.whatsapp-message-selection-mode #main [data-id]:hover {
+    background-color: rgba(37, 211, 102, 0.08);
+    border-radius: 6px;
+}
+
 /* Message Selection Mode Styles */
 body.whatsapp-message-selection-mode .message-out,
 body.whatsapp-message-selection-mode .message-in {
@@ -677,6 +1157,34 @@ body.whatsapp-message-selection-mode .message-in.message-selected::before {
 
 body.whatsapp-message-selection-mode [data-id].message-container-selected {
     background-color: rgba(37, 211, 102, 0.1);
+}
+
+/* Row-level selection highlight (we now anchor selection on the stable [data-id]
+   message row rather than WhatsApp's rotating bubble classes). */
+body.whatsapp-message-selection-mode [data-id].message-selected {
+    position: relative;
+    background-color: rgba(37, 211, 102, 0.15) !important;
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 2px #25D366;
+}
+
+body.whatsapp-message-selection-mode [data-id].message-selected::after {
+    content: '✓';
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: #25D366;
+    color: #fff;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    z-index: 10;
+    pointer-events: none;
 }
 
 /* Message Selection Toolbar */

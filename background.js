@@ -664,6 +664,112 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  // Fetch enumeration options for a single property of any object type
+  // (contacts/lifecyclestage, contacts/hs_lead_status, deals/dealstage, ...).
+  if (request.action === 'getContactPropertyOptions' || request.action === 'getPropertyOptions') {
+    const property = request.property || request.data?.property || null;
+    const objectType = request.objectType || request.data?.objectType || 'contacts';
+    (async () => {
+      try {
+        if (!property) {
+          sendResponse({ success: false, error: 'Missing property', options: [] });
+          return;
+        }
+        const result = await callHubSpotEdgeFunction('getContactPropertyOptions', { property, objectType });
+        sendResponse({ success: true, options: result?.options || [] });
+      } catch (error) {
+        console.error('[Background] getContactPropertyOptions failed:', error);
+        sendResponse({ success: false, error: error.message, options: [] });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+
+  // Patch a contact's properties (inline edits from the sidebar, e.g. lifecycle/lead status).
+  if (request.action === 'updateContact') {
+    const contactId = request.contactId || request.data?.contactId || null;
+    const properties = request.properties || request.data?.properties || null;
+    (async () => {
+      try {
+        if (!contactId || !properties) {
+          sendResponse({ success: false, error: 'Missing contactId or properties' });
+          return;
+        }
+        const result = await callHubSpotEdgeFunction('updateContact', { contactId, properties });
+        sendResponse({ success: true, data: result });
+      } catch (error) {
+        console.error('[Background] updateContact failed:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+
+  // Recent activity timeline (notes/tickets/tasks/deals logged through the extension).
+  if (request.action === 'getRecentActivities') {
+    const contactId = request.contactId || request.data?.contactId || null;
+    const limit = request.limit || request.data?.limit || 15;
+    (async () => {
+      try {
+        const result = await callHubSpotEdgeFunction('getRecentActivities', { contactId, limit });
+        sendResponse({ success: true, activities: result?.activities || [] });
+      } catch (error) {
+        console.error('[Background] getRecentActivities failed:', error);
+        sendResponse({ success: false, error: error.message, activities: [] });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+
+  // Resolve a single HubSpot owner's name by id (for owners missing from the active list).
+  if (request.action === 'getOwnerById') {
+    const ownerId = request.ownerId || request.data?.ownerId || null;
+    (async () => {
+      try {
+        if (!ownerId) { sendResponse({ success: false, owner: null }); return; }
+        const result = await callHubSpotEdgeFunction('getOwnerById', { ownerId });
+        sendResponse({ success: true, owner: result?.owner || null });
+      } catch (error) {
+        console.error('[Background] getOwnerById failed:', error);
+        sendResponse({ success: false, error: error.message, owner: null });
+      }
+    })();
+    return true;
+  }
+
+  // Open the extension popup (sign-in UI) from the sidebar's "Sign in" button.
+  if (request.action === 'openPopup') {
+    try {
+      if (chrome.action && typeof chrome.action.openPopup === 'function') {
+        chrome.action.openPopup().catch(() => {});
+      }
+    } catch (e) {
+      console.warn('[Background] openPopup not available:', e);
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Real HubSpot engagement timeline for a contact (notes/calls/emails/meetings/tasks).
+  if (request.action === 'getContactActivities') {
+    const contactId = request.contactId || request.data?.contactId || null;
+    const limit = request.limit || request.data?.limit || 20;
+    (async () => {
+      try {
+        if (!contactId) {
+          sendResponse({ success: true, activities: [] });
+          return;
+        }
+        const result = await callHubSpotEdgeFunction('getContactActivities', { contactId, limit });
+        sendResponse({ success: true, activities: result?.activities || [] });
+      } catch (error) {
+        console.error('[Background] getContactActivities failed:', error);
+        sendResponse({ success: false, error: error.message, activities: [] });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+
   if (request.action === 'getDealPipelines') {
     chrome.storage.local.get(['userId'], async (storageData) => {
       const userId = storageData.userId || null;

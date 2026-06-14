@@ -1315,16 +1315,18 @@ async function extractPhoneFromChat() {
 
 const HUBSPOT_SIDEBAR_WIDTH_PX = 420;
 
-// Function to adjust maindiv width based on sidebar state
+// Adjust the WhatsApp layout based on sidebar state. Rather than resizing only the
+// conversation pane (#main) — which left the panel overlapping the chat — we toggle a
+// body class that shrinks WhatsApp's whole app wrapper by the sidebar width (see CSS),
+// so the entire UI reflows beside the docked panel instead of behind it.
 function widthSetting() {
-  const maindiv = document.querySelector("div#main");
   const sidebar = document.getElementById("hubspot-sidebar");
-  if (!maindiv) return;
-  const isOpen = sidebar && sidebar.classList.contains('open');
-  if (isOpen) {
-    maindiv.style.width = `calc(100% - ${HUBSPOT_SIDEBAR_WIDTH_PX}px)`;
-    maindiv.style.maxWidth = `calc(100% - ${HUBSPOT_SIDEBAR_WIDTH_PX}px)`;
-  } else {
+  const isOpen = !!(sidebar && sidebar.classList.contains('open'));
+  document.body.classList.toggle('hubspot-sidebar-open', isOpen);
+
+  // Clear any legacy inline width set by older builds so it can't fight the CSS.
+  const maindiv = document.querySelector("div#main");
+  if (maindiv) {
     maindiv.style.width = '';
     maindiv.style.maxWidth = '';
   }
@@ -1383,12 +1385,35 @@ async function fetchHubSpotDealPipelines() {
 }
 
 /**
+ * Populates a deal/ticket/task owner <select> from real HubSpot owners.
+ * Defaults to "Unassigned" rather than hard-coding any specific person.
+ */
+async function populateDealOwnerSelect(modal, selectId = '#deal-owner') {
+  const ownerSelect = modal.querySelector(selectId);
+  if (!ownerSelect) return;
+  const owners = await fetchHubSpotOwners();
+  ownerSelect.innerHTML = '<option value="unassigned" selected>Unassigned</option>';
+  (owners || []).forEach((owner) => {
+    const option = document.createElement('option');
+    option.value = owner.id;
+    const name = [owner.firstName, owner.lastName].filter(Boolean).join(' ').trim();
+    option.textContent = name || owner.email || owner.fullName || String(owner.id);
+    ownerSelect.appendChild(option);
+  });
+}
+
+/**
  * Populates deal modal pipeline/stage dropdowns from HubSpot and applies dashboard defaults.
  */
 async function setupDealPipelineForm(modal) {
   const pipelineSelect = modal.querySelector('#deal-pipeline');
   const stageSelect = modal.querySelector('#deal-stage');
   if (!pipelineSelect || !stageSelect) return;
+
+  // Populate the deal-owner dropdown from real HubSpot owners (never hard-code a name).
+  populateDealOwnerSelect(modal).catch((err) =>
+    console.warn('[Deal Modal] Could not load owners:', err)
+  );
 
   const [pipelines, syncSettings] = await Promise.all([
     fetchHubSpotDealPipelines(),
@@ -2061,19 +2086,45 @@ function setupMoreActionsDropdown() {
   };
   document.addEventListener('click', closeDropdownHandler);
   
-  // Handle "Log a WhatsApp message" option click
+  // Handle "Log a WhatsApp message" option click (hidden dropdown anchor, kept for
+  // backwards compatibility / insertion logic).
   if (logWhatsAppOption) {
     logWhatsAppOption.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      
+
       // Enable message selection mode
       enableMessageSelectionMode();
-      
+
       dropdown.style.display = 'none';
     });
   }
-  
+
+  // Primary "Log WhatsApp" action button (now promoted above Ticket).
+  const logWhatsAppBtn = document.getElementById('log-whatsapp-message-btn');
+  if (logWhatsAppBtn) {
+    logWhatsAppBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      enableMessageSelectionMode();
+      dropdown.style.display = 'none';
+    });
+  }
+
+  // "Create Ticket" now lives in the More menu (moved off the crowded primary row).
+  const ticketOption = document.getElementById('more-create-ticket-option');
+  if (ticketOption) {
+    ticketOption.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const contactName = ticketOption.getAttribute('data-name') || getCurrentContactName() || 'Contact';
+      const contactEmail = ticketOption.getAttribute('data-email') || '';
+      const contactId = ticketOption.getAttribute('data-contact-id') || '';
+      dropdown.style.display = 'none';
+      showTicketModal(contactName, contactEmail, contactId);
+    });
+  }
+
 }
 
 /**
@@ -2170,20 +2221,45 @@ async function refreshActionFieldsDropdown() {
 let isMessageSelectionMode = false;
 let selectedMessages = new Set();
 
+// A WhatsApp message row is a [data-id] element whose id encodes direction:
+// ids beginning "true_" are outgoing (sent by the user), "false_" are incoming.
+// This anchor is far more stable than WhatsApp's frequently-rotating bubble classes.
+const WA_MESSAGE_ID_RE = /^(true|false)_/;
+function getWhatsAppMessageRow(el) {
+  const row = el && el.closest ? el.closest('[data-id]') : null;
+  if (!row) return null;
+  const id = row.getAttribute('data-id') || '';
+  // Preferred: ids encode direction ("true_"/"false_"). But to be resilient to WhatsApp
+  // markup changes, also accept ANY [data-id] inside the conversation pane (#main),
+  // since those are message rows.
+  if (WA_MESSAGE_ID_RE.test(id)) return row;
+  const main = document.querySelector('#main');
+  if (main && main.contains(row)) return row;
+  return null;
+}
+function isOutgoingMessageRow(row) {
+  const id = row?.getAttribute('data-id') || '';
+  if (id.startsWith('true_')) return true;
+  if (id.startsWith('false_')) return false;
+  // Fallback: WhatsApp marks outgoing bubbles with a "message-out" class.
+  return !!(row?.querySelector?.('.message-out') || row?.classList?.contains('message-out'));
+}
+
 // Function to enable message selection mode
 function enableMessageSelectionMode() {
   isMessageSelectionMode = true;
   selectedMessages.clear();
-  
-  // Add selection mode class to body
+
+  // Add selection mode class to body — this triggers the "focus mode" CSS that dims and
+  // blurs everything except the conversation pane (see content.css).
   document.body.classList.add('whatsapp-message-selection-mode');
-  
+
   // Create selection toolbar
   createSelectionToolbar();
-  
+
   // Add click handlers to all messages
   setupMessageSelectionHandlers();
-  
+
   // Show instruction overlay
   showSelectionInstruction();
 }
@@ -2232,53 +2308,46 @@ function createSelectionToolbar() {
 
 // Function to setup message selection handlers
 function setupMessageSelectionHandlers() {
-  // Use event delegation on the message container
-  const messageContainer = document.querySelector('[data-scrolltracepolicy="wa.web.conversation.messages"]');
-  if (!messageContainer) {
-    // Fallback: use body
-    document.body.addEventListener('click', handleMessageClickDelegated, true);
-    return;
-  }
-  
-  // Add event listener to container
-  messageContainer.addEventListener('click', handleMessageClickDelegated, true);
-  
-  // Also make messages visually clickable
-  const messages = document.querySelectorAll('.message-out, .message-in');
-  messages.forEach(message => {
-    message.style.cursor = 'pointer';
+  // Delegate on the document (capture phase) so clicks on any message row are caught
+  // regardless of WhatsApp's frequently-changing inner DOM. We identify rows by their
+  // stable [data-id] message ids rather than brittle bubble classes.
+  document.addEventListener('click', handleMessageClickDelegated, true);
+
+  // Make message rows visually clickable (any [data-id] row inside the conversation pane).
+  const main = document.querySelector('#main');
+  (main || document).querySelectorAll('[data-id]').forEach((row) => {
+    row.style.cursor = 'pointer';
   });
 }
 
 // Delegated event handler for message clicks
 function handleMessageClickDelegated(e) {
   if (!isMessageSelectionMode) return;
-  
-  // Find the message element
-  const messageElement = e.target.closest('.message-out, .message-in');
-  if (!messageElement) return;
-  
+
+  // Ignore clicks on our own selection UI (toolbar / instruction overlay).
+  if (e.target.closest && e.target.closest('#message-selection-toolbar, #message-selection-instruction')) {
+    return;
+  }
+
+  // Find the message row by its stable data-id.
+  const messageRow = getWhatsAppMessageRow(e.target);
+  if (!messageRow) return;
+
+  const messageId = messageRow.getAttribute('data-id');
+  if (!messageId) return;
+
   e.preventDefault();
   e.stopPropagation();
-  
-  // Find the parent element with data-id attribute
-  const messageContainer = messageElement.closest('[data-id]');
-  if (!messageContainer) return;
-  
-  const messageId = messageContainer.getAttribute('data-id');
-  if (!messageId) return;
-  
+
   // Toggle selection
   if (selectedMessages.has(messageId)) {
     selectedMessages.delete(messageId);
-    messageElement.classList.remove('message-selected');
-    messageContainer.classList.remove('message-container-selected');
+    messageRow.classList.remove('message-selected', 'message-container-selected');
   } else {
     selectedMessages.add(messageId);
-    messageElement.classList.add('message-selected');
-    messageContainer.classList.add('message-container-selected');
+    messageRow.classList.add('message-selected', 'message-container-selected');
   }
-  
+
   // Update toolbar
   updateSelectionToolbar();
 }
@@ -2303,28 +2372,25 @@ function finishMessageSelection() {
   const selectedMessageData = [];
   
   selectedMessages.forEach(messageId => {
-    const messageContainer = document.querySelector(`[data-id="${messageId}"]`);
-    if (messageContainer) {
-      const messageElement = messageContainer.querySelector('.message-out, .message-in');
-      if (messageElement) {
-        const messageText = extractMessageText(messageElement);
-        const isOutgoing = messageElement.classList.contains('message-out');
-        const timestamp = extractMessageTimestamp(messageElement);
-        
-        console.log('[Message Selection] Message found:', {
-          id: messageId,
-          isOutgoing: isOutgoing,
-          text: messageText.substring(0, 50),
-          timestamp: timestamp
-        });
-        
-        selectedMessageData.push({
-          id: messageId,
-          text: messageText,
-          isOutgoing: isOutgoing,
-          timestamp: timestamp
-        });
-      }
+    const row = document.querySelector(`[data-id="${CSS.escape(messageId)}"]`);
+    if (row) {
+      const messageText = extractMessageText(row);
+      const isOutgoing = isOutgoingMessageRow(row);
+      const timestamp = extractMessageTimestamp(row);
+
+      console.log('[Message Selection] Message found:', {
+        id: messageId,
+        isOutgoing: isOutgoing,
+        text: messageText.substring(0, 50),
+        timestamp: timestamp
+      });
+
+      selectedMessageData.push({
+        id: messageId,
+        text: messageText,
+        isOutgoing: isOutgoing,
+        timestamp: timestamp
+      });
     }
   });
   
@@ -2357,35 +2423,44 @@ function finishMessageSelection() {
   showNoteModal(contactName, contactEmail, contactId, formattedMessages);
 }
 
-// Function to extract message text
+// Function to extract message text. Current WhatsApp Web renders message text inside
+// span.selectable-text.copyable-text; we fall back progressively so this keeps working
+// even as WhatsApp tweaks its markup.
 function extractMessageText(messageElement) {
-  const textElement = messageElement.querySelector('[data-testid="selectable-text"]');
+  const textElement =
+    messageElement.querySelector('span.selectable-text.copyable-text') ||
+    messageElement.querySelector('span.selectable-text') ||
+    messageElement.querySelector('.selectable-text') ||
+    messageElement.querySelector('[data-testid="selectable-text"]');
   if (textElement) {
-    return textElement.textContent || textElement.innerText || '';
+    return (textElement.textContent || textElement.innerText || '').trim();
   }
-  
+
   // Fallback: get all text content
-  return messageElement.textContent || messageElement.innerText || '';
+  return (messageElement.textContent || messageElement.innerText || '').trim();
 }
 
-// Function to extract message timestamp
+// Function to extract message timestamp. WhatsApp stores precise meta in the
+// data-pre-plain-text attribute, e.g. "[10:30 am, 6/14/2026] Name: ".
 function extractMessageTimestamp(messageElement) {
-  const timestampElement = messageElement.querySelector('span[dir="auto"]');
-  if (timestampElement) {
-    const timestampText = timestampElement.textContent || timestampElement.innerText || '';
-    return timestampText.trim();
+  const pre = messageElement.querySelector('[data-pre-plain-text]');
+  if (pre) {
+    const meta = pre.getAttribute('data-pre-plain-text') || '';
+    const m = meta.match(/\[([^\]]+)\]/);
+    if (m) return m[1].trim();
   }
   return null;
 }
 
 function getRecentChatMessageTexts(limit = 10) {
-  const messageElements = Array.from(document.querySelectorAll('.message-out, .message-in'));
-  return messageElements
+  const rows = Array.from(document.querySelectorAll('#main [data-id], [data-id]'))
+    .filter((el) => WA_MESSAGE_ID_RE.test(el.getAttribute('data-id') || ''));
+  return rows
     .slice(-limit)
     .map((el) => {
       const text = extractMessageText(el).trim();
       if (!text) return null;
-      const direction = el.classList.contains('message-out') ? 'You' : 'Contact';
+      const direction = isOutgoingMessageRow(el) ? 'You' : 'Contact';
       return `${direction}: ${text}`;
     })
     .filter(Boolean);
@@ -2428,9 +2503,9 @@ function disableMessageSelectionMode() {
   isMessageSelectionMode = false;
   selectedMessages.clear();
   
-  // Remove selection mode class
+  // Remove selection mode class (clears the focus-mode CSS)
   document.body.classList.remove('whatsapp-message-selection-mode');
-  
+
   // Remove selection toolbar
   const toolbar = document.getElementById('message-selection-toolbar');
   if (toolbar) {
@@ -2443,24 +2518,14 @@ function disableMessageSelectionMode() {
     instruction.remove();
   }
   
-  // Remove event listeners
-  const messageContainer = document.querySelector('[data-scrolltracepolicy="wa.web.conversation.messages"]');
-  if (messageContainer) {
-    messageContainer.removeEventListener('click', handleMessageClickDelegated, true);
-  }
+  // Remove event listeners (we now delegate on document in capture phase).
+  document.removeEventListener('click', handleMessageClickDelegated, true);
   document.body.removeEventListener('click', handleMessageClickDelegated, true);
-  
-  // Remove selection classes and handlers from messages
-  const messages = document.querySelectorAll('.message-out, .message-in');
-  messages.forEach(message => {
-    message.classList.remove('message-selected');
-    message.style.cursor = '';
-  });
-  
-  // Remove selection classes from containers
-  const containers = document.querySelectorAll('[data-id]');
-  containers.forEach(container => {
-    container.classList.remove('message-container-selected');
+
+  // Remove selection classes and cursor from message rows.
+  document.querySelectorAll('[data-id]').forEach((row) => {
+    row.classList.remove('message-selected', 'message-container-selected');
+    if (row.style && row.style.cursor === 'pointer') row.style.cursor = '';
   });
 }
 
@@ -3670,6 +3735,283 @@ function setupMeetingScheduler() {
   }
 }
 
+// Make the "About this contact" section collapsible, mirroring the notes/tickets/
+// tasks/deals header pattern. Safe to call repeatedly (binds once per header).
+function setupAboutCollapsible() {
+  const aboutSection = document.querySelector('#hubspot-sidebar .about-section');
+  if (!aboutSection) return;
+  const header = aboutSection.querySelector('.about-header');
+  const content = aboutSection.querySelector('.contact-info');
+  const chevron = aboutSection.querySelector('.about-header .chevron-icon');
+  if (!header || !content) return;
+  if (header.dataset.collapsibleBound === 'true') return;
+  header.dataset.collapsibleBound = 'true';
+  header.style.cursor = 'pointer';
+
+  // Expanded by default — point the chevron up to match the other sections.
+  if (chevron) chevron.style.transform = 'rotate(180deg)';
+
+  header.addEventListener('click', (e) => {
+    // Ignore clicks on interactive controls inside the header (e.g. editable selects).
+    if (e.target.closest('select, button, a, input')) return;
+    const isExpanded = content.style.display !== 'none';
+    content.style.display = isExpanded ? 'none' : 'block';
+    if (chevron) chevron.style.transform = isExpanded ? 'rotate(0deg)' : 'rotate(180deg)';
+  });
+}
+
+// Cache of HubSpot enumeration property options keyed by property name.
+const contactPropertyOptionsCache = {};
+async function fetchContactPropertyOptions(property) {
+  if (contactPropertyOptionsCache[property]) return contactPropertyOptionsCache[property];
+  try {
+    const resp = await sendExtensionMessage({ action: 'getContactPropertyOptions', property });
+    const options = resp?.success ? (resp.options || []) : [];
+    if (options.length) contactPropertyOptionsCache[property] = options;
+    return options;
+  } catch (e) {
+    console.warn('[Content] Could not fetch property options for', property, e);
+    return [];
+  }
+}
+
+async function updateHubSpotContact(contactId, properties) {
+  return sendExtensionMessage({ action: 'updateContact', contactId, properties });
+}
+
+// Turn the lifecycle-stage / lead-status <select>s in the About section into live
+// editors: populate their options from HubSpot and PATCH the contact on change.
+function setupEditableContactFields() {
+  const selects = document.querySelectorAll('#hubspot-sidebar .editable-contact-field');
+  selects.forEach((select) => {
+    if (select.dataset.editBound === 'true') return;
+    select.dataset.editBound = 'true';
+    const property = select.getAttribute('data-property');
+    const contactId = select.getAttribute('data-contact-id');
+    const current = select.getAttribute('data-current') || '';
+
+    // Populate options from HubSpot (re-labels the current value too).
+    fetchContactPropertyOptions(property).then((options) => {
+      if (options && options.length) {
+        select.innerHTML = '';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '--';
+        select.appendChild(blank);
+        options.forEach((opt) => {
+          const o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = opt.label;
+          select.appendChild(o);
+        });
+        select.value = current;
+      }
+    });
+
+    // Persist changes to HubSpot.
+    select.addEventListener('change', async () => {
+      const newValue = select.value;
+      const previous = select.getAttribute('data-current') || '';
+      if (newValue === previous) return;
+      select.disabled = true;
+      select.classList.remove('edit-saved', 'edit-error');
+      try {
+        const resp = await updateHubSpotContact(contactId, { [property]: newValue });
+        if (resp && resp.success) {
+          select.setAttribute('data-current', newValue);
+          select.classList.add('edit-saved');
+          setTimeout(() => select.classList.remove('edit-saved'), 1500);
+          // Keep cached contact data in sync so a soft refresh shows the new value.
+          if (currentContactData && currentContactData.properties) {
+            currentContactData.properties[property] = newValue;
+          }
+        } else {
+          throw new Error(resp?.error || 'Update failed');
+        }
+      } catch (e) {
+        console.error('[Content] Failed to update contact property:', e);
+        select.value = previous; // revert on failure
+        select.classList.add('edit-error');
+        setTimeout(() => select.classList.remove('edit-error'), 2000);
+      } finally {
+        select.disabled = false;
+      }
+    });
+  });
+}
+
+// Cache of HubSpot owner id -> display name, built once per session.
+let hubspotOwnerNameCache = null;
+function ownerDisplayName(o) {
+  if (!o) return null;
+  const name = [o.firstName, o.lastName].filter(Boolean).join(' ').trim();
+  return name || o.email || o.fullName || null;
+}
+async function getHubspotOwnerNameMap() {
+  if (hubspotOwnerNameCache) return hubspotOwnerNameCache;
+  const owners = await fetchHubSpotOwners();
+  const map = {};
+  (owners || []).forEach((o) => {
+    map[String(o.id)] = ownerDisplayName(o) || String(o.id);
+  });
+  hubspotOwnerNameCache = map;
+  return map;
+}
+
+// Resolve one owner id directly (covers archived owners / portals with >100 owners).
+async function resolveOwnerNameById(id) {
+  try {
+    const resp = await sendExtensionMessage({ action: 'getOwnerById', ownerId: id });
+    const name = ownerDisplayName(resp?.owner);
+    if (name && hubspotOwnerNameCache) hubspotOwnerNameCache[String(id)] = name;
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+// Replace any "Loading…" owner placeholders in the About section with the owner's name.
+async function setupOwnerNameResolution() {
+  const nodes = document.querySelectorAll('#hubspot-sidebar .owner-value[data-owner-id]');
+  if (!nodes.length) return;
+  let map = {};
+  try {
+    map = await getHubspotOwnerNameMap();
+  } catch (e) {
+    console.warn('[Content] Could not load owners list:', e);
+  }
+  for (const node of nodes) {
+    const id = node.getAttribute('data-owner-id') || '';
+    if (!id) { node.textContent = 'Unassigned'; continue; }
+    if (map[id]) { node.textContent = map[id]; continue; }
+    // Not in the active list — resolve this owner individually.
+    const name = await resolveOwnerNameById(id);
+    node.textContent = name || `Owner #${id}`;
+  }
+}
+
+// ---- Recent activity timeline (real HubSpot engagements) ----
+const ACTIVITY_META = {
+  // HubSpot engagement types
+  note: { label: 'Note', cls: 'note' },
+  call: { label: 'Call', cls: 'call' },
+  email: { label: 'Email', cls: 'email' },
+  meeting: { label: 'Meeting', cls: 'meeting' },
+  task: { label: 'Task', cls: 'task' },
+  // Legacy extension-log types (kept for backward compatibility)
+  contact_created: { label: 'Contact created', cls: 'contact' },
+  note_created: { label: 'Note added', cls: 'note' },
+  ticket_created: { label: 'Ticket created', cls: 'ticket' },
+  task_created: { label: 'Task created', cls: 'task' },
+  deal_created: { label: 'Deal created', cls: 'deal' },
+};
+
+function activityRelativeTime(iso) {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return '';
+  const diffMin = Math.round((Date.now() - then) / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const h = Math.round(diffMin / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function activityIconSvg(cls) {
+  switch (cls) {
+    case 'note':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+    case 'call':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>';
+    case 'email':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>';
+    case 'meeting':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>';
+    case 'ticket':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z"></path><path d="M8 9v6"></path><path d="M16 9v6"></path></svg>';
+    case 'task':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>';
+    case 'deal':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>';
+    case 'contact':
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
+    default:
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+  }
+}
+
+function renderActivityItem(act, contactId) {
+  const type = act.type || act.activity_type;
+  const meta = ACTIVITY_META[type] || {
+    label: String(type || 'Activity').replace(/_/g, ' '),
+    cls: 'default',
+  };
+  const title = act.title || meta.label;
+  const time = activityRelativeTime(act.timestamp || act.created_at);
+  // Engagements (calls/emails/meetings/notes/tasks) have no standalone record page in
+  // HubSpot — they live on the associated record's timeline. So link to the CONTACT
+  // record (where this activity appears) rather than a non-existent engagement page.
+  const link = hubSpotOpenLink('contact', contactId, 'Open contact timeline in HubSpot');
+  return `
+    <div class="activity-item">
+      <div class="activity-icon activity-icon-${meta.cls}">${activityIconSvg(meta.cls)}</div>
+      <div class="activity-body">
+        <div class="activity-title">${escapeHtml(String(title))}</div>
+        <div class="activity-meta">${escapeHtml(meta.label)}${time ? ' · ' + time : ''}</div>
+      </div>
+      ${link}
+    </div>`;
+}
+
+async function loadRecentActivities(contactId, section) {
+  const list = section.querySelector('.activities-list');
+  const countEl = section.querySelector('.activities-count');
+  if (!list) return;
+  // Skeleton while loading
+  list.innerHTML =
+    '<div class="activity-skeleton"></div>'.repeat(3);
+  try {
+    // Pull the contact's real HubSpot engagement timeline.
+    const resp = await sendExtensionMessage({ action: 'getContactActivities', contactId, limit: 20 });
+    const activities = resp?.success ? (resp.activities || []) : [];
+    if (countEl) countEl.textContent = String(activities.length);
+    list.innerHTML = activities.length
+      ? activities.map((a) => renderActivityItem(a, contactId)).join('')
+      : '<div class="activities-empty">No recent activity yet.</div>';
+  } catch (e) {
+    console.warn('[Content] Could not load activities:', e);
+    list.innerHTML = '<div class="activities-empty">Could not load activity.</div>';
+  }
+}
+
+// Set up the Recent activity section: collapsible header + initial load. Expanded by default.
+function setupActivitiesSection() {
+  const section = document.querySelector('.activities-section');
+  if (!section) return;
+  const header = section.querySelector('.activities-header');
+  const content = section.querySelector('.activities-content');
+  const chevron = section.querySelector('.activities-chevron');
+  const contactId = section.getAttribute('data-contact-id');
+
+  if (content) content.style.display = 'block';
+  if (chevron) chevron.style.transform = 'rotate(180deg)';
+
+  if (header && header.dataset.bound !== 'true') {
+    header.dataset.bound = 'true';
+    header.style.cursor = 'pointer';
+    header.addEventListener('click', () => {
+      const expanded = content.style.display !== 'none';
+      content.style.display = expanded ? 'none' : 'block';
+      if (chevron) chevron.style.transform = expanded ? 'rotate(0deg)' : 'rotate(180deg)';
+    });
+  }
+
+  loadRecentActivities(contactId, section);
+}
+
 // Function to setup notes section
 function setupNotesSection() {
   const notesSection = document.querySelector('.notes-section');
@@ -3972,6 +4314,7 @@ function formatNoteItem(note) {
         </div>
         <div class="note-item-right">
           <span class="note-date">${formattedDate}</span>
+          ${hubSpotOpenLink('note', note.id, 'Open note in HubSpot')}
         </div>
       </div>
       <div class="note-item-content" style="display: none;">
@@ -4325,8 +4668,12 @@ async function loadContactTasks(contactId, tasksSection) {
                        task.createdAt || 
                        0;
         try {
-          const date = new Date(parseInt(dueDate));
-          return isNaN(date.getTime()) ? new Date(dueDate) : date;
+          // ISO strings first (HubSpot v3 default); only treat purely-numeric values as epoch ms.
+          let date = new Date(dueDate);
+          if (isNaN(date.getTime()) && /^\d+$/.test(String(dueDate).trim())) {
+            date = new Date(parseInt(String(dueDate).trim(), 10));
+          }
+          return isNaN(date.getTime()) ? new Date(0) : date;
         } catch (e) {
           return new Date(0);
         }
@@ -4370,10 +4717,10 @@ function groupTasksByMonth(tasks) {
     
     let dateObj;
     try {
-      // HubSpot timestamps are in milliseconds
-      dateObj = new Date(parseInt(dueDate));
-      if (isNaN(dateObj.getTime())) {
-        dateObj = new Date(dueDate);
+      // HubSpot CRM v3 returns datetimes as ISO strings; only treat purely-numeric values as epoch ms.
+      dateObj = new Date(dueDate);
+      if (isNaN(dateObj.getTime()) && /^\d+$/.test(String(dueDate).trim())) {
+        dateObj = new Date(parseInt(String(dueDate).trim(), 10));
       }
       if (isNaN(dateObj.getTime())) {
         dateObj = new Date();
@@ -4401,8 +4748,12 @@ function groupTasksByMonth(tasks) {
                        task.createdAt || 
                        0;
         try {
-          const date = new Date(parseInt(dueDate));
-          return isNaN(date.getTime()) ? new Date(dueDate) : date;
+          // ISO strings first (HubSpot v3 default); only treat purely-numeric values as epoch ms.
+          let date = new Date(dueDate);
+          if (isNaN(date.getTime()) && /^\d+$/.test(String(dueDate).trim())) {
+            date = new Date(parseInt(String(dueDate).trim(), 10));
+          }
+          return isNaN(date.getTime()) ? new Date(0) : date;
         } catch (e) {
           return new Date(0);
         }
@@ -4474,6 +4825,7 @@ function formatTaskItem(task) {
         </div>
         <div class="task-item-right">
           <span class="task-date">${formattedDate}</span>
+          ${hubSpotOpenLink('task', taskId, 'Open task in HubSpot')}
         </div>
       </div>
       <div class="task-item-content" style="display: none;">
@@ -4640,6 +4992,8 @@ async function loadContactDeals(contactId, dealsSection) {
       setupDealsEmptyCreateButton(dealsSection);
     } else {
       console.log('[Content] Displaying', deals.length, 'deals');
+      // Resolve human stage labels (not raw internal ids) before rendering.
+      await ensureDealStageLabels();
       // Display deals
       dealsList.innerHTML = deals.map(deal => formatDealItem(deal)).join('');
       
@@ -4882,6 +5236,7 @@ function formatTicketItem(ticket) {
           </svg>
         </div>
         <div class="ticket-item-title">${ticketName}</div>
+        ${hubSpotOpenLink('ticket', ticketId, 'Open ticket in HubSpot')}
       </div>
       <div class="ticket-item-open">Open ${openHours}</div>
       <div class="ticket-item-owner">Ticket owner: ${ticketOwner}</div>
@@ -4893,30 +5248,76 @@ function formatTicketItem(ticket) {
   `;
 }
 
+// Cache of HubSpot deal-stage internal id -> human label, built from the pipelines API.
+let dealStageLabelMap = {};
+async function ensureDealStageLabels() {
+  try {
+    if (Object.keys(dealStageLabelMap).length) return; // already loaded this session
+    const map = {};
+
+    // Primary source: the dealstage property's enumeration options. This includes every
+    // stage id->label across ALL pipelines, so it resolves stages the pipelines API may
+    // omit. (e.g. 941294659 -> "Closed won".)
+    try {
+      const resp = await sendExtensionMessage({
+        action: 'getPropertyOptions',
+        objectType: 'deals',
+        property: 'dealstage',
+      });
+      (resp?.options || []).forEach((o) => {
+        if (o && o.value != null) map[String(o.value)] = o.label || String(o.value);
+      });
+    } catch (e) {
+      console.warn('[Content] dealstage property options unavailable:', e);
+    }
+
+    // Fallback / supplement: pipelines API stage labels.
+    if (!Object.keys(map).length) {
+      const pipelines = await fetchHubSpotDealPipelines();
+      (pipelines || []).forEach((p) => {
+        (p.stages || []).forEach((s) => {
+          if (s && s.id != null) map[String(s.id)] = s.label || String(s.id);
+        });
+      });
+    }
+
+    if (Object.keys(map).length) dealStageLabelMap = map;
+  } catch (e) {
+    console.warn('[Content] Could not load deal stage labels:', e);
+  }
+}
+
 // Function to format deal item for display (matching screenshot format)
 function formatDealItem(deal) {
   const dealId = deal.id || deal.hs_object_id || '';
   const dealName = deal.properties?.dealname || deal.properties?.name || 'Untitled Deal';
   const dealAmount = deal.properties?.amount || null;
+  const currencyCode = deal.properties?.deal_currency_code || deal.properties?.hs_currency_code || null;
   const closeDate = deal.properties?.closedate || deal.properties?.hs_expected_close_date || null;
-  const dealStage = deal.properties?.dealstage || deal.properties?.hs_deal_stage_probability || '--';
-  
-  // Format amount
+  const dealStage = deal.properties?.dealstage || '--';
+
+  // Format amount using the deal's real currency — never hard-code a symbol.
   let formattedAmount = '--';
   if (dealAmount) {
     const amount = parseFloat(dealAmount);
     if (!isNaN(amount)) {
-      formattedAmount = `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const number = amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      formattedAmount = currencyCode ? `${currencyCode} ${number}` : number;
     }
   }
-  
+
   // Format close date
   let formattedCloseDate = '--';
   if (closeDate) {
     try {
-      // HubSpot returns timestamps in milliseconds
-      const dateValue = typeof closeDate === 'string' ? parseInt(closeDate) : closeDate;
-      const date = new Date(dateValue);
+      // HubSpot CRM v3 returns datetimes as ISO strings (e.g. "2026-04-20T06:56:53Z"),
+      // not millisecond numbers. Parse the ISO string directly; only fall back to
+      // epoch-millis when the value is purely numeric. (parseInt on an ISO string
+      // previously yielded "2026" ms -> Jan 1 1970.)
+      let date = new Date(closeDate);
+      if (isNaN(date.getTime()) && /^\d+$/.test(String(closeDate).trim())) {
+        date = new Date(parseInt(String(closeDate).trim(), 10));
+      }
       if (!isNaN(date.getTime())) {
         formattedCloseDate = date.toLocaleDateString('en-US', {
           year: 'numeric',
@@ -4929,20 +5330,25 @@ function formatDealItem(deal) {
     }
   }
   
-  // Format deal stage (remove underscores and capitalize)
-  const formattedStage = dealStage
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, l => l.toUpperCase());
+  // Prefer the server-resolved label (attached by the getDeals edge function), then the
+  // client pipeline/property map, then a cleaned fallback — so we never show a raw id.
+  const rawStage = String(dealStage);
+  const serverStageLabel = deal.properties?.dealstageLabel;
+  const formattedStage = serverStageLabel
+    || dealStageLabelMap[rawStage]
+    || rawStage.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
   
   return `
     <div class="deal-item" data-deal-id="${dealId}">
       <div class="deal-item-header">
         <div class="deal-icon-wrapper">
           <svg class="deal-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M11 14H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-1m-6 0v1a3 3 0 0 0 3 3h1m-6-4h8m-5 4v1a3 3 0 0 0 3 3h1m-3-4h.01M19 10h2a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h1" stroke="#1976d2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <line x1="12" y1="1" x2="12" y2="23" stroke="#1976d2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke="#1976d2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
           </svg>
         </div>
         <div class="deal-item-title">${dealName}</div>
+        ${hubSpotOpenLink('deal', dealId, 'Open deal in HubSpot')}
       </div>
       <div class="deal-item-details">
         <div class="deal-item-property">
@@ -5063,8 +5469,7 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
             <div class="ticket-form-group">
               <label for="ticket-owner" class="ticket-label">Ticket owner</label>
               <select id="ticket-owner" name="owner" class="ticket-select">
-                <option value="current-user" selected>Akhila Anil</option>
-                <option value="unassigned">Unassigned</option>
+                <option value="" selected>Loading owners…</option>
               </select>
             </div>
             
@@ -5211,6 +5616,10 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
   
   // Setup handlers
   const modal = document.getElementById('ticket-modal');
+  // Populate owner dropdown from real HubSpot owners (never hard-code a name).
+  populateDealOwnerSelect(modal, '#ticket-owner').catch((err) =>
+    console.warn('[Ticket Modal] Could not load owners:', err)
+  );
   const closeBtn = modal.querySelector('.ticket-close-btn');
   const cancelBtn = modal.querySelector('#ticket-cancel');
   const form = modal.querySelector('#ticket-form');
@@ -5489,14 +5898,6 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
         <div class="deal-segments">
           <button class="deal-segment-btn ${isCreateNewActive ? 'active' : ''}" data-segment="create-new">Create new</button>
           <button class="deal-segment-btn ${isAddExistingActive ? 'active' : ''}" data-segment="add-existing">Add existing</button>
-          <a href="#" class="deal-edit-form-link">
-            Edit this form
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-              <polyline points="15 3 21 3 21 9"></polyline>
-              <line x1="10" y1="14" x2="21" y2="3"></line>
-            </svg>
-          </a>
         </div>
         
         <div class="deal-form-container">
@@ -5537,8 +5938,7 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
             <div class="deal-form-group">
               <label for="deal-owner" class="deal-label">Deal owner</label>
               <select id="deal-owner" name="owner" class="deal-select">
-                <option value="current-user" selected>Akhila Anil</option>
-                <option value="unassigned">Unassigned</option>
+                <option value="" selected>Loading owners…</option>
               </select>
             </div>
             
@@ -5956,8 +6356,7 @@ function showTaskModal(contactName, contactEmail, contactId) {
               <div class="task-classification-item">
                 <label class="task-classification-label">Activity assigned to</label>
                 <select id="task-assigned" name="assigned" class="task-select">
-                  <option value="akhila-anil" selected>Akhila Anil</option>
-                  <option value="unassigned">Unassigned</option>
+                  <option value="" selected>Loading owners…</option>
                 </select>
               </div>
             </div>
@@ -6052,6 +6451,10 @@ function showTaskModal(contactName, contactEmail, contactId) {
   
   // Setup handlers
   const modal = document.getElementById('task-modal');
+  // Populate "assigned to" dropdown from real HubSpot owners (never hard-code a name).
+  populateDealOwnerSelect(modal, '#task-assigned').catch((err) =>
+    console.warn('[Task Modal] Could not load owners:', err)
+  );
   const closeBtn = modal.querySelector('.task-close-btn');
   const form = modal.querySelector('#task-form');
   const createBtn = modal.querySelector('#task-create-btn');
@@ -6947,8 +7350,8 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
       // Due date - combine date and time
       dueDate: null,
       
-      // Owner ID
-      ownerId: taskData.assigned === 'akhila-anil' ? null : (taskData.assigned || null),
+      // Owner ID — empty / "unassigned" means no owner; otherwise a real HubSpot owner id.
+      ownerId: (!taskData.assigned || taskData.assigned === 'unassigned') ? null : taskData.assigned,
     };
     
     // Calculate due date from date and time
@@ -8610,6 +9013,7 @@ async function renderAboutSection(contact, userId) {
     const [sidebarData, privacy] = await Promise.all([getEnabledSidebarFields(userId), getPrivacySettings()]);
     let contactFields = sidebarData.contactFields || [];
     const props = contact.properties || {};
+    const aboutContactId = contact.id || contact.hs_object_id || props.hs_object_id || '';
 
     // Filter CRM fields by privacy.allowed_properties when set
     if (Array.isArray(privacy.allowed_properties) && privacy.allowed_properties.length > 0) {
@@ -8646,6 +9050,39 @@ async function renderAboutSection(contact, userId) {
 
       const valueClass = property === 'email' ? 'email-value' : property === 'phone' ? 'phone-value' : '';
 
+      // Contact owner: the raw value is an owner id — render a placeholder that
+      // setupOwnerNameResolution() replaces with the owner's real name.
+      if (property === 'hubspot_owner_id') {
+        const ownerId = getContactPropertyValue(props, 'hubspot_owner_id') || '';
+        return `
+        <div class="info-row">
+          <div class="info-label-text">${label}</div>
+          <div class="info-value owner-value" data-owner-id="${escapeHtml(String(ownerId))}">${ownerId ? 'Loading…' : 'Unassigned'}</div>
+        </div>
+        ${index < contactFields.length - 1 ? '<div class="info-divider"></div>' : ''}
+      `;
+      }
+
+      // Lifecycle stage and lead status are editable: render an enum <select> that PATCHes
+      // HubSpot on change. Options are populated asynchronously by setupEditableContactFields().
+      if ((property === 'lifecyclestage' || property === 'hs_lead_status') && aboutContactId) {
+        const rawValue = property === 'firstname_lastname' ? '' : (getContactPropertyValue(props, property) || '');
+        return `
+        <div class="info-row">
+          <div class="info-label-text">${label}</div>
+          <div class="info-value">
+            <select class="editable-contact-field info-edit-select"
+                    data-property="${property}"
+                    data-contact-id="${escapeHtml(String(aboutContactId))}"
+                    data-current="${escapeHtml(String(rawValue))}">
+              <option value="${escapeHtml(String(rawValue))}">${escapeHtml(String(value))}</option>
+            </select>
+          </div>
+        </div>
+        ${index < contactFields.length - 1 ? '<div class="info-divider"></div>' : ''}
+      `;
+      }
+
       return `
         <div class="info-row">
           <div class="info-label-text">${label}</div>
@@ -8654,6 +9091,22 @@ async function renderAboutSection(contact, userId) {
         ${index < contactFields.length - 1 ? '<div class="info-divider"></div>' : ''}
       `;
     }).join('');
+
+    // Always surface Contact Owner, even if it isn't in the enabled-fields config.
+    const hasOwnerField = contactFields.some(
+      (f) => (f.hubspot_property || f.field_key) === 'hubspot_owner_id'
+    );
+    let ownerRowHtml = '';
+    if (!hasOwnerField) {
+      const ownerId = getContactPropertyValue(props, 'hubspot_owner_id') || '';
+      ownerRowHtml = `
+        <div class="info-divider"></div>
+        <div class="info-row">
+          <div class="info-label-text">Contact Owner</div>
+          <div class="info-value owner-value" data-owner-id="${escapeHtml(String(ownerId))}">${ownerId ? 'Loading…' : 'Unassigned'}</div>
+        </div>
+      `;
+    }
 
     return `
       <div class="about-section">
@@ -8667,6 +9120,7 @@ async function renderAboutSection(contact, userId) {
         </div>
         <div class="contact-info">
           ${fieldsHtml}
+          ${ownerRowHtml}
         </div>
       </div>
     `;
@@ -8705,6 +9159,10 @@ async function refreshAboutSection() {
     const aboutSection = document.querySelector('#hubspot-sidebar .about-section');
     if (aboutSection) {
       aboutSection.outerHTML = newAboutSectionHTML;
+      // Re-bind handlers since outerHTML replaced the element.
+      setupAboutCollapsible();
+      setupEditableContactFields();
+      setupOwnerNameResolution();
       console.log('[Sidebar Refresh] ✅ About section refreshed successfully');
     } else {
       console.warn('[Sidebar Refresh] About section not found in DOM');
@@ -8747,6 +9205,16 @@ function renderDefaultAboutSection(props, privacy = DEFAULT_PRIVACY) {
     ${i < rows.length - 1 ? '<div class="info-divider"></div>' : ''}
   `).join('');
 
+  // Always surface Contact Owner, resolved to a name by setupOwnerNameResolution().
+  const ownerId = props.hubspot_owner_id || props.hs_owner_id || '';
+  const ownerRowHtml = `
+    ${rows.length ? '<div class="info-divider"></div>' : ''}
+    <div class="info-row">
+      <div class="info-label-text">Contact Owner</div>
+      <div class="info-value owner-value" data-owner-id="${escapeHtml(String(ownerId))}">${ownerId ? 'Loading…' : 'Unassigned'}</div>
+    </div>
+  `;
+
   return `
     <div class="about-section">
       <div class="about-header">
@@ -8759,6 +9227,7 @@ function renderDefaultAboutSection(props, privacy = DEFAULT_PRIVACY) {
       </div>
       <div class="contact-info">
         ${rowsHtml}
+        ${ownerRowHtml}
       </div>
     </div>
   `;
@@ -8927,6 +9396,7 @@ async function formatContactDetails(contacts, phoneNumber) {
           </div>
           <div class="contact-name-section">
             <h3>${fullName}</h3>
+            ${hubSpotOpenLink('contact', hubspotContactId, 'Open contact in HubSpot')}
           </div>
         </div>
         <div class="contact-job-section">
@@ -8958,23 +9428,16 @@ async function formatContactDetails(contacts, phoneNumber) {
               </svg>
               <span>Email</span>
             </button>
-            <button class="action-btn" id="create-ticket-btn" title="Create a Ticket" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M2 9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z"></path>
-                <path d="M8 9v6"></path>
-                <path d="M16 9v6"></path>
-                <circle cx="6" cy="12" r="1"></circle>
-                <circle cx="18" cy="12" r="1"></circle>
+            <button class="action-btn action-btn-whatsapp" id="log-whatsapp-message-btn" title="Log a WhatsApp message">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path fill="#25D366" d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.945C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 0 1 8.413 3.488 11.824 11.824 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 0 0 1.51 5.26l-.999 3.648 3.738-.981v-.026zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.521.149-.174.198-.298.298-.497.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
               </svg>
-              <span>Ticket</span>
+              <span>Log</span>
             </button>
             <button class="action-btn" id="create-task-btn" title="Create a Task" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-                <polyline points="10 9 9 9 8 9"></polyline>
+                <polyline points="9 11 12 14 22 4"></polyline>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
               </svg>
               <span>Task</span>
             </button>
@@ -8997,7 +9460,9 @@ async function formatContactDetails(contacts, phoneNumber) {
                 <span>More</span>
               </button>
               <div class="more-actions-dropdown" id="more-actions-dropdown" style="display: none;">
-                <div class="more-actions-option" id="log-whatsapp-message-option">
+                <!-- Kept as a hidden anchor for action-field/template insertion logic.
+                     The user-facing "Log WhatsApp" action now lives in the primary action row. -->
+                <div class="more-actions-option" id="log-whatsapp-message-option" style="display: none;">
                   <div class="more-actions-option-icon">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <!-- WhatsApp icon -->
@@ -9010,12 +9475,39 @@ async function formatContactDetails(contacts, phoneNumber) {
                   </div>
                   <span>Log a WhatsApp message</span>
                 </div>
+                <div class="more-actions-option" id="more-create-ticket-option" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}">
+                  <div class="more-actions-option-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M2 9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z"></path>
+                      <path d="M8 9v6"></path>
+                      <path d="M16 9v6"></path>
+                      <circle cx="6" cy="12" r="1"></circle>
+                      <circle cx="18" cy="12" r="1"></circle>
+                    </svg>
+                  </div>
+                  <span>Create Ticket</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
       ${await renderAboutSection(contact, userId)}
+      <div class="activities-section" data-contact-id="${hubspotContactId}">
+        <div class="activities-header">
+          <div class="activities-title">
+            <svg class="chevron-icon activities-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+            <span>Recent activity (<span class="activities-count">0</span>)</span>
+          </div>
+        </div>
+        <div class="activities-content">
+          <div class="activities-list">
+            <div class="activities-empty">No recent activity yet.</div>
+          </div>
+        </div>
+      </div>
       <div class="notes-section" data-contact-id="${hubspotContactId}">
         <div class="notes-header">
           <div class="notes-title">
@@ -9205,8 +9697,74 @@ function getCurrentChatHeaderKey() {
   return (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
 }
 
+// Resolve the shared WhatSync state: is the extension signed in, and is HubSpot
+// connected for this account? Both the website and the extension read the same
+// backend, so this is the single source of truth the sidebar renders against.
+async function getWhatsyncState() {
+  try {
+    const result = await extensionStorageGet(['userLoggedIn', 'userId']);
+    const loggedIn = result.userLoggedIn === true && !!result.userId;
+    if (!loggedIn) return { loggedIn: false, hubspotConnected: false };
+    const hubspotConnected = await checkHubSpotIntegrationStatus();
+    return { loggedIn: true, hubspotConnected };
+  } catch {
+    return { loggedIn: false, hubspotConnected: false };
+  }
+}
+
+// State screens shown in the sidebar when we can't show CRM data yet.
+function renderSignInState(sidebarContent) {
+  sidebarContent.innerHTML = `
+    <div class="ws-state">
+      <div class="ws-state-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+          <polyline points="10 17 15 12 10 7"></polyline>
+          <line x1="15" y1="12" x2="3" y2="12"></line>
+        </svg>
+      </div>
+      <h4>Sign in to WhatSync</h4>
+      <p>Log in to your WhatSync account to see HubSpot CRM details for your chats.</p>
+      <button class="ws-state-btn" id="ws-signin-btn">Sign in</button>
+      <p class="ws-state-hint">Tip: you can also click the WhatSync icon in your browser toolbar.</p>
+    </div>
+  `;
+  const btn = sidebarContent.querySelector('#ws-signin-btn');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      // Try to open the extension popup; fall back to the web login.
+      try {
+        sendExtensionMessage({ action: 'openPopup' }).catch(() => {});
+      } catch { /* ignore */ }
+      window.open('https://whatsync.io/auth', '_blank', 'noopener,noreferrer');
+    });
+  }
+}
+
+function renderConnectHubSpotState(sidebarContent) {
+  sidebarContent.innerHTML = `
+    <div class="ws-state">
+      <div class="ws-state-icon ws-state-icon-warn">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+        </svg>
+      </div>
+      <h4>Connect HubSpot</h4>
+      <p>You're signed in, but your HubSpot account isn't connected yet. Connect it in the WhatSync dashboard to sync contacts, deals and activity here.</p>
+      <button class="ws-state-btn" id="ws-connect-btn">Open WhatSync dashboard</button>
+      <p class="ws-state-hint">After connecting, reopen this panel — it updates automatically.</p>
+    </div>
+  `;
+  const btn = sidebarContent.querySelector('#ws-connect-btn');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      window.open('https://whatsync.io/dashboard', '_blank', 'noopener,noreferrer');
+    });
+  }
+}
+
 // Function to update sidebar content based on maindiv
-function updateSidebarContent() {
+async function updateSidebarContent() {
   const sidebar = document.getElementById("hubspot-sidebar");
   if (!sidebar) return;
 
@@ -9214,6 +9772,17 @@ function updateSidebarContent() {
 
   const sidebarContent = sidebar.querySelector(".sidebar-content");
   if (!sidebarContent) return;
+
+  // Single-source-of-truth gate: only show CRM data when signed in AND connected.
+  const state = await getWhatsyncState();
+  if (!state.loggedIn) {
+    renderSignInState(sidebarContent);
+    return;
+  }
+  if (!state.hubspotConnected) {
+    renderConnectHubSpotState(sidebarContent);
+    return;
+  }
 
   // Record which chat this render is for (synchronously, before any async work)
   // so concurrent retriggers for the same chat are deduped instead of racing.
@@ -9271,6 +9840,12 @@ function updateSidebarContent() {
           setupActionButtonTooltips();
           // Setup more actions dropdown
           setupMoreActionsDropdown();
+          // Make the About section collapsible + lifecycle/lead-status editable
+          setupAboutCollapsible();
+          setupEditableContactFields();
+          setupOwnerNameResolution();
+          // Recent activity timeline
+          setupActivitiesSection();
           // Setup notes section
           setupNotesSection();
           // Setup tickets section
@@ -9341,6 +9916,10 @@ function updateSidebarContent() {
                 setupTaskCreation();
                 setupActionButtonTooltips();
                 setupMoreActionsDropdown();
+                setupAboutCollapsible();
+                setupEditableContactFields();
+                setupOwnerNameResolution();
+                setupActivitiesSection();
                 setupNotesSection();
                 setupTicketsSection();
                 setupTasksSection();
@@ -9389,7 +9968,7 @@ function injectSidebar() {
   sidebar.id = "hubspot-sidebar";
   sidebar.innerHTML = `
     <div class="sidebar-header">
-      <h3>HubSpot Chat</h3>
+      <h3>WhatSync</h3>
       <button class="sidebar-close" id="sidebarClose" aria-label="Close sidebar">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -9437,10 +10016,8 @@ function setupSidebarToggle() {
           if (newSidebar) {
             // Update content before opening
             updateSidebarContent();
-            const maindiv = document.querySelector("div#main");
-            if (maindiv) widthSetting(); // Adjust width before opening if maindiv exists
             newSidebar.classList.add('open');
-            setTimeout(() => widthSetting(), 10); // Adjust after opening
+            widthSetting(); // Reflow WhatsApp to make room for the docked panel
             setupSidebarClose();
           }
         }, 100);
@@ -9448,12 +10025,10 @@ function setupSidebarToggle() {
         // Update content when opening
         if (!currentSidebar.classList.contains('open')) {
           updateSidebarContent();
-          const maindiv = document.querySelector("div#main");
-          if (maindiv) widthSetting(); // Adjust width before opening if maindiv exists
         }
         // Toggle sidebar
         currentSidebar.classList.toggle('open');
-        setTimeout(() => widthSetting(), 10); // Adjust after toggle
+        widthSetting(); // Reflow WhatsApp to match the new open/closed state
         setupSidebarClose();
       }
     });
@@ -9496,9 +10071,10 @@ function removeNavbar() {
     existingSidebar.remove();
   }
   
-  // Remove body class to disable layout adjustments CSS
+  // Remove body classes to disable layout adjustments CSS
   document.body.classList.remove('hubspot-navbar-active');
-  
+  document.body.classList.remove('hubspot-sidebar-open');
+
   // Reset inline width styles on div#main that might have been set by widthSetting()
   const maindiv = document.querySelector("div#main");
   if (maindiv) {
@@ -9506,6 +10082,62 @@ function removeNavbar() {
     maindiv.style.maxWidth = '';
   }
 }
+
+// HubSpot portal id, captured from the connection status so we can build deep links
+// to records (deals, notes, tasks, tickets, contacts) in the HubSpot UI.
+let hubspotPortalId = null;
+
+// HubSpot CRM object type ids used in record deep links.
+const HUBSPOT_OBJECT_TYPE_IDS = {
+  contact: '0-1',
+  deal: '0-3',
+  ticket: '0-5',
+  note: '0-46',
+  task: '0-27',
+  call: '0-48',
+  email: '0-49',
+  meeting: '0-47',
+};
+
+// Build a HubSpot UI deep link for a record. Returns null when we don't yet know
+// the portal id or the object id, so callers can skip rendering a link.
+function hubSpotRecordUrl(objectType, objectId) {
+  const typeId = HUBSPOT_OBJECT_TYPE_IDS[objectType];
+  if (!hubspotPortalId || !typeId || !objectId) return null;
+  return `https://app.hubspot.com/contacts/${hubspotPortalId}/record/${typeId}/${objectId}`;
+}
+
+// Returns an "open in HubSpot" anchor (external-link icon) for a record card, or an
+// empty string if we can't build a URL. CSP-safe: no inline handlers — a delegated
+// listener (below) stops propagation so collapsible cards don't toggle on click.
+function hubSpotOpenLink(objectType, objectId, label) {
+  const url = hubSpotRecordUrl(objectType, objectId);
+  if (!url) return '';
+  return `<a class="hs-open-link" href="${url}" target="_blank" rel="noopener noreferrer" title="${label || 'Open in HubSpot'}">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <line x1="10" y1="14" x2="21" y2="3"></line>
+      </svg>
+    </a>`;
+}
+
+// Attach (once) a capture-phase listener so clicking an "open in HubSpot" link opens
+// the record without also triggering a parent card's collapse/expand handler.
+let hubSpotLinkHandlerAttached = false;
+function ensureHubSpotLinkHandler() {
+  if (hubSpotLinkHandlerAttached) return;
+  hubSpotLinkHandlerAttached = true;
+  document.addEventListener(
+    'click',
+    (e) => {
+      const link = e.target?.closest?.('.hs-open-link');
+      if (link) e.stopPropagation(); // let the anchor's own navigation proceed
+    },
+    true
+  );
+}
+ensureHubSpotLinkHandler();
 
 // Function to check HubSpot integration status via edge function
 async function checkHubSpotIntegrationStatus() {
@@ -9516,6 +10148,10 @@ async function checkHubSpotIntegrationStatus() {
   if (!response?.success || !response.data) {
     return false;
   }
+
+  // Capture the portal id so record cards can deep-link into HubSpot.
+  const portalId = response.data.portalId ?? response.data.portal_id;
+  if (portalId) hubspotPortalId = String(portalId);
 
   const status = response.data.status;
   return status === 'active' || status === 'connected';
@@ -9529,23 +10165,19 @@ async function checkLoginStateAndInjectNavbar() {
       return;
     }
 
-    const result = await extensionStorageGet(['userLoggedIn', 'userId']);
-    const isLoggedIn = result.userLoggedIn === true && result.userId;
-
-    if (!isLoggedIn) {
-      removeNavbar();
-      return;
-    }
-
-    const hubspotConnected = await checkHubSpotIntegrationStatus();
-    if (!hubspotConnected) {
-      removeNavbar();
-      return;
-    }
+    // Always provide the navbar entry point on WhatsApp Web. The sidebar itself
+    // shows the right state (sign-in / connect-HubSpot / CRM data), so we no longer
+    // hide the whole UI when signed out or not connected — that left users stuck
+    // with no way in. Refresh any open sidebar so it reflects the current state.
+    const refreshOpenSidebar = () => {
+      const sb = document.getElementById('hubspot-sidebar');
+      if (sb && sb.classList.contains('open')) updateSidebarContent();
+    };
 
     const appRoot = document.getElementById('app') || document.querySelector('#app');
     if (appRoot) {
       injectNavbar();
+      refreshOpenSidebar();
       return;
     }
 
@@ -9557,6 +10189,7 @@ async function checkLoginStateAndInjectNavbar() {
       if (root) {
         clearInterval(checkAppRoot);
         injectNavbar();
+        refreshOpenSidebar();
       } else if (checkCount >= maxChecks) {
         clearInterval(checkAppRoot);
       }
@@ -9605,19 +10238,17 @@ function registerExtensionListeners() {
         checkLoginStateAndInjectNavbar();
         sendResponse({ success: true });
       } else if (message.action === 'userLoggedOut') {
-        removeNavbar();
+        // Keep the navbar; refresh the sidebar to its sign-in state.
+        checkLoginStateAndInjectNavbar();
         sendResponse({ success: true });
       }
       return true;
     });
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
-      if (namespace === 'local' && changes.userLoggedIn) {
-        if (changes.userLoggedIn.newValue === true) {
-          checkLoginStateAndInjectNavbar();
-        } else {
-          removeNavbar();
-        }
+      // Any change to login OR HubSpot connection should re-evaluate the sidebar state.
+      if (namespace === 'local' && (changes.userLoggedIn || changes.hubspotConnected)) {
+        checkLoginStateAndInjectNavbar();
       }
     });
 

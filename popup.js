@@ -160,6 +160,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       'userLoggedIn',
       'userId',
       'accessToken',
+      'refreshToken',
       'loginTimestamp',
       'external_auth_session',
       'userProfile',
@@ -222,66 +223,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   let isLoginMode = true;
-  
-  // Returns true if session is valid (has non-expired loginTimestamp in storage).
-  // Returns false if no timestamp, or expired. Caller should show login or perform auto-logout.
-  function isSessionWithinTimeout(loginTimestamp) {
-    if (!loginTimestamp || typeof loginTimestamp !== 'number') return false;
-    const timeElapsed = Date.now() - loginTimestamp;
-    return timeElapsed >= 0 && timeElapsed < SESSION_CONFIG.timeoutMs;
+
+  // The session is persistent: a stored session with a refresh token is valid.
+  // The access token may be expired — the background refreshes it on use — so we
+  // do NOT gate on access-token/login age here.
+  function hasUsableStoredSession(storageData) {
+    const session = storageData.external_auth_session;
+    const hasUser = !!(session?.user || storageData.userId);
+    const hasRefresh = !!(session?.refresh_token || session?.session?.refresh_token || storageData.refreshToken);
+    return !!storageData.userLoggedIn && hasUser && hasRefresh;
   }
 
-  // Function to check if session has expired and perform auto-logout if so
-  async function checkSessionExpiration() {
-    try {
-      const storageData = await chrome.storage.local.get(['userLoggedIn', 'loginTimestamp']);
-
-      if (!storageData.userLoggedIn || !storageData.loginTimestamp) {
-        return true; // No valid stored session — treat as expired (require fresh login)
-      }
-
-      if (!isSessionWithinTimeout(storageData.loginTimestamp)) {
-        console.log('Session expired (inactivity timeout). Auto-logging out...');
-        await performAutoLogout();
-        return true; // Session expired
-      }
-
-      return false; // Session still valid
-    } catch (error) {
-      console.error('Error checking session expiration:', error);
-      return true; // On error, require fresh login
-    }
-  }
-  
-  // Function to perform automatic logout
-  async function performAutoLogout() {
-    try {
-      console.log('User automatically logged out due to session expiration');
-      await clearStoredAuthSession();
-      
-      // Notify content script about logout
-      try {
-        const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
-        tabs.forEach(tab => {
-          chrome.tabs.sendMessage(tab.id, { action: 'userLoggedOut' }).catch(() => {
-            // Content script might not be ready, that's okay
-          });
-        });
-      } catch (error) {
-        console.error('Error notifying content script:', error);
-      }
-      
-      // Show login form first so user sees the form
-      showLoginForm();
-      // Always show session-expired message when auto-logging out (stale or inactivity)
-      showSuccessMessage('Session Expired', 'Your session has expired. Please log in again.');
-      setTimeout(() => successMessage.classList.remove('show'), 3000);
-    } catch (error) {
-      console.error('Error during auto-logout:', error);
-      showLoginForm();
-    }
-  }
-  
   // Function to check HubSpot integration status
   async function checkHubSpotIntegrationStatus() {
     try {
@@ -701,21 +653,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
   
-  // Restore session from chrome.storage (same source used by content/background scripts)
+  // Restore session from chrome.storage (same source used by content/background scripts).
+  // Persistent session: as long as there's a stored session with a refresh token,
+  // stay logged in. The access token may be expired — the background refreshes it
+  // (and retries on 401) — so we never force a re-login here on elapsed time.
   const storageData = await getStoredAuthSession();
   const storedSession = storageData.external_auth_session;
   const storedUser = storedSession?.user || (storageData.userId ? { id: storageData.userId } : null);
 
-  if (!storageData.userLoggedIn || !storedSession?.access_token || !storedUser) {
+  if (!hasUsableStoredSession(storageData) || !storedUser) {
     await clearStoredAuthSession();
     showLoginForm();
-    return;
-  }
-
-  const hasValidStoredLogin = storageData.loginTimestamp && isSessionWithinTimeout(storageData.loginTimestamp);
-  if (!hasValidStoredLogin) {
-    console.log('Session expired or missing login timestamp — requiring fresh login');
-    await performAutoLogout();
     return;
   }
 

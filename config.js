@@ -17,10 +17,14 @@ const HUBSPOT_CONFIG = {
   apiUrl: 'https://api.hubapi.com'
 };
 
-// Session Configuration (automatic logout after prolonged inactivity)
+// Session Configuration.
+// The session is persistent — users stay logged in as long as their Supabase
+// refresh token is valid (it auto-renews on use). There is NO wall-clock logout;
+// the background proactively refreshes the access token before it expires, and
+// only signs the user out if the refresh token itself is rejected.
 const SESSION_CONFIG = {
-  // Max session duration from last login. After this period, user is auto-logged out.
-  timeoutMs: 6 * 60 * 60 * 1000, // 6 hours
-  // How often background script checks for session expiration (alarm interval)
-  checkIntervalMs: 5 * 60 * 1000 // 5 minutes
+  // Refresh the access token this long before it expires.
+  refreshLeewayMs: 10 * 60 * 1000, // 10 minutes
+  // How often the background checks whether a refresh is due.
+  checkIntervalMs: 30 * 60 * 1000 // 30 minutes
 };

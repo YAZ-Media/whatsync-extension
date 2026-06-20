@@ -15,12 +15,15 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const EDGE_FUNCTIONS_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
 const EDGE_FUNCTIONS_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs';
 
-// Session Configuration
+// Session Configuration.
+// Persistent session: no wall-clock logout. The background proactively refreshes
+// the access token before it expires and only signs out if the refresh token is
+// rejected (session genuinely revoked).
 const SESSION_CONFIG = {
-  // Session timeout in milliseconds (auto logout after this period from last login)
-  timeoutMs: 6 * 60 * 60 * 1000, // 6 hours
-  // Check interval for session expiration (default: 5 minutes)
-  checkIntervalMs: 5 * 60 * 1000 // 5 minutes
+  // Refresh the access token this long before it expires.
+  refreshLeewayMs: 10 * 60 * 1000, // 10 minutes
+  // How often the background checks whether a refresh is due.
+  checkIntervalMs: 30 * 60 * 1000 // 30 minutes
 };
 
 // HubSpot connection status cache (avoid hammering getConnectionStatus API)
@@ -2760,57 +2763,75 @@ async function checkHubSpotContactViaEdgeFunction(phoneNumber) {
   }
 }
 
-// Function to check if session has expired and logout if needed
-async function checkAndHandleSessionExpiration() {
+// Decode a JWT's exp claim (ms since epoch). Returns 0 if unparseable.
+function getJwtExpMs(token) {
   try {
-    const storageData = await chrome.storage.local.get(['userLoggedIn', 'loginTimestamp']);
-    
-    if (!storageData.userLoggedIn || !storageData.loginTimestamp) {
-      // Not logged in, clear any existing alarm
-      chrome.alarms.clear('sessionCheck');
-      return;
-    }
-    
-    const loginTimestamp = storageData.loginTimestamp;
-    const currentTime = Date.now();
-    const timeElapsed = currentTime - loginTimestamp;
-    
-    if (timeElapsed >= SESSION_CONFIG.timeoutMs) {
-      console.log('[Background] Session expired. Auto-logging out...');
-      
-      // Clear all login-related state (popup will require fresh login when opened)
-      await chrome.storage.local.set({
-        userLoggedIn: false,
-        userId: null,
-        accessToken: null,
-        loginTimestamp: null,
-        external_auth_session: null
-      });
-      
-      // Notify content script about logout
-      try {
-        const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
-        tabs.forEach(tab => {
-          chrome.tabs.sendMessage(tab.id, { action: 'userLoggedOut' }).catch(() => {
-            // Content script might not be ready, that's okay
-          });
-        });
-      } catch (error) {
-        console.error('[Background] Error notifying content script:', error);
-      }
-      
-      // Clear the alarm since user is logged out
-      chrome.alarms.clear('sessionCheck');
-    } else {
-      // Session still valid, schedule next check
-      scheduleSessionCheck();
-    }
-  } catch (error) {
-    console.error('[Background] Error checking session expiration:', error);
+    const payload = JSON.parse(
+      atob(String(token).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+    );
+    return payload.exp ? payload.exp * 1000 : 0;
+  } catch {
+    return 0;
   }
 }
 
-// Function to schedule session expiration check
+// Sign the user out everywhere. Only called when the refresh token itself is
+// rejected (truly revoked/expired) or the user logs out — never on a timer.
+async function signOutEverywhere() {
+  await chrome.storage.local.set({
+    userLoggedIn: false,
+    userId: null,
+    accessToken: null,
+    refreshToken: null,
+    loginTimestamp: null,
+    external_auth_session: null,
+  });
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+    tabs.forEach((tab) => {
+      chrome.tabs.sendMessage(tab.id, { action: 'userLoggedOut' }).catch(() => {});
+    });
+  } catch (error) {
+    console.error('[Background] Error notifying content script:', error);
+  }
+  chrome.alarms.clear('sessionCheck');
+}
+
+// Keep the session alive: proactively refresh the access token before it expires.
+// The session is persistent — we NEVER log out on elapsed time. We only sign out
+// if the refresh token is rejected (session genuinely revoked), which is the only
+// case where the user must log in again.
+async function maybeRefreshSession() {
+  try {
+    const { userLoggedIn, accessToken } = await chrome.storage.local.get([
+      'userLoggedIn',
+      'accessToken',
+    ]);
+    if (!userLoggedIn) {
+      chrome.alarms.clear('sessionCheck');
+      return;
+    }
+
+    const expMs = accessToken ? getJwtExpMs(accessToken) : 0;
+    const needsRefresh = !expMs || expMs - Date.now() < SESSION_CONFIG.refreshLeewayMs;
+    if (!needsRefresh) return;
+
+    const refreshToken = await getStoredRefreshToken();
+    if (!refreshToken) return; // can't refresh proactively; on-demand 401 path handles it
+
+    const newToken = await refreshAccessToken(refreshToken);
+    if (!newToken && expMs && expMs < Date.now()) {
+      // Access token already dead AND refresh was rejected -> session is truly
+      // over. Now (and only now) it is correct to require a fresh login.
+      console.log('[Background] Refresh token rejected; signing out.');
+      await signOutEverywhere();
+    }
+  } catch (error) {
+    console.warn('[Background] Session refresh check failed:', error?.message);
+  }
+}
+
+// Function to schedule the periodic token-refresh check
 function scheduleSessionCheck() {
   // Clear any existing alarm first
   chrome.alarms.clear('sessionCheck');
@@ -2827,7 +2848,7 @@ function scheduleSessionCheck() {
 // Listen for alarm events
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'sessionCheck') {
-    checkAndHandleSessionExpiration();
+    maybeRefreshSession();
   }
 });
 
@@ -2840,22 +2861,25 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     if (changes.userLoggedIn) {
       const isLoggedIn = changes.userLoggedIn.newValue === true;
       if (isLoggedIn) {
-        // User logged in, start session checking
-        console.log('[Background] User logged in, starting session expiration checks');
+        // User logged in — start the periodic token-refresh check
+        console.log('[Background] User logged in, starting token-refresh checks');
         scheduleSessionCheck();
-        // Also check immediately
-        checkAndHandleSessionExpiration();
+        maybeRefreshSession();
       } else {
-        // User logged out, stop session checking
-        console.log('[Background] User logged out, stopping session expiration checks');
+        // User logged out — stop checks
+        console.log('[Background] User logged out, stopping token-refresh checks');
         chrome.alarms.clear('sessionCheck');
       }
     }
   }
 });
 
-// Check session expiration on service worker startup
-checkAndHandleSessionExpiration();
+// On service-worker startup, re-arm the refresh alarm (if logged in) and refresh
+// if the token is due. The alarm is periodic so it normally survives restarts.
+chrome.storage.local.get(['userLoggedIn'], ({ userLoggedIn }) => {
+  if (userLoggedIn) scheduleSessionCheck();
+  maybeRefreshSession();
+});
 
 // After install/update, refresh open WhatsApp tabs so content scripts reconnect
 chrome.runtime.onInstalled.addListener(async (details) => {

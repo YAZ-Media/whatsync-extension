@@ -128,11 +128,11 @@ async function sendExtensionMessage(message) {
 const HUBSPOT_EDGE_FUNCTION_URL =
   typeof EDGE_FUNCTIONS_CONFIG !== 'undefined'
     ? `${EDGE_FUNCTIONS_CONFIG.url}/functions/v1/hubspot`
-    : 'https://dizxmubrpwwfrjepcttb.supabase.co/functions/v1/hubspot';
+    : 'https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/hubspot';
 const HUBSPOT_ANON_KEY =
   typeof EDGE_FUNCTIONS_CONFIG !== 'undefined'
     ? EDGE_FUNCTIONS_CONFIG.anonKey
-    : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs';
+    : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
 
 async function getExtensionSession() {
   const result = await extensionStorageGet('external_auth_session');
@@ -167,7 +167,7 @@ async function callHubSpotEdgeFromContent(action, data) {
 
 const AUTOMATION_SUPABASE_URL = typeof EDGE_FUNCTIONS_CONFIG !== 'undefined'
   ? EDGE_FUNCTIONS_CONFIG.url
-  : 'https://dizxmubrpwwfrjepcttb.supabase.co';
+  : 'https://ogsvchujqpayuckxuwdf.supabase.co';
 
 async function getExtensionUserId() {
   const result = await extensionStorageGet(['external_auth_session', 'userId', 'userLoggedIn']);

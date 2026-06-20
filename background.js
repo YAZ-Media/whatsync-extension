@@ -11,9 +11,9 @@ const HUBSPOT_CONFIG = {
 // External Supabase — auth + database (user_profiles, hubspot_contact_logs, etc.)
 const SUPABASE_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
-// Harmony/Lovable project — edge functions only (not the external DB)
-const EDGE_FUNCTIONS_URL = 'https://ogsvchujqpayuckxuwdf.supabase.co';
-const EDGE_FUNCTIONS_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpenhtdWJycHd3ZnJqZXBjdHRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0OTUxMTksImV4cCI6MjA4NDA3MTExOX0.zYzUmVLjM3Ml7z5EKjwjA9oE4ohnuqCbCV_4n1jgGBs';
+// Edge functions live on the same (ogsvc) project — use its anon key for apikey.
+const EDGE_FUNCTIONS_URL = SUPABASE_URL;
+const EDGE_FUNCTIONS_ANON_KEY = SUPABASE_ANON_KEY;
 
 // Session Configuration.
 // Persistent session: no wall-clock logout. The background proactively refreshes

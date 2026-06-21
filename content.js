@@ -271,6 +271,11 @@ class AutomationManager {
       amount: deal.amount
     });
   }
+
+  // Discrete-event triggers — fire once per user action (safe to run actions on).
+  async noteCreated(ctx) { return this.trigger('note_created', ctx || {}); }
+  async taskCreated(ctx) { return this.trigger('task_created', ctx || {}); }
+  async dealCreated(ctx) { return this.trigger('deal_created', ctx || {}); }
 }
 
 // Create singleton instance
@@ -7384,7 +7389,8 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
     
     if (response && response.success) {
       console.log('[Content] ✅ Task created successfully!');
-      console.log('[Content] Task ID:', response.data?.id || response.data?.hs_object_id);
+      const newTaskId = response.data?.id || response.data?.hs_object_id;
+      automations.taskCreated({ contactId, taskId: newTaskId }).catch(() => {});
       return response.data;
     } else {
       const errorMessage = response?.error || response?.message || 'Failed to create task';
@@ -7647,7 +7653,8 @@ async function createHubSpotDeal(dealData, contactId) {
     console.log('[Content] Deal ID:', result.id || result.hs_object_id);
     
     const dealId = result.id || result.hs_object_id;
-    
+    automations.dealCreated({ contactId, dealId }).catch(() => {});
+
     // Note: Deal association with contact is now handled by the backend
     // No need for separate associateDealWithContact call
     
@@ -8581,6 +8588,8 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo) {
 
     if (response.success) {
       console.log('[Content] ✅ Note created successfully!');
+      // Fire note_created automations for this contact (non-blocking).
+      automations.noteCreated({ contactId: numericContactId, noteId: response.data?.id }).catch(() => {});
       return response.data;
     } else {
       const errorMsg = response.error || 'Failed to create note';

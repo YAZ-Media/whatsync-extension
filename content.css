@@ -99,6 +99,41 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
 /* ==================== End Theme Variables ==================== */
 
 /* Navbar Styles - Redesigned */
+/* WhatSync toggle injected INTO WhatsApp's chat header — styled like a native
+   header icon (next to search / menu) instead of a floating top bar. */
+#checkOpenchat.hubspot-header-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    margin: 0 2px;
+    padding: 0;
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    border-radius: 50%;
+    cursor: pointer;
+    color: #54656f; /* WhatsApp light-theme header icon grey */
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+#checkOpenchat.hubspot-header-toggle:hover {
+    background: rgba(11, 20, 26, 0.06);
+    color: #FF7A59; /* HubSpot orange on hover for recognizability */
+}
+#checkOpenchat.hubspot-header-toggle svg {
+    width: 22px;
+    height: 22px;
+    display: block;
+}
+body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle {
+    color: #aebac1; /* WhatsApp dark-theme header icon grey */
+}
+body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
+    background: rgba(233, 237, 239, 0.1);
+    color: #FF7A59;
+}
+
 #hubspot-navbar {
     position: fixed;
     top: 0;
@@ -193,10 +228,10 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
 /* Sidebar Styles */
 #hubspot-sidebar {
     position: fixed;
-    top: 56px;
+    top: 0;
     right: 0;
     width: 420px;
-    height: calc(100vh - 56px);
+    height: 100vh;
     background: var(--sidebar-bg, #ffffff);
     border-left: none;
     z-index: 999998;

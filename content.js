@@ -1110,50 +1110,60 @@ function initializeThemeDetection() {
 // ==================== End Theme Detection ====================
 
 // Function to inject navbar
-function injectNavbar() {
-  // Check if navbar already exists
-  const existingNavbar = document.getElementById("hubspot-navbar");
-  if (existingNavbar) {
-    return; // Navbar already exists
-  }
+// SVG for the toggle button (HubSpot mark), shared by header injection.
+const WHATSYNC_TOGGLE_SVG = `
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/>
+    <circle cx="12" cy="4.4" r="2.1" fill="currentColor"/>
+    <line x1="12" y1="6.5" x2="12" y2="8.8" stroke="currentColor" stroke-width="2"/>
+    <circle cx="19" cy="16" r="2.1" fill="currentColor"/>
+    <line x1="14.6" y1="13.5" x2="17.2" y2="15" stroke="currentColor" stroke-width="2"/>
+    <circle cx="5" cy="16" r="2.1" fill="currentColor"/>
+    <line x1="9.4" y1="13.5" x2="6.8" y2="15" stroke="currentColor" stroke-width="2"/>
+  </svg>`;
 
-  // Find app root
+function getWhatsAppChatHeader() {
+  const main = document.querySelector('div#main');
+  return main ? main.querySelector('header') : null;
+}
+
+/**
+ * Place the WhatSync toggle INSIDE WhatsApp's chat header (next to the
+ * search / menu icons) so it reads as a native header control instead of a
+ * floating bar. WhatsApp rebuilds the header on every chat switch, so this is
+ * idempotent and re-run from the navigation poll to self-heal.
+ */
+function ensureHeaderToggle() {
+  if (extensionContextInvalidated) return;
+  if (document.getElementById('checkOpenchat')) return; // already present
+
+  const header = getWhatsAppChatHeader();
+  if (!header) return; // no open chat — nothing to attach to
+
+  const btn = document.createElement('button');
+  btn.id = 'checkOpenchat';
+  btn.className = 'hubspot-header-toggle';
+  btn.type = 'button';
+  btn.title = 'WhatSync — HubSpot';
+  btn.setAttribute('aria-label', 'Open WhatSync HubSpot panel');
+  btn.innerHTML = WHATSYNC_TOGGLE_SVG;
+  header.appendChild(btn);
+
+  setupSidebarToggle();
+}
+
+// Kept name for existing callers. No longer a floating top bar — the toggle now
+// lives inside WhatsApp's chat header. Ensures the sidebar exists and theme is
+// applied, then injects the header toggle.
+function injectNavbar() {
   const appRoot = document.getElementById("app") || document.querySelector("#app");
-  
-  if (appRoot) {
-    // CSS is now loaded via content.css in manifest.json
-    // Create navbar
-    const navbar = document.createElement("div");
-    navbar.id = "hubspot-navbar";
-    navbar.innerHTML = `
-      <div class="nav-wrapper">
-        <div class="nav-right">
-          <button id="checkOpenchat" class="nav-primary-btn" title="HubSpot" aria-label="Open HubSpot">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.867-.272 0-.372.149-.372.297 0 .384.593.445.816.594.223.149.297.298.297.594 0 .297-.298.446-.594.446-.297 0-.743-.15-1.041-.446-.149-.15-.446-.446-.743-.892-.297-.446-.594-.892-.743-1.19-.149-.297-.594-.892-1.338-.892-.446 0-.892.149-1.338.594-.297.298-.594.743-.743 1.19-.149.446-.149.892-.149 1.338 0 .446 0 .892.149 1.338.149.446.446.892.743 1.19.446.445.892.594 1.338.594.744 0 1.189-.595 1.338-.892.149-.297.594-.893.743-1.19.149-.297.297-.446.446-.595.149-.149.297-.298.445-.446.298-.149.595-.446.892-.595.297-.149.595-.446.892-.446.297 0 .595.148.595.446 0 .297-.298.446-.595.446zm-8.07-5.508c-.148 0-.297.15-.297.297v1.485c0 .297.149.446.297.446h.445c.297 0 .446-.149.446-.446V9.171c0-.297-.149-.297-.446-.297h-.445zm5.659 0c-.297 0-.446.149-.446.297v1.485c0 .297.149.446.297.446h.446c.297 0 .446-.149.446-.446V9.171c0-.297-.149-.297-.446-.297h-.297zm3.715.446c0-.892-.297-1.485-.892-1.78-.297-.15-.743-.15-1.338-.15H7.95c-.595 0-1.041 0-1.338.15-.595.295-.892.888-.892 1.78 0 .594.149 1.04.297 1.485.149.446.297.743.446.892.149.15.446.446.892.446.297 0 .446-.148.595-.446.149-.149.297-.446.297-.595 0-.148-.149-.446-.446-.446-.297 0-.595.297-.743.595-.149.297-.149.743-.149 1.04v2.377c0 .595.149.892.446 1.19.297.297.744.595 1.338.595.892 0 1.487-.298 1.78-.892.149-.298.149-.744.149-1.19 0-.446 0-.892-.149-1.338-.149-.297-.446-.743-.892-.892-.297-.15-.594-.446-1.041-.446-.446 0-.743.297-.892.446-.15.149-.15.446-.15.743 0 .148.15.297.297.297.297 0 .446-.149.595-.446.149-.297.446-.595.744-.595.297 0 .595.298.744.595.149.297.149.743.149 1.04v2.377c0 .297-.149.595-.446.892-.298.297-.595.446-1.041.446-.446 0-.743-.149-1.041-.446-.298-.297-.446-.595-.446-.892v-2.377c0-.297.149-.743.149-1.04 0-.297-.149-.743-.297-1.04-.15-.297-.446-.595-.744-.595-.446 0-.743.298-.892.595-.15.297-.15.743-.15 1.04v2.377c0 .595.15.892.447 1.19.297.297.744.595 1.338.595h8.248c.595 0 1.041-.298 1.338-.595.595-.298.892-.892.892-1.485v-4.161z" fill="currentColor"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(navbar);
-    // Add body class to enable layout adjustments CSS
-    document.body.classList.add('hubspot-navbar-active');
-    console.log('Navbar injected successfully');
-    
-    // Inject sidebar (closed initially)
-    injectSidebar();
-    
-    // Initialize theme detection and apply theme
-    setTimeout(() => {
-      initializeThemeDetection();
-    }, 300);
-    
-    // Add click handler for checkOpenchat after navbar is injected
-    setTimeout(() => {
-      setupSidebarToggle();
-    }, 200);
-  }
+  if (!appRoot) return;
+
+  // Sidebar (closed initially) is still our own docked panel on the right.
+  injectSidebar();
+
+  setTimeout(() => initializeThemeDetection(), 300);
+  ensureHeaderToggle();
 }
 
 // Function to get phone number (placeholder - implement as needed)
@@ -10103,11 +10113,9 @@ function setupSidebarClose() {
 // Function to remove navbar
 function removeNavbar() {
   teardownThemeDetection();
-  const existingNavbar = document.getElementById("hubspot-navbar");
-  if (existingNavbar) {
-    existingNavbar.remove();
-  }
-  // CSS is loaded via manifest.json, so no need to remove style element
+  // Legacy floating bar (if any) + the header toggle button
+  document.getElementById("hubspot-navbar")?.remove();
+  document.getElementById("checkOpenchat")?.remove();
   // Also remove sidebar when navbar is removed
   const existingSidebar = document.getElementById("hubspot-sidebar");
   if (existingSidebar) {
@@ -10541,6 +10549,10 @@ const navigationCheckInterval = setInterval(() => {
     clearInterval(navigationCheckInterval);
     return;
   }
+  // Re-attach the header toggle if WhatsApp rebuilt the chat header (chat switch,
+  // re-render). Cheap no-op when it's already present.
+  ensureHeaderToggle();
+
   const url = location.href;
   if (url !== lastUrl) {
     lastUrl = url;

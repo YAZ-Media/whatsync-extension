@@ -2015,63 +2015,20 @@ function setupMoreActionsDropdown() {
       const existingTemplateItems = dropdown.querySelectorAll('.template-option');
       existingTemplateItems.forEach(item => item.remove());
       
-      // Fetch enabled action fields
-      console.log('[More Actions] Fetching enabled action fields...');
-      const enabledActions = await getEnabledActionFields(userId);
-      console.log('[More Actions] Fetched', enabledActions.length, 'enabled action fields');
-      
-      // Check if "Send Template" action field exists (enabled)
-      const sendTemplateAction = enabledActions.find(
-        action => {
-          const fieldLabel = (action.field_label || '').toLowerCase();
-          const columnName = (action.column_name || '').toLowerCase();
-          const hubspotProperty = (action.hubspot_property || '').toLowerCase();
-          return fieldLabel.includes('send template') || 
-                 fieldLabel.includes('template') ||
-                 columnName.includes('send template') ||
-                 columnName.includes('template') ||
-                 hubspotProperty.includes('send_template') ||
-                 hubspotProperty.includes('template');
-        }
-      );
-      
-      // Filter out "Send Template" from action fields (we'll show templates instead)
-      // Check multiple fields to ensure we catch all variations
-      const actionFieldsToRender = enabledActions.filter(
-        action => {
-          const fieldLabel = (action.field_label || '').toLowerCase();
-          const columnName = (action.column_name || '').toLowerCase();
-          const hubspotProperty = (action.hubspot_property || '').toLowerCase();
-          const isTemplateField = fieldLabel.includes('send template') || 
-                                  fieldLabel.includes('template') ||
-                                  columnName.includes('send template') ||
-                                  columnName.includes('template') ||
-                                  hubspotProperty.includes('send_template') ||
-                                  hubspotProperty.includes('template');
-          return !isTemplateField;
-        }
-      );
-      
-      // Render action fields (excluding "Send Template")
-      if (actionFieldsToRender && actionFieldsToRender.length > 0) {
-        console.log('[More Actions] Rendering action fields in dropdown...');
-        renderActionFieldsInDropdown(actionFieldsToRender);
-      }
-      
-      // Always fetch and render templates if "Send Template" action field is enabled
-      if (sendTemplateAction) {
-        console.log('[More Actions] "Send Template" action field found, fetching templates...');
+      // Ensure sidebar prefs are loaded so the 'send_template' toggle is honored.
+      await fetchSidebarFieldsFromBackend(userId);
+
+      // Templates are gated by the "Send Template" sidebar toggle (default on).
+      if (isSidebarFieldEnabled('send_template')) {
+        console.log('[More Actions] "Send Template" enabled, fetching templates...');
         const { templates } = await fetchUserTemplates();
-        console.log('[More Actions] Template fetch completed, received:', templates?.length || 0, 'template(s)');
-        
         if (templates && templates.length > 0) {
-          console.log('[More Actions] Rendering templates in dropdown...');
           renderTemplatesInDropdown(templates);
         } else {
           console.log('[More Actions] No templates available to render');
         }
       } else {
-        console.log('[More Actions] "Send Template" action field not found, skipping template fetch');
+        console.log('[More Actions] "Send Template" disabled, skipping templates');
       }
       
       // Remove loading indicator

@@ -114,24 +114,25 @@ body.whatsapp-theme-light #hubspot-sidebar.theme-light {
     background: transparent;
     border-radius: 50%;
     cursor: pointer;
-    color: #54656f; /* WhatsApp light-theme header icon grey */
-    transition: background-color 0.15s ease, color 0.15s ease;
+    color: #FF7A59; /* HubSpot orange — visible by default so it stands out */
+    transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
 }
 #checkOpenchat.hubspot-header-toggle:hover {
-    background: rgba(11, 20, 26, 0.06);
-    color: #FF7A59; /* HubSpot orange on hover for recognizability */
+    background: rgba(255, 122, 89, 0.14); /* orange tint highlight on hover */
+    color: #e35d3b;                        /* darker orange for clear feedback */
+    transform: scale(1.05);
+}
+#checkOpenchat.hubspot-header-toggle:active {
+    transform: scale(0.96);
 }
 #checkOpenchat.hubspot-header-toggle svg {
     width: 22px;
     height: 22px;
     display: block;
 }
-body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle {
-    color: #aebac1; /* WhatsApp dark-theme header icon grey */
-}
 body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
-    background: rgba(233, 237, 239, 0.1);
-    color: #FF7A59;
+    background: rgba(255, 122, 89, 0.2);
+    color: #ff8d70;
 }
 
 #hubspot-navbar {

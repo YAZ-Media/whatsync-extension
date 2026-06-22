@@ -28,6 +28,9 @@ const SESSION_CONFIG = {
 
 // HubSpot connection status cache (avoid hammering getConnectionStatus API)
 const HUBSPOT_CONNECTION_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+// Durable fallback valid for 24 h — survives service-worker restarts
+const HUBSPOT_CONNECTION_STORAGE_KEY = 'hubspotConnectionStatus';
+const HUBSPOT_CONNECTION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 let hubspotConnectionCache = null; // { userId, status, portal_id, cachedAt }
 
 // Privacy settings (from settings edge function)
@@ -304,6 +307,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
   
+  if (request.action === 'clearHubSpotCache') {
+    hubspotConnectionCache = null;
+    chrome.storage.local.remove(HUBSPOT_CONNECTION_STORAGE_KEY);
+    sendResponse({ success: true });
+    return true;
+  }
+
   if (request.action === 'checkHubSpotIntegration') {
     (async () => {
       try {
@@ -319,6 +329,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const result = await checkHubSpotIntegrationStatusViaEdgeFunction(userId);
         sendResponse({ success: true, data: result });
       } catch {
+        // checkHubSpotIntegrationStatusViaEdgeFunction already tried the durable
+        // storage fallback before throwing, so if we reach here there is genuinely
+        // no usable record. Return disconnected as a last resort.
         sendResponse({ success: true, data: { status: 'disconnected' } });
       }
     })();
@@ -2279,9 +2292,44 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
       connected_at: connectedAt,
       cachedAt: Date.now()
     };
+
+    // Persist last-known-good status so it survives service-worker restarts.
+    // Only persist when genuinely connected so a stale record never masks a real
+    // disconnect that happened on the server side (24-h TTL is a safety net).
+    if (result.status === 'active' || result.status === 'connected') {
+      chrome.storage.local.set({
+        [HUBSPOT_CONNECTION_STORAGE_KEY]: {
+          userId,
+          status: result.status,
+          portalId,
+          portal_id: portalId,
+          connectedAt,
+          connected_at: connectedAt,
+          savedAt: Date.now(),
+        }
+      });
+    } else {
+      // Server says disconnected — clear the durable record so we don't lie.
+      chrome.storage.local.remove(HUBSPOT_CONNECTION_STORAGE_KEY);
+    }
+
     return result;
   } catch (error) {
     console.error('[Background] Error checking HubSpot integration status:', error);
+
+    // Network / transient error — return the last persisted status rather than
+    // flipping the user to "disconnected" every time the service worker restarts.
+    try {
+      const stored = await chrome.storage.local.get(HUBSPOT_CONNECTION_STORAGE_KEY);
+      const saved = stored[HUBSPOT_CONNECTION_STORAGE_KEY];
+      if (saved && saved.userId === userId && (Date.now() - saved.savedAt) < HUBSPOT_CONNECTION_STORAGE_TTL_MS) {
+        console.log('[Background] HubSpot status from durable fallback:', saved.status);
+        // Warm the in-memory cache from storage so the next call is instant.
+        hubspotConnectionCache = { ...saved, cachedAt: Date.now() };
+        return saved;
+      }
+    } catch { /* ignore storage errors */ }
+
     throw error;
   }
 }
@@ -2358,9 +2406,11 @@ function applyFieldMappings(sourceData, mappings, extraProperties = {}) {
     if (mapping.source === 'contact_name' && mapping.splitName !== false) {
       const { first, last } = splitContactName(value);
       if (mapping.target === 'firstname' || mapping.target === 'lastname') {
-        if (first) properties.firstname = first;
-        if (last) properties.lastname = last;
-      } else {
+        // Don't clobber names sent explicitly in properties (the create form
+        // provides firstname/lastname directly, which are authoritative).
+        if (first && !properties.firstname) properties.firstname = first;
+        if (last && !properties.lastname) properties.lastname = last;
+      } else if (!properties[mapping.target]) {
         properties[mapping.target] = String(value);
       }
       continue;

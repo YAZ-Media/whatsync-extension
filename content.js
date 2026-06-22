@@ -8584,6 +8584,10 @@ function setupCreateContactForm(phoneNumber) {
         job_title: document.getElementById('jobTitle').value.trim() || undefined,
       },
       properties: {
+        // Send names explicitly so a multi-word first/last name is never mangled
+        // by the contact_name split. These take precedence server-side.
+        firstname: firstName || undefined,
+        lastname: lastName || undefined,
         hubspot_owner_id: (() => {
           const manual = document.getElementById('contactOwner')?.value?.trim();
           return manual || undefined;
@@ -8783,8 +8787,8 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
             <input type="text" id="firstName" name="firstName" value="${escapeHtml(defaultFirstName)}" required>
           </div>
           <div class="form-group">
-            <label for="lastName">Last Name *</label>
-            <input type="text" id="lastName" name="lastName" value="${escapeHtml(defaultLastName)}" required>
+            <label for="lastName">Last Name</label>
+            <input type="text" id="lastName" name="lastName" value="${escapeHtml(defaultLastName)}">
           </div>
           <div class="form-group">
             <label for="email">Email</label>

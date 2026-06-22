@@ -8409,6 +8409,29 @@ function setupCopyEmailHandler() {
 }
 
 // Function to setup create contact form handler
+// Populate a create-form <select> with the user's real HubSpot property options
+// (custom stages/labels included), via the existing getPropertyOptions action.
+async function populateCreateFormSelect(selectId, property, placeholder) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  try {
+    const resp = await sendExtensionMessage({
+      action: 'getPropertyOptions',
+      objectType: 'contacts',
+      property,
+    });
+    const options = (resp?.options || []).filter(
+      (o) => o && o.value != null && o.value !== '' && o.hidden !== true
+    );
+    const head = `<option value="">${escapeHtml(placeholder)}</option>`;
+    select.innerHTML = head + options
+      .map((o) => `<option value="${escapeHtml(String(o.value))}">${escapeHtml(o.label || String(o.value))}</option>`)
+      .join('');
+  } catch (e) {
+    select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`;
+  }
+}
+
 function setupCreateContactForm(phoneNumber) {
   const form = document.getElementById('createContactForm');
   const createBtn = document.getElementById('createContactBtn');
@@ -8463,7 +8486,13 @@ function setupCreateContactForm(phoneNumber) {
       }
     });
   }
-  
+
+  // Populate Lifecycle Stage + Lead Status from the user's REAL HubSpot property
+  // options (custom stages/labels included), so the create form matches what
+  // they see in HubSpot instead of hardcoded defaults.
+  populateCreateFormSelect('lifecycleStage', 'lifecyclestage', 'Select Lifecycle Stage');
+  populateCreateFormSelect('leadStatus', 'hs_lead_status', 'Select Lead Status');
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     
@@ -8720,30 +8749,13 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
           <div class="form-group">
             <label for="lifecycleStage">Lifecycle Stage</label>
             <select id="lifecycleStage" name="lifecycleStage">
-              <option value="">Select Lifecycle Stage</option>
-              <option value="subscriber">Subscriber</option>
-              <option value="lead">Lead</option>
-              <option value="marketingqualifiedlead">Marketing Qualified Lead</option>
-              <option value="salesqualifiedlead">Sales Qualified Lead</option>
-              <option value="opportunity">Opportunity</option>
-              <option value="customer">Customer</option>
-              <option value="evangelist">Evangelist</option>
-              <option value="other">Other</option>
+              <option value="">Loading…</option>
             </select>
           </div>
           <div class="form-group">
             <label for="leadStatus">Lead Status</label>
             <select id="leadStatus" name="leadStatus">
-              <option value="">Select Lead Status</option>
-              <option value="NEW">New</option>
-              <option value="OPEN">Open</option>
-              <option value="IN_PROGRESS">In Progress</option>
-              <option value="OPEN_DEAL">Open Deal</option>
-              <option value="UNQUALIFIED">Unqualified</option>
-              <option value="ATTEMPTED_TO_CONTACT">Attempted to Contact</option>
-              <option value="CONNECTED">Connected</option>
-              <option value="BAD_TIMING">Bad Timing</option>
-              <option value="NOT_INTERESTED">Not Interested</option>
+              <option value="">Loading…</option>
             </select>
           </div>
           <div class="form-actions">
@@ -8907,13 +8919,25 @@ async function fetchSidebarFieldsFromBackend(userId) {
 
     const data = response?.data || {};
 
-    // Build the prefs cache from the flat fields list (key -> enabled).
+    // Build the prefs cache. The edge function may return either:
+    //  - A flat `fields` array  (website's version)
+    //  - Grouped `contactFields` / `actionFields` / `sectionFields` arrays (extension reference version)
+    // Collect from all shapes so we're format-agnostic.
     const prefs = {};
-    (data.fields || []).forEach((f) => {
-      const key = f.field_key || f.hubspot_property;
-      if (key) prefs[key] = (f.is_enabled ?? f.enabled) !== false;
-    });
-    sidebarPrefsCache = prefs;
+    const collectIntoPrefs = (arr) => {
+      (arr || []).forEach((f) => {
+        const key = f.field_key || f.hubspot_property;
+        if (key) prefs[key] = (f.is_enabled ?? f.enabled) !== false;
+      });
+    };
+    collectIntoPrefs(data.fields);
+    collectIntoPrefs(data.contactFields);
+    collectIntoPrefs(data.sectionFields);
+    collectIntoPrefs(data.actionFields);
+
+    // If the server returned zero records the user has never saved a preference —
+    // treat every field as enabled (default-on) so the sidebar isn't blank.
+    sidebarPrefsCache = Object.keys(prefs).length > 0 ? prefs : null;
 
     // Return the canonical About contact fields, filtered by prefs (locked always on).
     const contactFields = SIDEBAR_CONTACT_CATALOG
@@ -9258,6 +9282,21 @@ function cleanupSidebarFieldsSync() {
 
 window.addEventListener('beforeunload', cleanupSidebarFieldsSync);
 
+// Instant refresh when the dashboard saves sidebar settings in the same browser.
+// The dashboard writes 'whatsync.sidebarFieldsUpdated' to localStorage as a signal;
+// content scripts on other tabs (WhatsApp) see the storage event and re-fetch.
+window.addEventListener('storage', async (event) => {
+  if (event.key === 'whatsync.sidebarFieldsUpdated') {
+    sidebarPrefsCache = null; // invalidate so next fetch goes to the network
+    lastSidebarFieldsHash = null;
+    try {
+      const { contactFields } = await getEnabledSidebarFields(await getExtensionUserId());
+      lastSidebarFieldsHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
+    } catch { /* ignore */ }
+    refreshAboutSection();
+  }
+});
+
 window.testSidebarFieldsRefresh = async function() {
   await refreshAboutSection();
 };
@@ -9280,7 +9319,7 @@ async function startSidebarFieldsPolling(userId) {
     // use defaults
   }
 
-  // Poll every 5 seconds
+  // Poll every 30 seconds (5 s was hammering the API on every tab)
   sidebarFieldsPollingInterval = setInterval(async () => {
     if (extensionContextInvalidated) {
       stopSidebarFieldsPolling();
@@ -9298,7 +9337,7 @@ async function startSidebarFieldsPolling(userId) {
     } catch {
       // ignore transient polling errors
     }
-  }, 5000);
+  }, 30000);
 }
 
 /**
@@ -9734,7 +9773,7 @@ async function getWhatsyncState() {
 // State screens shown in the sidebar when we can't show CRM data yet.
 function renderSignInState(sidebarContent) {
   sidebarContent.innerHTML = `
-    <div class="ws-state">
+    <div class="ws-state ws-login-form-state">
       <div class="ws-state-icon">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
@@ -9743,21 +9782,82 @@ function renderSignInState(sidebarContent) {
         </svg>
       </div>
       <h4>Sign in to WhatSync</h4>
-      <p>Log in to your WhatSync account to see HubSpot CRM details for your chats.</p>
-      <button class="ws-state-btn" id="ws-signin-btn">Sign in</button>
-      <p class="ws-state-hint">Tip: you can also click the WhatSync icon in your browser toolbar.</p>
+      <p>Log in to sync HubSpot CRM details with your chats.</p>
+      <form class="ws-inline-login" id="ws-inline-login-form" autocomplete="on">
+        <input type="email" id="ws-login-email" class="ws-login-input" placeholder="Email" autocomplete="username" required />
+        <input type="password" id="ws-login-password" class="ws-login-input" placeholder="Password" autocomplete="current-password" required />
+        <div class="ws-login-error" id="ws-login-error" style="display:none"></div>
+        <button type="submit" class="ws-state-btn ws-login-submit" id="ws-login-submit-btn">Sign in</button>
+      </form>
+      <p class="ws-state-hint">
+        Don't have an account?
+        <a href="https://whatsync.io/auth" target="_blank" rel="noopener noreferrer" class="ws-state-link">Sign up free</a>
+      </p>
     </div>
   `;
-  const btn = sidebarContent.querySelector('#ws-signin-btn');
-  if (btn) {
-    btn.addEventListener('click', () => {
-      // Try to open the extension popup; fall back to the web login.
-      try {
-        sendExtensionMessage({ action: 'openPopup' }).catch(() => {});
-      } catch { /* ignore */ }
-      window.open('https://whatsync.io/auth', '_blank', 'noopener,noreferrer');
-    });
-  }
+
+  const form = sidebarContent.querySelector('#ws-inline-login-form');
+  const emailInput = sidebarContent.querySelector('#ws-login-email');
+  const passwordInput = sidebarContent.querySelector('#ws-login-password');
+  const errorDiv = sidebarContent.querySelector('#ws-login-error');
+  const submitBtn = sidebarContent.querySelector('#ws-login-submit-btn');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+    if (!email || !password) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Signing in…';
+    errorDiv.style.display = 'none';
+
+    try {
+      const edgeUrl = `${typeof EDGE_FUNCTIONS_CONFIG !== 'undefined' ? EDGE_FUNCTIONS_CONFIG.url : 'https://ogsvchujqpayuckxuwdf.supabase.co'}/functions/v1/external-auth`;
+      const anonKey = typeof EDGE_FUNCTIONS_CONFIG !== 'undefined' ? EDGE_FUNCTIONS_CONFIG.anonKey : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
+
+      const response = await fetch(edgeUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: anonKey,
+          Authorization: `Bearer ${anonKey}`,
+        },
+        body: JSON.stringify({ action: 'signIn', email, password }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) {
+        throw new Error(data.error || `Login failed (${response.status})`);
+      }
+      if (!data.user || !data.session) {
+        throw new Error('Unexpected server response. Please try again.');
+      }
+
+      const session = data.session;
+      await chrome.storage.local.set({
+        userLoggedIn: true,
+        userId: data.user.id,
+        accessToken: session.access_token || null,
+        refreshToken: session.refresh_token || null,
+        loginTimestamp: Date.now(),
+        external_auth_session: { ...session, user: data.user },
+        userProfile: {
+          id: data.user.id,
+          email: data.user.email || email,
+          name: data.user.user_metadata?.full_name || data.user.user_metadata?.name || email.split('@')[0],
+        },
+      });
+
+      // Refresh sidebar now that we're logged in — no redirect needed.
+      updateSidebarContent();
+    } catch (err) {
+      errorDiv.textContent = err.message || 'Sign in failed. Please try again.';
+      errorDiv.style.display = 'block';
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Sign in';
+    }
+  });
 }
 
 function renderConnectHubSpotState(sidebarContent) {
@@ -9769,15 +9869,25 @@ function renderConnectHubSpotState(sidebarContent) {
         </svg>
       </div>
       <h4>Connect HubSpot</h4>
-      <p>You're signed in, but your HubSpot account isn't connected yet. Connect it in the WhatSync dashboard to sync contacts, deals and activity here.</p>
-      <button class="ws-state-btn" id="ws-connect-btn">Open WhatSync dashboard</button>
-      <p class="ws-state-hint">After connecting, reopen this panel — it updates automatically.</p>
+      <p>You're signed in, but HubSpot isn't connected yet. Connect it once in the WhatSync dashboard and you're set forever.</p>
+      <button class="ws-state-btn" id="ws-connect-btn">Connect HubSpot</button>
+      <button class="ws-state-btn ws-state-btn-secondary" id="ws-hs-retry-btn">I already connected — check again</button>
     </div>
   `;
-  const btn = sidebarContent.querySelector('#ws-connect-btn');
-  if (btn) {
-    btn.addEventListener('click', () => {
+  const connectBtn = sidebarContent.querySelector('#ws-connect-btn');
+  if (connectBtn) {
+    connectBtn.addEventListener('click', () => {
       window.open('https://whatsync.io/dashboard', '_blank', 'noopener,noreferrer');
+    });
+  }
+  const retryBtn = sidebarContent.querySelector('#ws-hs-retry-btn');
+  if (retryBtn) {
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = 'Checking…';
+      // Force a fresh check by clearing the in-memory cache via background message
+      await sendExtensionMessage({ action: 'clearHubSpotCache' }).catch(() => {});
+      updateSidebarContent();
     });
   }
 }

@@ -8409,6 +8409,48 @@ function setupCopyEmailHandler() {
 }
 
 // Function to setup create contact form handler
+// Free/personal email providers — mirrors HubSpot, which does NOT derive a
+// company from these domains (it would fall back to the website instead).
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in', 'ymail.com',
+  'hotmail.com', 'hotmail.co.uk', 'outlook.com', 'live.com', 'msn.com', 'aol.com',
+  'icloud.com', 'me.com', 'mac.com', 'protonmail.com', 'proton.me', 'gmx.com', 'gmx.net',
+  'zoho.com', 'yandex.com', 'yandex.ru', 'mail.com', 'mail.ru', 'qq.com', '163.com',
+  '126.com', 'hey.com', 'fastmail.com', 'pm.me', 'rocketmail.com', 'inbox.com',
+]);
+
+// Multi-part TLDs where the registrable name is the third-from-last label.
+const TWO_PART_TLDS = new Set([
+  'co.uk', 'org.uk', 'me.uk', 'co.nz', 'co.za', 'com.au', 'net.au', 'org.au',
+  'com.br', 'co.in', 'co.jp', 'com.sg', 'com.mx', 'co.ke', 'ae.org',
+]);
+
+// Derive a company name from a business email, the way HubSpot's create form
+// auto-fills it from the domain. Returns null for free-email domains / invalid.
+function companyNameFromEmail(email) {
+  const at = String(email || '').trim().toLowerCase();
+  const m = at.match(/^[^\s@]+@([^\s@]+\.[^\s@]+)$/);
+  if (!m) return null;
+  const domain = m[1];
+  if (FREE_EMAIL_DOMAINS.has(domain)) return null;
+
+  const parts = domain.split('.');
+  let label;
+  const lastTwo = parts.slice(-2).join('.');
+  if (parts.length >= 3 && TWO_PART_TLDS.has(lastTwo)) {
+    label = parts[parts.length - 3];
+  } else {
+    label = parts[parts.length - 2];
+  }
+  if (!label) return null;
+  // Title-case, treating hyphens/underscores as word breaks (acme-corp -> Acme Corp).
+  return label
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 // Populate a create-form <select> with the user's real HubSpot property options
 // (custom stages/labels included), via the existing getPropertyOptions action.
 async function populateCreateFormSelect(selectId, property, placeholder) {
@@ -8492,6 +8534,27 @@ function setupCreateContactForm(phoneNumber) {
   // they see in HubSpot instead of hardcoded defaults.
   populateCreateFormSelect('lifecycleStage', 'lifecyclestage', 'Select Lifecycle Stage');
   populateCreateFormSelect('leadStatus', 'hs_lead_status', 'Select Lead Status');
+
+  // Auto-fill Company from the email domain (HubSpot create-form behavior):
+  // business domains -> company name; free-email domains (gmail, etc.) skipped.
+  // Only fills when Company is empty so it never overwrites the user's input.
+  const emailInput = document.getElementById('email');
+  const companyInput = document.getElementById('company');
+  if (emailInput && companyInput) {
+    const autofillCompany = () => {
+      const derived = companyNameFromEmail(emailInput.value);
+      if (derived && !companyInput.value.trim()) {
+        companyInput.value = derived;
+        companyInput.dataset.autofilledFromEmail = 'true';
+      }
+    };
+    emailInput.addEventListener('blur', autofillCompany);
+    emailInput.addEventListener('change', autofillCompany);
+    // If the user edits Company themselves, stop auto-managing it.
+    companyInput.addEventListener('input', () => {
+      delete companyInput.dataset.autofilledFromEmail;
+    });
+  }
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

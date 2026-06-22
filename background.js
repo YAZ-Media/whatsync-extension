@@ -1736,8 +1736,29 @@ async function logContactCreationToSupabase(userId, accessToken, contactData, hu
 }
 
 // Helper function to refresh access token using refresh token
+let refreshInFlight = null;
+
 async function refreshAccessToken(refreshToken) {
+  // Collapse concurrent refreshes into a single in-flight request. Supabase
+  // rotates refresh tokens, so two parallel refreshes reusing the same token
+  // make the second fail with "refresh_token_already_used". Single-flight (plus
+  // re-reading the freshest token below) prevents that race between the startup
+  // check, the periodic alarm, and on-demand 401 retries.
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefreshAccessToken(refreshToken).finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function doRefreshAccessToken(refreshTokenArg) {
   try {
+    // Always refresh with the freshest stored token; the caller may have
+    // captured an older one before another path rotated it.
+    const latest = await getStoredRefreshToken();
+    const refreshToken = latest || refreshTokenArg;
+    if (!refreshToken) return null;
+
     console.log('[Background] Attempting to refresh access token...');
     const response = await fetchWithTimeout(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST',
@@ -1749,13 +1770,24 @@ async function refreshAccessToken(refreshToken) {
         refresh_token: refreshToken
       })
     });
-    
+
     if (!response.ok) {
       const errorText = await response.text();
+      // The refresh token was already rotated (commonly by the dashboard tab or
+      // another worker wake-up). If storage already holds a still-valid access
+      // token, adopt it instead of failing — avoids a needless sign-out.
+      if (response.status === 400 && /already.used|invalid.refresh.token/i.test(errorText)) {
+        const { accessToken: stored } = await chrome.storage.local.get(['accessToken']);
+        const expMs = stored ? getJwtExpMs(stored) : 0;
+        if (stored && expMs && expMs - Date.now() > SESSION_CONFIG.refreshLeewayMs) {
+          console.log('[Background] Refresh token already rotated; using current valid token from storage.');
+          return stored;
+        }
+      }
       console.error('[Background] Failed to refresh token:', response.status, errorText);
       return null;
     }
-    
+
     const data = await response.json();
     const newAccessToken = data.access_token;
     const newRefreshToken = data.refresh_token || refreshToken; // Use new refresh token if provided

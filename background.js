@@ -691,10 +691,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: 'Missing property', options: [] });
           return;
         }
-        const result = await callHubSpotEdgeFunction('getContactPropertyOptions', { property, objectType });
+        const result = await callHubSpotEdgeFunction('getPropertyOptions', { property, objectType });
         sendResponse({ success: true, options: result?.options || [] });
       } catch (error) {
-        console.error('[Background] getContactPropertyOptions failed:', error);
+        console.error('[Background] getPropertyOptions failed:', error);
         sendResponse({ success: false, error: error.message, options: [] });
       }
     })();

@@ -8791,8 +8791,8 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
             <input type="text" id="lastName" name="lastName" value="${escapeHtml(defaultLastName)}">
           </div>
           <div class="form-group">
-            <label for="email">Email</label>
-            <input type="email" id="email" name="email">
+            <label for="email">Email *</label>
+            <input type="email" id="email" name="email" required>
           </div>
           <div class="form-group">
             <label for="phone">Phone</label>

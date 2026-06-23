@@ -8480,52 +8480,70 @@ let cachedUserEmail = null;
 
 // Scan the open WhatsApp conversation for contact details people commonly share
 // in-chat, to pre-fill the create-contact form. Best-effort suggestions only —
-// every value is editable before the user submits.
+// every value is editable before the user submits. Robust to WhatsApp DOM class
+// churn: reads mailto:/http links directly and the conversation's raw text,
+// rather than relying on specific bubble/text-span class names.
 function extractContactInfoFromChat() {
-  const result = { email: null, jobTitle: null };
+  const result = { email: null, jobTitle: null, company: null, firstName: null };
   try {
     const main = document.querySelector('#main');
     if (!main) return result;
 
-    // Strip the user's own email so we don't suggest it as the contact's.
-    // cachedUserEmail is populated by formatCreateContactForm before this runs.
     const ownEmail = (cachedUserEmail || '').toLowerCase() || null;
+    const cleanEmail = (e) => e.toLowerCase().replace(/[.,;:)\]>]+$/, '');
+    const fullText = main.textContent || '';
 
-    const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-    const JOB_RE = /\b(CEO|CTO|CFO|COO|CMO|Founder|Co-?Founder|Owner|Director|Manager|Head of [A-Za-z ]{2,30}|VP of [A-Za-z ]{2,30}|President|Partner|Consultant|Engineer|Designer|Marketing Manager|Sales Manager|Account Manager)\b/i;
-
-    // Bubbles are in chronological DOM order; prefer the contact's own
-    // (incoming) messages, falling back to the most recent email anywhere.
-    const bubbles = main.querySelectorAll('div.message-in, div.message-out');
-    let incomingEmail = null;
-    let anyEmail = null;
-    let jobTitle = null;
-    bubbles.forEach((bubble) => {
-      const textEl = bubble.querySelector('.copyable-text span.selectable-text, span.selectable-text');
-      const text = textEl?.textContent || '';
-      if (!text) return;
-
-      const matches = text.match(EMAIL_RE);
-      if (matches) {
-        for (const raw of matches) {
-          const email = raw.toLowerCase().replace(/[.,;:)]+$/, '');
-          if (ownEmail && email === ownEmail) continue;
-          anyEmail = email;
-          if (bubble.classList.contains('message-in')) incomingEmail = email;
-        }
-      }
-
-      if (!jobTitle) {
-        const jm = text.match(JOB_RE);
-        if (jm) {
-          // Cut a trailing " at <company>" so we keep just the title.
-          jobTitle = jm[0].split(/\s+(?:at|@|,|\||-)\s+/i)[0].replace(/\s+/g, ' ').trim();
-        }
-      }
+    // ---- Email: mailto: links first (WhatsApp auto-links them), then raw text.
+    // Last non-own match wins (most recent in DOM order).
+    let email = null;
+    main.querySelectorAll('a[href^="mailto:" i]').forEach((a) => {
+      const e = cleanEmail((a.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0]);
+      if (e && (!ownEmail || e !== ownEmail)) email = e;
     });
+    if (!email) {
+      const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+      const matches = fullText.match(EMAIL_RE) || [];
+      for (const raw of matches) {
+        const e = cleanEmail(raw);
+        if (!ownEmail || e !== ownEmail) email = e; // last wins
+      }
+    }
+    result.email = email;
 
-    result.email = incomingEmail || anyEmail;
-    result.jobTitle = jobTitle;
+    // ---- Name + company from a self-introduction, e.g.
+    // "This is Kayal from Amplus Mortgage Consultants" / "I'm Sara at Globex".
+    const intro = fullText.match(
+      /\b(?:this is|i['’`]?m|i am|my name is|here is|it['’`]?s)\s+([A-Z][a-zA-Z]+)(?:\s+(?:from|at|with|of)\s+([A-Z][A-Za-z0-9&.\-' ]{1,40}?))?(?=[.,!?\n]|\s+(?:and|here|to|for)\b|$)/i
+    );
+    if (intro) {
+      result.firstName = intro[1];
+      if (intro[2]) {
+        result.company = intro[2]
+          .replace(/\s+(consultants?|company|llc|inc|ltd|co|group|agency|solutions?)\.?$/i, '')
+          .trim() || intro[2].trim();
+      }
+    }
+
+    // ---- Company fallback: first non-social website link's domain.
+    if (!result.company) {
+      const links = Array.from(main.querySelectorAll('a[href^="http" i]'))
+        .map((a) => a.getAttribute('href') || '');
+      const site = links.find((h) =>
+        !/whatsapp|wa\.me|facebook|fb\.com|instagram|twitter|x\.com|linkedin|youtu|t\.me|tiktok|maps\.|goo\.gl/i.test(h));
+      const m = site && site.match(/^https?:\/\/(?:www\.)?([^\/?#]+)/i);
+      if (m && typeof companyNameFromEmail === 'function') {
+        result.company = companyNameFromEmail(`x@${m[1]}`); // reuse domain->name logic
+      }
+    }
+
+    // ---- Job title.
+    const JOB_RE = /\b(CEO|CTO|CFO|COO|CMO|Founder|Co-?Founder|Owner|Managing Director|Director|Head of [A-Za-z ]{2,30}|VP of [A-Za-z ]{2,30}|President|Partner|Marketing Manager|Sales Manager|Account Manager|Project Manager|Manager)\b/i;
+    const jm = fullText.match(JOB_RE);
+    if (jm) {
+      result.jobTitle = jm[0].split(/\s+(?:at|@|,|\||-|from)\s+/i)[0].replace(/\s+/g, ' ').trim();
+    }
+
+    console.log('[Content] Chat prefill scan:', result);
   } catch (e) {
     console.warn('[Content] extractContactInfoFromChat failed:', e?.message);
   }
@@ -8614,14 +8632,29 @@ function setupCreateContactForm(phoneNumber) {
     });
 
     // Pre-fill from the conversation: most chats already contain the person's
-    // email (and a job title in a signature). These are editable suggestions —
-    // only fill fields the user left blank, and let Company cascade from email.
+    // email, name, company, and sometimes a job title. These are editable
+    // suggestions — only fill fields the user left blank.
     const scanned = extractContactInfoFromChat();
+
+    // Name (useful for unsaved contacts where the header is just a number).
+    const firstNameInput = document.getElementById('firstName');
+    if (firstNameInput && scanned.firstName && !firstNameInput.value.trim()) {
+      firstNameInput.value = scanned.firstName;
+    }
+
+    // Company from the intro/website takes precedence over the email-domain
+    // guess (e.g. "Amplus Mortgage" reads better than "Amplusmortgage").
+    if (scanned.company && !companyInput.value.trim()) {
+      companyInput.value = scanned.company;
+      companyInput.dataset.autofilledFromEmail = 'true';
+    }
+
     if (scanned.email && !emailInput.value.trim()) {
       emailInput.value = scanned.email;
       emailInput.dataset.autofilledFromChat = 'true';
-      autofillCompany();
+      autofillCompany(); // fills Company from the domain only if still blank
     }
+
     const jobInput = document.getElementById('jobTitle');
     if (jobInput && scanned.jobTitle && !jobInput.value.trim()) {
       jobInput.value = scanned.jobTitle;

@@ -8894,16 +8894,16 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
         <h5>Create New Contact</h5>
         <form id="createContactForm" class="create-contact-form">
           <div class="form-group">
+            <label for="email">Email *</label>
+            <input type="email" id="email" name="email" required>
+          </div>
+          <div class="form-group">
             <label for="firstName">First Name *</label>
             <input type="text" id="firstName" name="firstName" value="${escapeHtml(defaultFirstName)}" required>
           </div>
           <div class="form-group">
             <label for="lastName">Last Name</label>
             <input type="text" id="lastName" name="lastName" value="${escapeHtml(defaultLastName)}">
-          </div>
-          <div class="form-group">
-            <label for="email">Email *</label>
-            <input type="email" id="email" name="email" required>
           </div>
           <div class="form-group">
             <label for="phone">Phone</label>

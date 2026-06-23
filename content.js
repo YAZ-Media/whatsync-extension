@@ -8474,6 +8474,64 @@ async function populateCreateFormSelect(selectId, property, placeholder) {
   }
 }
 
+// The signed-in user's own email, cached so the in-chat scanner can exclude it
+// from contact suggestions. Populated (async) by formatCreateContactForm.
+let cachedUserEmail = null;
+
+// Scan the open WhatsApp conversation for contact details people commonly share
+// in-chat, to pre-fill the create-contact form. Best-effort suggestions only —
+// every value is editable before the user submits.
+function extractContactInfoFromChat() {
+  const result = { email: null, jobTitle: null };
+  try {
+    const main = document.querySelector('#main');
+    if (!main) return result;
+
+    // Strip the user's own email so we don't suggest it as the contact's.
+    // cachedUserEmail is populated by formatCreateContactForm before this runs.
+    const ownEmail = (cachedUserEmail || '').toLowerCase() || null;
+
+    const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+    const JOB_RE = /\b(CEO|CTO|CFO|COO|CMO|Founder|Co-?Founder|Owner|Director|Manager|Head of [A-Za-z ]{2,30}|VP of [A-Za-z ]{2,30}|President|Partner|Consultant|Engineer|Designer|Marketing Manager|Sales Manager|Account Manager)\b/i;
+
+    // Bubbles are in chronological DOM order; prefer the contact's own
+    // (incoming) messages, falling back to the most recent email anywhere.
+    const bubbles = main.querySelectorAll('div.message-in, div.message-out');
+    let incomingEmail = null;
+    let anyEmail = null;
+    let jobTitle = null;
+    bubbles.forEach((bubble) => {
+      const textEl = bubble.querySelector('.copyable-text span.selectable-text, span.selectable-text');
+      const text = textEl?.textContent || '';
+      if (!text) return;
+
+      const matches = text.match(EMAIL_RE);
+      if (matches) {
+        for (const raw of matches) {
+          const email = raw.toLowerCase().replace(/[.,;:)]+$/, '');
+          if (ownEmail && email === ownEmail) continue;
+          anyEmail = email;
+          if (bubble.classList.contains('message-in')) incomingEmail = email;
+        }
+      }
+
+      if (!jobTitle) {
+        const jm = text.match(JOB_RE);
+        if (jm) {
+          // Cut a trailing " at <company>" so we keep just the title.
+          jobTitle = jm[0].split(/\s+(?:at|@|,|\||-)\s+/i)[0].replace(/\s+/g, ' ').trim();
+        }
+      }
+    });
+
+    result.email = incomingEmail || anyEmail;
+    result.jobTitle = jobTitle;
+  } catch (e) {
+    console.warn('[Content] extractContactInfoFromChat failed:', e?.message);
+  }
+  return result;
+}
+
 function setupCreateContactForm(phoneNumber) {
   const form = document.getElementById('createContactForm');
   const createBtn = document.getElementById('createContactBtn');
@@ -8554,6 +8612,20 @@ function setupCreateContactForm(phoneNumber) {
     companyInput.addEventListener('input', () => {
       delete companyInput.dataset.autofilledFromEmail;
     });
+
+    // Pre-fill from the conversation: most chats already contain the person's
+    // email (and a job title in a signature). These are editable suggestions —
+    // only fill fields the user left blank, and let Company cascade from email.
+    const scanned = extractContactInfoFromChat();
+    if (scanned.email && !emailInput.value.trim()) {
+      emailInput.value = scanned.email;
+      emailInput.dataset.autofilledFromChat = 'true';
+      autofillCompany();
+    }
+    const jobInput = document.getElementById('jobTitle');
+    if (jobInput && scanned.jobTitle && !jobInput.value.trim()) {
+      jobInput.value = scanned.jobTitle;
+    }
   }
 
   form.addEventListener('submit', async (e) => {
@@ -8747,6 +8819,12 @@ async function checkHubSpotContact(phoneNumber) {
 // Function to format create contact form HTML (respects privacy mask_phone for display)
 async function formatCreateContactForm(phoneNumber, options = {}) {
   const { manualPhoneEntry = false } = options;
+  // Cache the signed-in user's email so the in-chat scanner won't suggest it as
+  // the new contact's email.
+  try {
+    const session = await getExtensionSession();
+    cachedUserEmail = session?.user?.email || session?.session?.user?.email || cachedUserEmail;
+  } catch (_) { /* best-effort */ }
   const contactName = getCurrentContactName()?.trim() || '';
   // Convert phone number to HubSpot format (with dashes) for display
   const hubspotPhoneFormat = phoneNumber ? formatPhoneForHubSpot(phoneNumber) : '';

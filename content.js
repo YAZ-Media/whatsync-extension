@@ -8703,29 +8703,33 @@ function setupCreateContactForm(phoneNumber) {
     };
     
     try {
-      const result = await createHubSpotContact(contactData);
-      
-      // Show success message
-      messageDiv.className = 'form-message success';
-      messageDiv.textContent = '✅ Contact created successfully in HubSpot!';
-      messageDiv.style.display = 'block';
-      
-      // Reset form
-      form.reset();
-      // Restore phone display (masked if privacy.mask_phone) and real value for submit
-      const realPhone = formatPhoneForHubSpot(phoneNumber);
-      const phoneInput = document.getElementById('phone');
-      if (phoneInput) {
-        const privacy = await getPrivacySettings();
-        phoneInput.value = privacy.mask_phone && realPhone ? maskPhoneForPrivacy(realPhone) : (realPhone || '');
-        phoneInput.setAttribute('data-phone-full', realPhone || '');
+      await createHubSpotContact(contactData);
+
+      // Success: swap the form for a clean confirmation card, then open the
+      // freshly-created contact's record in the sidebar.
+      const createdName =
+        `${firstName} ${lastName}`.trim() || getCurrentContactName() || 'Contact';
+      const container = form.closest('.no-contact-found') || form.parentElement;
+      if (container) {
+        container.innerHTML = `
+          <div class="create-success" role="status" aria-live="polite">
+            <div class="create-success-check">
+              <svg viewBox="0 0 52 52" aria-hidden="true">
+                <circle class="cs-circle" cx="26" cy="26" r="24" fill="none"/>
+                <path class="cs-check" fill="none" d="M14 27 l8 8 l16 -18"/>
+              </svg>
+            </div>
+            <h4>Contact created</h4>
+            <p><strong>${escapeHtml(createdName)}</strong> was added to your HubSpot CRM.</p>
+            <div class="create-success-loading"><span class="btn-spinner"></span> Opening their record…</div>
+          </div>`;
       }
-      
-      // Reload sidebar content to show the new contact after a short delay
+
+      // Reload sidebar content to show the new contact after a short beat.
       setTimeout(() => {
         updateSidebarContent();
-      }, 1500);
-      
+      }, 1600);
+
     } catch (error) {
       // Show error message
       messageDiv.className = 'form-message error';
@@ -8939,7 +8943,7 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
           <div class="form-actions">
             <button type="submit" id="createContactBtn" class="create-btn">
               <span class="btn-text">Create Contact</span>
-              <span class="btn-loading" style="display: none;">Creating...</span>
+              <span class="btn-loading" style="display: none;"><span class="btn-spinner" aria-hidden="true"></span>Creating…</span>
             </button>
           </div>
           <div id="createContactMessage" class="form-message" style="display: none;"></div>

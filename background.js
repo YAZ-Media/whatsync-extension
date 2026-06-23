@@ -178,7 +178,19 @@ async function callHubSpotEdgeFunction(action, data = {}) {
       throw new Error(message);
     }
 
-    return await response.json();
+    const body = await response.json();
+    // The hubspot edge function wraps failures as HTTP 200 with an
+    // { error, status, notConnected } body (so the API gateway doesn't swallow
+    // the detail). Surface those as thrown errors so callers never mistake an
+    // error payload for a successful result (this caused create-contact to
+    // report success while nothing was saved).
+    if (body && typeof body === 'object' && typeof body.error === 'string' && body.error) {
+      const err = new Error(body.error);
+      err.status = body.status;
+      err.notConnected = body.notConnected === true;
+      throw err;
+    }
+    return body;
   } catch (error) {
     const message = error?.message || 'Edge function call failed';
     if (message !== 'Not authenticated') {
@@ -2224,7 +2236,13 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
     
     // Handle different response formats from edge function
     const createdContact = result.results?.[0] || result.data?.[0] || result.data || result;
-    
+
+    // A real HubSpot contact always has an id. Guard against error-shaped or
+    // empty payloads being treated as a successful creation.
+    if (!createdContact || createdContact.error || !createdContact.id) {
+      throw new Error(createdContact?.error || result?.error || 'HubSpot did not return a created contact');
+    }
+
     if (createdContact) {
       console.log('[Background] ✅ Contact created successfully');
       console.log('[Background] Created contact details:', createdContact);

@@ -2384,6 +2384,24 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
   }
 }
 
+// HubSpot calculated/read-only contact properties. Sending any of these in a
+// create/update payload makes HubSpot reject the entire request (READ_ONLY_VALUE).
+const READ_ONLY_HUBSPOT_PROPERTIES = new Set([
+  'notes_last_contacted',
+  'notes_last_updated',
+  'notes_next_activity_date',
+  'num_contacted_notes',
+  'num_notes',
+  'hs_last_sales_activity_timestamp',
+  'lastmodifieddate',
+  'hs_lastmodifieddate',
+  'createdate',
+  'hs_object_id',
+  'hubspot_owner_assigneddate',
+  'first_conversion_date',
+  'recent_conversion_date',
+]);
+
 const DEFAULT_SYNC_SETTINGS = {
   auto_sync_contacts: false,
   auto_create_companies: false,
@@ -2477,6 +2495,14 @@ function applyFieldMappings(sourceData, mappings, extraProperties = {}) {
     }
 
     properties[mapping.target] = String(value);
+  }
+
+  // HubSpot rejects the whole create/update if any read-only (calculated)
+  // property is included. Strip them defensively so a stale or user-edited
+  // field mapping (e.g. last_message_date → notes_last_contacted) can't break
+  // contact creation.
+  for (const key of Object.keys(properties)) {
+    if (READ_ONLY_HUBSPOT_PROPERTIES.has(key)) delete properties[key];
   }
 
   return properties;

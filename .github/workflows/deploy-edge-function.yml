@@ -45,10 +45,12 @@ jobs:
           [ "$status" = "204" ] || { echo "::error::CORS preflight returned $status (expected 204)"; exit 1; }
           echo "CORS preflight OK (204)"
 
-          status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$URL" \
+          # The function wraps errors as HTTP 200 with { error, status } in the
+          # body (so supabase-js clients see the detail) — check the body.
+          body=$(curl -s -X POST "$URL" \
             -H "Content-Type: application/json" -H "apikey: $ANON" \
             -d '{"action":"getTemplates"}')
-          [ "$status" = "401" ] || { echo "::error::Unauthenticated POST returned $status (expected 401)"; exit 1; }
-          echo "Auth gate OK (401 without user session)"
+          echo "$body" | grep -q '"status":401' || { echo "::error::Unauthenticated POST response: $body"; exit 1; }
+          echo "Auth gate OK (401 error body without user session)"
 
           echo "Deploy verified — hubspot edge function is live."

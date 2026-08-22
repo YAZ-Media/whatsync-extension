@@ -38,14 +38,17 @@ if [ "$status" != "204" ]; then
 fi
 echo -e "${GREEN}OK: CORS preflight (204)${NC}"
 
-# 2. Unauthenticated requests must be rejected with 401 by the function itself.
-status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$FUNCTION_URL" \
+# 2. Unauthenticated requests must be rejected by the function's auth gate.
+# The function wraps errors as HTTP 200 with { error, status } in the body
+# (so supabase-js clients see the detail), so check the body, not the code.
+body=$(curl -s -X POST "$FUNCTION_URL" \
   -H "Content-Type: application/json" -H "apikey: $ANON_KEY" \
   -d '{"action":"getTemplates"}')
-if [ "$status" != "401" ]; then
-  echo -e "${RED}FAIL: unauthenticated POST returned $status (expected 401)${NC}"; exit 1
+if echo "$body" | grep -q '"status":401'; then
+  echo -e "${GREEN}OK: auth gate (401 error body without user session)${NC}"
+else
+  echo -e "${RED}FAIL: unauthenticated POST response: $body${NC}"; exit 1
 fi
-echo -e "${GREEN}OK: auth gate (401 without user session)${NC}"
 
 # 3. Authenticated round-trip (only when a user JWT is provided).
 if [ -n "${SUPABASE_JWT:-}" ]; then

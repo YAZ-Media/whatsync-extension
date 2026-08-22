@@ -60,9 +60,12 @@ async function getAuthenticatedUserId(req: Request): Promise<string> {
   const res = await fetch(`${EXTERNAL_SUPABASE_URL}/auth/v1/user`, {
     headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${jwt}` },
   });
+
   if (!res.ok) throw new HttpError(401, 'Invalid or expired session');
+
   const user = await res.json();
   if (!user?.id) throw new HttpError(401, 'Invalid session');
+
   return user.id as string;
 }
 
@@ -95,20 +98,13 @@ async function getHubSpotToken(userId: string): Promise<string> {
   const res = await db(
     `hubspot_connections?user_id=eq.${userId}&select=id,user_id,access_token,refresh_token,expires_at,status&limit=1`,
   );
-  if (!res.ok) {
-    // Surface WHY so a misconfigured secret is obvious from the response/logs:
-    //   db 401  -> EXTERNAL_SUPABASE_SERVICE_ROLE_KEY is wrong/not the service_role key
-    //   db 404  -> EXTERNAL_SUPABASE_URL points at the wrong project
-    const body = await res.text().catch(() => '');
-    console.error('[hubspot] hubspot_connections read failed', res.status, body.slice(0, 200));
-    throw new HttpError(500, `Failed to load HubSpot connection (db ${res.status})`);
-  }
+
+  if (!res.ok) throw new HttpError(500, 'Failed to load HubSpot connection');
+
   const rows: HubSpotConnection[] = await res.json();
   const conn = rows[0];
 
-  // 'active' is the connected state written by hubspot-oauth's oauthCallback.
-  // Anything else (not_connected, error, revoked, expired) means reconnect.
-  if (!conn || conn.status !== 'active' || !conn.access_token) {
+  if (!conn || conn.status === 'not_connected' || !conn.access_token) {
     throw new HttpError(403, 'HubSpot account is not connected');
   }
 
@@ -121,6 +117,7 @@ async function getHubSpotToken(userId: string): Promise<string> {
   if (!conn.refresh_token) {
     throw new HttpError(403, 'HubSpot session expired — please reconnect your account');
   }
+
   const refreshRes = await fetch(`${HUBSPOT_API}/oauth/v1/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -131,25 +128,29 @@ async function getHubSpotToken(userId: string): Promise<string> {
       refresh_token: conn.refresh_token,
     }),
   });
+
   if (!refreshRes.ok) {
     // Mark the connection so the dashboard can prompt a reconnect
     await db(`hubspot_connections?id=eq.${conn.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: 'error' }),
+      body: JSON.stringify({ status: 'expired' }),
     });
     throw new HttpError(403, 'HubSpot session expired — please reconnect your account');
   }
+
   const tokens = await refreshRes.json();
   const newExpiresAt = new Date(Date.now() + (tokens.expires_in ?? 1800) * 1000).toISOString();
+
   await db(`hubspot_connections?id=eq.${conn.id}`, {
     method: 'PATCH',
     body: JSON.stringify({
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token ?? conn.refresh_token,
       expires_at: newExpiresAt,
-      status: 'active',
+      status: 'connected',
     }),
   });
+
   return tokens.access_token as string;
 }
 
@@ -171,6 +172,7 @@ async function hubspot(
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
   const text = await res.text();
   let parsed: unknown = null;
   try {
@@ -178,11 +180,13 @@ async function hubspot(
   } catch {
     parsed = { raw: text };
   }
+
   if (!res.ok) {
     const message =
       (parsed as { message?: string })?.message ?? `HubSpot API error (${res.status})`;
     throw new HttpError(res.status, message);
   }
+
   return parsed;
 }
 
@@ -198,6 +202,7 @@ async function getContactAssociations(
     'GET',
     `/crm/v4/objects/contacts/${contactId}/associations/${objectType}`,
   )) as { results?: Array<{ toObjectId: number | string }> };
+
   const ids = (assoc.results ?? []).map((r) => String(r.toObjectId));
   if (ids.length === 0) return { results: [] };
 
@@ -205,6 +210,7 @@ async function getContactAssociations(
     inputs: ids.map((id) => ({ id })),
     properties,
   })) as { results?: unknown[] };
+
   return { results: batch.results ?? [] };
 }
 
@@ -218,9 +224,11 @@ async function insertActivityLog(userId: string, row: Record<string, unknown>): 
     headers: { Prefer: 'return=representation' },
     body: JSON.stringify({ ...row, user_id: userId }),
   });
+
   if (!res.ok) {
     throw new HttpError(500, `Failed to write activity log (${res.status})`);
   }
+
   const rows = await res.json();
   return { success: true, log: rows[0] ?? null };
 }
@@ -249,30 +257,124 @@ function buildLogRow(
 }
 
 // ---------------------------------------------------------------------------
-// Sidebar field preferences
+// Sidebar fields — canonical catalog (the exact keys the Chrome extension
+// gates on). One entry per key; locked keys are always enabled.
 // ---------------------------------------------------------------------------
 
+type SidebarFieldType = 'contact_info' | 'action' | 'section';
+
+interface SidebarCatalogEntry {
+  field_key: string;
+  field_label: string;
+  field_type: SidebarFieldType;
+  is_locked: boolean;
+}
+
+const SIDEBAR_CATALOG: SidebarCatalogEntry[] = [
+  // Contact fields
+  { field_key: 'firstname_lastname', field_label: 'Contact Name', field_type: 'contact_info', is_locked: true },
+  { field_key: 'phone', field_label: 'Phone', field_type: 'contact_info', is_locked: true },
+  { field_key: 'email', field_label: 'Email', field_type: 'contact_info', is_locked: false },
+  { field_key: 'company', field_label: 'Company', field_type: 'contact_info', is_locked: false },
+  { field_key: 'jobtitle', field_label: 'Job Title', field_type: 'contact_info', is_locked: false },
+  { field_key: 'hubspot_owner_id', field_label: 'Contact Owner', field_type: 'contact_info', is_locked: false },
+  { field_key: 'lifecyclestage', field_label: 'Lifecycle Stage', field_type: 'contact_info', is_locked: false },
+  { field_key: 'hs_lead_status', field_label: 'Lead Status', field_type: 'contact_info', is_locked: false },
+  { field_key: 'createdate', field_label: 'Create Date', field_type: 'contact_info', is_locked: false },
+  // Quick actions
+  { field_key: 'action_note', field_label: 'Note', field_type: 'action', is_locked: false },
+  { field_key: 'action_email', field_label: 'Email', field_type: 'action', is_locked: false },
+  { field_key: 'action_log_whatsapp', field_label: 'Log WhatsApp Message', field_type: 'action', is_locked: false },
+  { field_key: 'action_task', field_label: 'Task', field_type: 'action', is_locked: false },
+  { field_key: 'action_meeting', field_label: 'Meeting', field_type: 'action', is_locked: false },
+  { field_key: 'action_ticket', field_label: 'Create Ticket', field_type: 'action', is_locked: false },
+  { field_key: 'send_template', field_label: 'Send Template', field_type: 'action', is_locked: false },
+  // Sections
+  { field_key: 'section_activity', field_label: 'Recent Activity', field_type: 'section', is_locked: false },
+  { field_key: 'section_notes', field_label: 'Notes', field_type: 'section', is_locked: false },
+  { field_key: 'section_tickets', field_label: 'Tickets', field_type: 'section', is_locked: false },
+  { field_key: 'section_tasks', field_label: 'Tasks', field_type: 'section', is_locked: false },
+  { field_key: 'section_deals', field_label: 'Deals', field_type: 'section', is_locked: false },
+];
+
 async function getSidebarFields(userId: string): Promise<unknown> {
-  const [catalogRes, prefsRes] = await Promise.all([
-    db('sidebar_fields?select=field_key,field_label,field_type,icon,is_locked,sort_order&order=sort_order.asc'),
-    db(`hubspot_sidebar_fields?user_id=eq.${userId}&select=field_key,field_type,is_enabled`),
-  ]);
-  if (!catalogRes.ok || !prefsRes.ok) {
+  const prefsRes = await db(
+    `hubspot_sidebar_fields?user_id=eq.${userId}&select=field_key,is_enabled`,
+  );
+
+  if (!prefsRes.ok) {
     throw new HttpError(500, 'Failed to load sidebar field configuration');
   }
-  const catalog = await catalogRes.json();
-  const prefs = await prefsRes.json();
-  const prefMap = new Map(prefs.map((p: { field_key: string; is_enabled: boolean }) => [p.field_key, p.is_enabled]));
 
-  const withEnabled = catalog.map((f: { field_key: string; is_locked: boolean; field_type: string }) => ({
-    ...f,
+  const prefs: { field_key: string; is_enabled: boolean }[] = await prefsRes.json();
+  const prefMap = new Map(prefs.map((p) => [p.field_key, p.is_enabled]));
+
+  // Flat array — one entry per canonical key. Default true; locked always true.
+  const fields = SIDEBAR_CATALOG.map((f) => ({
+    field_key: f.field_key,
+    field_type: f.field_type,
+    is_enabled: f.is_locked ? true : prefMap.get(f.field_key) ?? true,
+  }));
+
+  // Backward-compat grouped shape alongside the canonical flat `fields` array.
+  const grouped = SIDEBAR_CATALOG.map((f) => ({
+    field_key: f.field_key,
+    field_label: f.field_label,
+    field_type: f.field_type,
+    is_locked: f.is_locked,
     is_enabled: f.is_locked ? true : prefMap.get(f.field_key) ?? true,
   }));
 
   return {
-    contactFields: withEnabled.filter((f: { field_type: string }) => f.field_type === 'contact_info'),
-    actionFields: withEnabled.filter((f: { field_type: string }) => f.field_type === 'action'),
+    fields,
+    contactFields: grouped.filter((f) => f.field_type === 'contact_info'),
+    actionFields: grouped.filter((f) => f.field_type === 'action'),
+    sectionFields: grouped.filter((f) => f.field_type === 'section'),
   };
+}
+
+async function saveSidebarFields(
+  userId: string,
+  data: Record<string, unknown>,
+): Promise<unknown> {
+  const incoming = Array.isArray(data.fields) ? data.fields : [];
+  if (incoming.length === 0) {
+    throw new HttpError(400, 'fields array is required');
+  }
+
+  const valid = new Map(SIDEBAR_CATALOG.map((f) => [f.field_key, f]));
+
+  const rows = incoming
+    .map((f) => {
+      const entry = f as { field_key?: unknown; field_type?: unknown; is_enabled?: unknown };
+      const key = String(entry.field_key ?? '');
+      const catalogEntry = valid.get(key);
+      if (!catalogEntry) return null; // ignore unknown keys
+      return {
+        user_id: userId,
+        field_key: key,
+        field_type: catalogEntry.field_type,
+        // Locked keys are always enabled regardless of what was posted.
+        is_enabled: catalogEntry.is_locked ? true : Boolean(entry.is_enabled),
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+
+  if (rows.length === 0) {
+    throw new HttpError(400, 'No valid fields to save');
+  }
+
+  const res = await db('hubspot_sidebar_fields?on_conflict=user_id,field_key', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(rows),
+  });
+
+  if (!res.ok) {
+    throw new HttpError(500, `Failed to save sidebar fields (${res.status}): ${await res.text()}`);
+  }
+
+  return { success: true, savedCount: rows.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,23 +444,9 @@ function buildTaskProperties(data: Record<string, unknown>): Record<string, unkn
   return props;
 }
 
-async function associateToContact(
-  token: string,
-  objectType: string,
-  objectId: string,
-  contactId: string,
-): Promise<void> {
-  // v4 default association covers the HUBSPOT_DEFINED type for each object pair.
-  await hubspot(
-    token,
-    'PUT',
-    `/crm/v4/objects/${objectType}/${objectId}/associations/default/contacts/${contactId}`,
-  );
-}
-
 // Merge a contact's engagement timeline (notes, tasks, calls, emails, meetings)
 // into one list, most recent first.
-async function getContactActivities(
+async function getContactEngagementTimeline(
   token: string,
   contactId: string,
   limit: number,
@@ -410,67 +498,92 @@ async function getContactActivities(
   return { activities: merged.slice(0, limit) };
 }
 
-// Evaluate the user's active automations for a trigger. Executes the simple,
-// safe action types (create_task / create_note) against the matched contact and
-// reports everything else back as matched-but-manual.
-async function evaluateAutomations(
-  userId: string,
-  data: Record<string, unknown>,
-): Promise<unknown> {
-  const triggerType = String(data.triggerType ?? '');
-  const context = (data.context as Record<string, unknown>) ?? {};
+// ---------------------------------------------------------------------------
+// Automations engine — evaluate user-defined rules and run HubSpot actions.
+// Conditions are AND'd; each is { field, operator, value }. Actions are
+// { type, config }. All HubSpot-native; no third-party integrations.
+// ---------------------------------------------------------------------------
 
-  const res = await db(
-    `automations?user_id=eq.${userId}&is_active=eq.true&select=id,name,trigger_type,trigger_config,action_type,action_config`,
-  );
-  if (!res.ok) return { success: true, total: 0, matched: [] };
-  const all = (await res.json()) as Array<{
-    id: string; name: string; trigger_type: string;
-    action_type: string; action_config: Record<string, unknown>;
-  }>;
-
-  const matched = all.filter((a) => a.trigger_type === triggerType);
-  // `total` lets the client stop firing per-message triggers when the user has
-  // no automations configured at all.
-  if (matched.length === 0) return { success: true, total: all.length, matched: [] };
-
-  const contactId = context.contactId ? String(context.contactId) : null;
-  const executed: Array<{ id: string; action: string; ok: boolean }> = [];
-
-  let token: string | null = null;
-  for (const automation of matched) {
-    let ok = false;
-    try {
-      if (contactId && (automation.action_type === 'create_task' || automation.action_type === 'create_note')) {
-        token = token ?? (await getHubSpotToken(userId));
-        const cfg = automation.action_config ?? {};
-        if (automation.action_type === 'create_task') {
-          const created = (await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
-            properties: buildTaskProperties({
-              subject: cfg.subject ?? `Automation: ${automation.name}`,
-              body: cfg.body ?? '',
-              priority: cfg.priority,
-            }),
-          })) as { id?: string };
-          if (created?.id) await associateToContact(token, 'tasks', String(created.id), contactId);
-        } else {
-          const created = (await hubspot(token, 'POST', '/crm/v3/objects/notes', {
-            properties: {
-              hs_note_body: String(cfg.body ?? `Automation "${automation.name}" fired.`),
-              hs_timestamp: Date.now(),
-            },
-          })) as { id?: string };
-          if (created?.id) await associateToContact(token, 'notes', String(created.id), contactId);
-        }
-        ok = true;
-      }
-    } catch (e) {
-      console.warn('[hubspot] automation execution failed:', automation.id, (e as Error)?.message);
-    }
-    executed.push({ id: automation.id, action: automation.action_type, ok });
+function evalAutomationCondition(actual: string, operator: string, value?: string): boolean {
+  const a = (actual ?? '').toString();
+  const v = (value ?? '').toString();
+  switch (operator) {
+    case 'eq': return a.toLowerCase() === v.toLowerCase();
+    case 'neq': return a.toLowerCase() !== v.toLowerCase();
+    case 'contains': return a.toLowerCase().includes(v.toLowerCase());
+    case 'exists': return a.trim() !== '';
+    case 'not_exists': return a.trim() === '';
+    case 'gt': return parseFloat(a) > parseFloat(v);
+    case 'lt': return parseFloat(a) < parseFloat(v);
+    default: return false;
   }
+}
 
-  return { success: true, total: all.length, matched: matched.map((m) => m.id), executed };
+async function executeAutomationAction(
+  token: string,
+  act: { type?: string; config?: Record<string, unknown> },
+  contactId: string,
+): Promise<void> {
+  const cfg = act.config || {};
+  const str = (k: string, d = '') => (cfg[k] == null ? d : String(cfg[k]));
+  const assoc = (typeId: number) =>
+    contactId
+      ? [{ to: { id: contactId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: typeId }] }]
+      : undefined;
+
+  switch (act.type) {
+    case 'create_task': {
+      const dueDays = Number(cfg.dueInDays ?? 0) || 0;
+      await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
+        properties: {
+          hs_task_subject: str('subject', 'Follow up'),
+          hs_task_body: str('body'),
+          hs_task_status: 'NOT_STARTED',
+          hs_task_priority: str('priority', 'MEDIUM'),
+          hs_timestamp: Date.now() + dueDays * 86400000,
+        },
+        associations: assoc(204),
+      });
+      break;
+    }
+    case 'create_note': {
+      await hubspot(token, 'POST', '/crm/v3/objects/notes', {
+        properties: { hs_note_body: str('body'), hs_timestamp: Date.now() },
+        associations: assoc(202),
+      });
+      break;
+    }
+    case 'update_property': {
+      const property = str('property');
+      if (property && contactId) {
+        await hubspot(token, 'PATCH', `/crm/v3/objects/contacts/${contactId}`, {
+          properties: { [property]: str('value') },
+        });
+      }
+      break;
+    }
+    case 'create_deal': {
+      const props: Record<string, unknown> = { dealname: str('dealname', 'New deal') };
+      if (cfg.amount) props.amount = str('amount');
+      if (cfg.pipeline) props.pipeline = str('pipeline');
+      if (cfg.stage) props.dealstage = str('stage');
+      await hubspot(token, 'POST', '/crm/v3/objects/deals', { properties: props, associations: assoc(3) });
+      break;
+    }
+    case 'create_ticket': {
+      await hubspot(token, 'POST', '/crm/v3/objects/tickets', {
+        properties: {
+          subject: str('subject', 'New ticket'),
+          content: str('content'),
+          hs_ticket_priority: str('priority', 'MEDIUM'),
+        },
+        associations: assoc(16),
+      });
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 async function handleAction(
@@ -482,35 +595,236 @@ async function handleAction(
   switch (action) {
     case 'getSidebarFields':
       return getSidebarFields(userId);
-    case 'getTemplates': {
+
+    case 'saveSidebarFields':
+      return saveSidebarFields(userId, data);
+
+    // ----- Automations (per-user, stored in the external DB) -----
+    case 'getAutomations': {
       const res = await db(
-        `message_templates?user_id=eq.${userId}&select=id,name,content,category,is_favorite,variables&order=is_favorite.desc,name.asc`,
+        `automations?user_id=eq.${userId}` +
+        `&select=id,user_id,name,description,enabled,trigger,conditions,actions,is_prebuilt,created_at,updated_at` +
+        `&order=created_at.desc`,
       );
-      if (!res.ok) throw new HttpError(500, 'Failed to load templates');
-      return { templates: await res.json() };
+      if (!res.ok) throw new HttpError(500, `Failed to load automations (${res.status})`);
+      return { automations: await res.json() };
     }
-    case 'evaluateAutomations':
-      return evaluateAutomations(userId, data);
+
+    case 'createAutomation': {
+      const { name, description, trigger, conditions, actions } = data as Record<string, unknown>;
+      if (!name || !trigger) throw new HttpError(400, 'Missing required fields: name, trigger');
+      const res = await db('automations', {
+        method: 'POST',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({
+          user_id: userId,
+          name,
+          description: description ?? null,
+          trigger,
+          conditions: Array.isArray(conditions) ? conditions : [],
+          actions: Array.isArray(actions) ? actions : [],
+          enabled: true,
+          is_prebuilt: false,
+        }),
+      });
+      if (!res.ok) throw new HttpError(500, `Failed to create automation (${res.status})`);
+      const rows = await res.json();
+      return { automation: rows[0] ?? null };
+    }
+
+    case 'updateAutomation': {
+      const d = data as Record<string, unknown>;
+      const automationId = d.automationId as string | undefined;
+      if (!automationId) throw new HttpError(400, 'Missing required field: automationId');
+      const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      for (const k of ['name', 'description', 'trigger', 'conditions', 'actions', 'enabled']) {
+        if (d[k] !== undefined) patch[k] = d[k];
+      }
+      const res = await db(
+        `automations?id=eq.${encodeURIComponent(automationId)}&user_id=eq.${userId}`,
+        { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(patch) },
+      );
+      if (!res.ok) throw new HttpError(500, `Failed to update automation (${res.status})`);
+      const rows = await res.json();
+      return { automation: rows[0] ?? null };
+    }
+
+    case 'deleteAutomation': {
+      const automationId = (data as { automationId?: string }).automationId;
+      if (!automationId) throw new HttpError(400, 'Missing required field: automationId');
+      const res = await db(
+        `automations?id=eq.${encodeURIComponent(automationId)}&user_id=eq.${userId}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) throw new HttpError(500, `Failed to delete automation (${res.status})`);
+      return { success: true };
+    }
+
+    // Evaluate this user's enabled automations for a trigger and execute matching
+    // actions. Fired by the extension on real events (contact matched, note/
+    // ticket/task/deal created). Conditions are checked against the contact's
+    // live HubSpot properties.
+    case 'evaluateAutomations': {
+      const triggerType = String((data as { triggerType?: string }).triggerType || '');
+      const context = (((data as { context?: Record<string, unknown> }).context) || {}) as Record<string, unknown>;
+      if (!triggerType) return { success: true, ran: 0, executed: 0, total: 0 };
+
+      const aRes = await db(
+        `automations?user_id=eq.${userId}&enabled=eq.true&trigger=eq.${encodeURIComponent(triggerType)}` +
+        `&select=id,name,conditions,actions`,
+      );
+      if (!aRes.ok) throw new HttpError(500, `Failed to load automations (${aRes.status})`);
+      const autos = (await aRes.json()) as Array<{ id: string; name: string; conditions: unknown; actions: unknown }>;
+      // `total` lets the extension back off from firing high-frequency message
+      // triggers when the user has no automations for that trigger at all.
+      if (!autos.length) return { success: true, ran: 0, executed: 0, total: 0 };
+
+      const token = await getHubSpotToken(userId);
+      const contactId = String(context.contactId ?? context.id ?? '');
+
+      // Pull the contact's live properties for any field a condition references.
+      const fields = new Set<string>(['email', 'phone', 'firstname', 'lastname', 'company', 'jobtitle', 'lifecyclestage', 'hs_lead_status']);
+      for (const a of autos) {
+        for (const c of (Array.isArray(a.conditions) ? a.conditions : []) as Array<{ field?: string }>) {
+          if (c?.field) fields.add(c.field);
+        }
+      }
+      let props: Record<string, unknown> = {};
+      if (contactId) {
+        try {
+          const c = (await hubspot(token, 'GET', `/crm/v3/objects/contacts/${contactId}?properties=${[...fields].join(',')}`)) as { properties?: Record<string, unknown> };
+          props = c.properties || {};
+        } catch (_) { /* contact may not exist yet */ }
+      }
+      const valueOf = (f?: string) => {
+        if (!f) return '';
+        const v = props[f] ?? context[f];
+        return v == null ? '' : String(v);
+      };
+
+      let ran = 0, executed = 0;
+      for (const a of autos) {
+        const conds = (Array.isArray(a.conditions) ? a.conditions : []) as Array<{ field?: string; operator?: string; value?: string }>;
+        const pass = conds.every((c) => evalAutomationCondition(valueOf(c.field), c.operator || 'exists', c.value));
+        if (!pass) continue;
+        ran++;
+        const actions = (Array.isArray(a.actions) ? a.actions : []) as Array<{ type?: string; config?: Record<string, unknown> }>;
+        for (const act of actions) {
+          try { await executeAutomationAction(token, act, contactId); executed++; }
+          catch (e) { console.error('[automations] action failed', a.id, act?.type, (e as Error).message); }
+        }
+      }
+      return { success: true, ran, executed, total: autos.length };
+    }
+
     case 'logContactCreation':
       return insertActivityLog(userId, buildLogRow('contact_created', 'contact', String(data.title ?? 'Contact created'), data));
+
     case 'logNoteCreation':
       return insertActivityLog(userId, buildLogRow('note_created', 'note', String(data.title ?? 'Note added'), {
         ...data,
         metadata: { noteText: data.noteText ?? null, noteHtml: data.noteHtml ?? null },
         objectId: data.noteId ?? null,
       }));
+
     case 'logTicketCreation':
       return insertActivityLog(userId, buildLogRow('ticket_created', 'ticket', String(data.title ?? 'Ticket created'), data));
+
     case 'logTaskCreation':
       return insertActivityLog(userId, buildLogRow('task_created', 'task', String(data.title ?? 'Task created'), data));
+
     case 'logDealCreation':
       return insertActivityLog(userId, buildLogRow('deal_created', 'deal', String(data.title ?? 'Deal created'), data));
+
+    case 'getUserActivityLogs': {
+      const limit = Math.min(Number((data as { limit?: number }).limit ?? 100), 500);
+      const res = await db(
+        `hubspot_contact_logs?user_id=eq.${userId}&select=*&order=created_at.desc&limit=${limit}`,
+      );
+      if (!res.ok) throw new HttpError(500, 'Failed to load activity logs');
+      const logs = await res.json();
+      return { logs };
+    }
+
+    case 'getCurrentUserProfile': {
+      const res = await db(
+        `user_profiles?user_id=eq.${userId}&select=*&limit=1`,
+      );
+      if (!res.ok) {
+        // Fall back to email match if id-keyed lookup is not supported
+        return { profile: null };
+      }
+      const rows = await res.json();
+      return { profile: rows[0] ?? null };
+    }
+
+    case 'getTemplates': {
+      const res = await db(
+        `message_templates?user_id=eq.${userId}&select=*&order=created_at.desc`,
+      );
+      if (!res.ok) throw new HttpError(500, 'Failed to load templates');
+      const templates = await res.json();
+      return { templates };
+    }
+
+    case 'createTemplate': {
+      const payload = {
+        user_id: userId,
+        name: String(data.name ?? ''),
+        content: String(data.content ?? ''),
+        category: String(data.category ?? 'General'),
+        variables: (data.variables as unknown) ?? [],
+      };
+      const res = await db('message_templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new HttpError(500, `Failed to create template: ${await res.text()}`);
+      const rows = await res.json();
+      return { template: rows[0] };
+    }
+
+    case 'updateTemplate': {
+      const templateId = String(data.templateId ?? '');
+      if (!templateId) throw new HttpError(400, 'templateId is required');
+      const updates: Record<string, unknown> = {};
+      if (data.name !== undefined) updates.name = data.name;
+      if (data.content !== undefined) updates.content = data.content;
+      if (data.category !== undefined) updates.category = data.category;
+      if (data.variables !== undefined) updates.variables = data.variables;
+      updates.updated_at = new Date().toISOString();
+      const res = await db(
+        `message_templates?id=eq.${templateId}&user_id=eq.${userId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          body: JSON.stringify(updates),
+        },
+      );
+      if (!res.ok) throw new HttpError(500, `Failed to update template: ${await res.text()}`);
+      const rows = await res.json();
+      return { template: rows[0] };
+    }
+
+    case 'deleteTemplate': {
+      const templateId = String(data.templateId ?? '');
+      if (!templateId) throw new HttpError(400, 'templateId is required');
+      const res = await db(
+        `message_templates?id=eq.${templateId}&user_id=eq.${userId}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) throw new HttpError(500, `Failed to delete template: ${await res.text()}`);
+      return { success: true };
+    }
   }
+
 
   const token = await getHubSpotToken(userId);
 
   switch (action) {
     // ----- Contacts -----
+
     case 'createContact':
       return hubspot(token, 'POST', '/crm/v3/objects/contacts', {
         properties: (data.properties as Record<string, unknown>) ?? data,
@@ -541,12 +855,13 @@ async function handleAction(
       return hubspot(token, 'POST', '/crm/v3/objects/contacts/search', searchRequest);
     }
 
+    // Patch a contact's properties (inline edits from the sidebar, e.g.
+    // lifecycle stage / lead status). Read-only properties are stripped so a
+    // stale field can never reject the whole request.
     case 'updateContact': {
       const { contactId } = data as { contactId?: string | number };
       if (!contactId) throw new HttpError(400, 'Missing required field: contactId');
       const properties = (data.properties as Record<string, unknown>) ?? {};
-      // Allow explicitly clearing an enum value ('' is valid on PATCH), but still
-      // strip read-only properties that would reject the whole request.
       const patch: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(properties)) {
         if (READ_ONLY_PROPERTIES.has(key)) continue;
@@ -557,41 +872,8 @@ async function handleAction(
       return hubspot(token, 'PATCH', `/crm/v3/objects/contacts/${contactId}`, { properties: patch });
     }
 
-    // Enumeration options for any object's property (lifecyclestage, dealstage, ...).
-    case 'getPropertyOptions': {
-      const { property, objectType = 'contacts' } = data as { property?: string; objectType?: string };
-      if (!property) throw new HttpError(400, 'Missing required field: property');
-      const prop = (await hubspot(
-        token,
-        'GET',
-        `/crm/v3/properties/${encodeURIComponent(String(objectType))}/${encodeURIComponent(String(property))}`,
-      )) as { options?: Array<{ value: string; label: string; hidden?: boolean; displayOrder?: number }> };
-      return { options: prop.options ?? [] };
-    }
-
-    // Pipelines (with stages) for tickets or deals — drives real dropdowns in the
-    // create-ticket / create-deal forms instead of hard-coded guesses.
-    case 'getPipelines': {
-      const objectType = String((data as { objectType?: string }).objectType ?? 'tickets');
-      if (!['tickets', 'deals'].includes(objectType)) {
-        throw new HttpError(400, 'objectType must be tickets or deals');
-      }
-      const res = (await hubspot(token, 'GET', `/crm/v3/pipelines/${objectType}`)) as {
-        results?: Array<{ id: string; label: string; displayOrder?: number; stages?: Array<{ id: string; label: string; displayOrder?: number }> }>;
-      };
-      const pipelines = (res.results ?? [])
-        .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
-        .map((p) => ({
-          id: p.id,
-          label: p.label,
-          stages: (p.stages ?? [])
-            .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
-            .map((s) => ({ id: s.id, label: s.label })),
-        }));
-      return { pipelines };
-    }
-
     // ----- Companies -----
+
     case 'getCompany': {
       const { companyId } = data as { companyId?: string };
       if (!companyId) throw new HttpError(400, 'Missing required field: companyId');
@@ -604,12 +886,14 @@ async function handleAction(
       });
 
     // ----- Notes -----
+
     case 'createNote': {
       const { contactId, note, noteBody, body, timestamp, createTodo, followUpType, followUpDate } =
         data as Record<string, unknown>;
       const noteText = String(note ?? noteBody ?? body ?? '').trim();
       if (!contactId) throw new HttpError(400, 'Missing required field: contactId');
       if (!noteText) throw new HttpError(400, 'Missing required field: note text');
+
       const result = await hubspot(token, 'POST', '/crm/v3/objects/notes', {
         properties: {
           hs_note_body: noteText,
@@ -648,6 +932,7 @@ async function handleAction(
           console.warn('[hubspot] follow-up task creation failed (note was created):', (e as Error)?.message);
         }
       }
+
       return { success: true, data: result, followUpTask };
     }
 
@@ -658,6 +943,7 @@ async function handleAction(
     }
 
     // ----- Tickets -----
+
     case 'getTickets':
     case 'getAllTickets': {
       const contactId = data.contactId ? String(data.contactId) : null;
@@ -672,6 +958,7 @@ async function handleAction(
       if (contactId) {
         return getContactAssociations(token, String(contactId), 'tickets', TICKET_PROPERTIES);
       }
+
       const searchRequest: Record<string, unknown> = {
         properties: TICKET_PROPERTIES,
         limit: 50,
@@ -683,12 +970,13 @@ async function handleAction(
     }
 
     case 'createTicket': {
-      // Sanitize: drop read-only properties (createdate) and empty values so the
-      // create never fails on a partially-filled form.
+      // Sanitize: drop read-only properties (createdate) and empty values so
+      // the create never fails on a partially-filled form.
       const properties = sanitizeProperties((data.properties as Record<string, unknown>) ?? data);
       if (!properties.subject) throw new HttpError(400, 'Missing required field: subject');
       const contactId = data.contactId ? String(data.contactId) : null;
       const payload: Record<string, unknown> = { properties };
+
       if (contactId) {
         payload.associations = [
           {
@@ -697,6 +985,7 @@ async function handleAction(
           },
         ];
       }
+
       return hubspot(token, 'POST', '/crm/v3/objects/tickets', payload);
     }
 
@@ -707,6 +996,7 @@ async function handleAction(
       if (!contactId || ticketIds.length === 0) {
         throw new HttpError(400, 'Missing required fields: contactId, ticketIds');
       }
+
       const method = action === 'associateTickets' ? 'PUT' : 'DELETE';
       for (const ticketId of ticketIds) {
         const path = `/crm/v4/objects/contacts/${contactId}/associations/${
@@ -718,6 +1008,7 @@ async function handleAction(
     }
 
     // ----- Deals -----
+
     case 'getDeals': {
       const contactId = data.contactId ? String(data.contactId) : null;
       if (contactId) {
@@ -764,11 +1055,15 @@ async function handleAction(
     }
 
     // ----- Tasks -----
+
     case 'createTask': {
+      // Map the extension's flat payload to real hs_task_* property names —
+      // HubSpot rejects unknown property names, so a raw pass-through failed.
       const properties = buildTaskProperties(data);
       if (!properties.hs_task_subject) throw new HttpError(400, 'Missing required field: task subject');
       const contactId = data.contactId ? String(data.contactId) : null;
       const payload: Record<string, unknown> = { properties };
+
       if (contactId) {
         payload.associations = [
           {
@@ -777,6 +1072,7 @@ async function handleAction(
           },
         ];
       }
+
       return hubspot(token, 'POST', '/crm/v3/objects/tasks', payload);
     }
 
@@ -787,6 +1083,7 @@ async function handleAction(
     }
 
     // ----- Owners -----
+
     case 'getOwners':
       return hubspot(token, 'GET', '/crm/v3/owners?limit=100');
 
@@ -803,12 +1100,171 @@ async function handleAction(
       }
     }
 
+    // ----- Pipelines (tickets / deals) -----
+    // Drives real pipeline + stage dropdowns in the create-ticket / create-deal
+    // forms instead of hard-coded ids that don't exist in most portals.
+    case 'getPipelines': {
+      const objectType = String((data as { objectType?: string }).objectType ?? 'tickets');
+      if (!['tickets', 'deals'].includes(objectType)) {
+        throw new HttpError(400, 'objectType must be tickets or deals');
+      }
+      const res = (await hubspot(token, 'GET', `/crm/v3/pipelines/${objectType}`)) as {
+        results?: Array<{ id: string; label: string; displayOrder?: number; stages?: Array<{ id: string; label: string; displayOrder?: number }> }>;
+      };
+      const pipelines = (res.results ?? [])
+        .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
+        .map((p) => ({
+          id: p.id,
+          label: p.label,
+          stages: (p.stages ?? [])
+            .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
+            .map((s) => ({ id: s.id, label: s.label })),
+        }));
+      return { pipelines };
+    }
+
     // ----- Engagement timeline -----
+    // The contact's real HubSpot activity (notes, tasks, calls, emails,
+    // meetings) merged into one list for the sidebar's Recent Activity section.
     case 'getContactActivities': {
       const contactId = String(data.contactId ?? '');
       if (!contactId) return { activities: [] };
       const limit = Math.min(Number(data.limit) || 20, 50);
-      return getContactActivities(token, contactId, limit);
+      return getContactEngagementTimeline(token, contactId, limit);
+    }
+
+    // ----- Property enumeration options (dropdowns) -----
+    // Returns the real, user-configured options for an enum property (e.g. a
+    // contact's lifecyclestage / hs_lead_status, or a deal's dealstage), so the
+    // extension's create form and labels reflect the customer's own values.
+    case 'getContactPropertyOptions':
+    case 'getPropertyOptions': {
+      const objectType = String((data as { objectType?: string }).objectType || 'contacts');
+      const property = String((data as { property?: string }).property || '');
+      if (!property) return { options: [] };
+      const prop = (await hubspot(
+        token,
+        'GET',
+        `/crm/v3/properties/${encodeURIComponent(objectType)}/${encodeURIComponent(property)}`,
+      )) as { options?: Array<{ label: string; value: string; hidden?: boolean }> };
+      // HubSpot returns options already in display order; just drop hidden ones.
+      const options = (prop.options || [])
+        .filter((o) => o && o.hidden !== true)
+        .map((o) => ({ value: o.value, label: o.label }));
+      return { options };
+    }
+
+    // ----- Dashboard aggregates -----
+
+    case 'getDashboardStats': {
+      const countFor = async (objectType: string): Promise<number> => {
+        try {
+          const res = (await hubspot(token, 'POST', `/crm/v3/objects/${objectType}/search`, {
+            limit: 1,
+            properties: ['hs_object_id'],
+          })) as { total?: number };
+          return typeof res?.total === 'number' ? res.total : 0;
+        } catch (_e) {
+          return 0;
+        }
+      };
+
+      const [contactsCount, dealsCount, ticketsCount, companiesCount] = await Promise.all([
+        countFor('contacts'),
+        countFor('deals'),
+        countFor('tickets'),
+        countFor('companies'),
+      ]);
+
+      return { contactsCount, dealsCount, ticketsCount, companiesCount };
+    }
+
+    case 'getRecentHubSpotActivity': {
+      const limit = Math.min(Number((data as { limit?: number }).limit ?? 10), 50);
+
+      const searchRecent = async (
+        objectType: 'contacts' | 'deals' | 'tickets' | 'companies',
+        properties: string[],
+      ): Promise<Array<{ id: string; properties: Record<string, string> }>> => {
+        try {
+          const res = (await hubspot(token, 'POST', `/crm/v3/objects/${objectType}/search`, {
+            limit,
+            sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
+            properties,
+          })) as { results?: Array<{ id: string; properties: Record<string, string> }> };
+          return res.results ?? [];
+        } catch (_e) {
+          return [];
+        }
+      };
+
+      const [contacts, deals, tickets, companies] = await Promise.all([
+        searchRecent('contacts', ['firstname', 'lastname', 'email', 'phone', 'createdate']),
+        searchRecent('deals', ['dealname', 'amount', 'dealstage', 'createdate']),
+        searchRecent('tickets', ['subject', 'content', 'hs_pipeline_stage', 'createdate']),
+        searchRecent('companies', ['name', 'domain', 'createdate']),
+      ]);
+
+      type Item = {
+        id: string;
+        type: 'contact_created' | 'deal_created' | 'ticket_created' | 'company_created';
+        title: string;
+        description: string;
+        timestamp: string;
+        hubspotId: string;
+      };
+
+      const items: Item[] = [];
+
+      for (const c of contacts) {
+        const p = c.properties ?? {};
+        const name = [p.firstname, p.lastname].filter(Boolean).join(' ').trim();
+        items.push({
+          id: `hs-contact-${c.id}`,
+          type: 'contact_created',
+          title: name ? `Contact: ${name}` : 'New Contact',
+          description: [p.email, p.phone].filter(Boolean).join(' • '),
+          timestamp: p.createdate ?? new Date().toISOString(),
+          hubspotId: c.id,
+        });
+      }
+      for (const d of deals) {
+        const p = d.properties ?? {};
+        items.push({
+          id: `hs-deal-${d.id}`,
+          type: 'deal_created',
+          title: p.dealname ? `Deal: ${p.dealname}` : 'New Deal',
+          description: p.amount ? `Amount: ${p.amount}` : '',
+          timestamp: p.createdate ?? new Date().toISOString(),
+          hubspotId: d.id,
+        });
+      }
+      for (const t of tickets) {
+        const p = t.properties ?? {};
+        items.push({
+          id: `hs-ticket-${t.id}`,
+          type: 'ticket_created',
+          title: p.subject ? `Ticket: ${p.subject}` : 'New Ticket',
+          description: p.content ?? '',
+          timestamp: p.createdate ?? new Date().toISOString(),
+          hubspotId: t.id,
+        });
+      }
+      for (const co of companies) {
+        const p = co.properties ?? {};
+        items.push({
+          id: `hs-company-${co.id}`,
+          type: 'company_created',
+          title: p.name ? `Company: ${p.name}` : 'New Company',
+          description: p.domain ?? '',
+          timestamp: p.createdate ?? new Date().toISOString(),
+          hubspotId: co.id,
+        });
+      }
+
+      items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      return { items: items.slice(0, limit) };
     }
 
     default:
@@ -824,6 +1280,7 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
+
   if (req.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405);
   }
@@ -835,6 +1292,7 @@ Deno.serve(async (req) => {
 
   try {
     const { action, data } = await req.json().catch(() => ({}));
+
     if (!action || typeof action !== 'string') {
       return json({ error: 'Missing required field: action' }, 400);
     }
@@ -843,12 +1301,15 @@ Deno.serve(async (req) => {
     const userId = await getAuthenticatedUserId(req);
 
     const result = await handleAction(action, (data as Record<string, unknown>) ?? {}, userId);
+
     return json(result ?? { success: true });
   } catch (error) {
     if (error instanceof HttpError) {
-      return json({ error: error.message }, error.status);
+      // Return 200 with error in body so supabase-js doesn't treat it as a non-2xx failure
+      return json({ error: error.message, status: error.status, notConnected: error.status === 403 }, 200);
     }
+
     console.error('Edge function error:', error);
-    return json({ error: 'Internal error' }, 500);
+    return json({ error: error instanceof Error ? error.message : 'Internal error', status: 500 }, 200);
   }
 });

@@ -9738,19 +9738,24 @@ function cleanupSidebarFieldsSync() {
 window.addEventListener('beforeunload', cleanupSidebarFieldsSync);
 
 // Instant refresh when the dashboard saves sidebar settings in the same browser.
-// The dashboard writes 'whatsync.sidebarFieldsUpdated' to localStorage as a signal;
-// content scripts on other tabs (WhatsApp) see the storage event and re-fetch.
-window.addEventListener('storage', async (event) => {
-  if (event.key === 'whatsync.sidebarFieldsUpdated') {
-    sidebarPrefsCache = null; // invalidate so next fetch goes to the network
-    lastSidebarFieldsHash = null;
-    try {
-      const { contactFields } = await getEnabledSidebarFields(await getExtensionUserId());
-      lastSidebarFieldsHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
-    } catch { /* ignore */ }
-    refreshAboutSection();
-  }
-});
+// The dashboard writes 'whatsync.sidebarFieldsUpdated' to its localStorage;
+// dashboard-bridge.js copies it into chrome.storage.local (a window 'storage'
+// event can never cross from whatsync.io to web.whatsapp.com — same-origin only),
+// and this listener picks it up here.
+try {
+  chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace !== 'local' || !changes['whatsync.sidebarFieldsUpdated']) return;
+    (async () => {
+      sidebarPrefsCache = null; // invalidate so next fetch goes to the network
+      lastSidebarFieldsHash = null;
+      try {
+        const { contactFields } = await getEnabledSidebarFields(await getExtensionUserId());
+        lastSidebarFieldsHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
+      } catch { /* ignore */ }
+      refreshAboutSection();
+    })();
+  });
+} catch { /* extension context unavailable */ }
 
 window.testSidebarFieldsRefresh = async function() {
   await refreshAboutSection();

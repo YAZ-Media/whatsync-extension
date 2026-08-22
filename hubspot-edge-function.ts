@@ -19,6 +19,9 @@
 // DEPLOY
 //   supabase functions deploy hubspot --project-ref <edge-project-ref>
 
+import { sendResendEmail } from '../_shared/notifications.ts';
+import { signInviteToken } from '../_shared/invites.ts';
+
 const EXTERNAL_SUPABASE_URL = Deno.env.get('EXTERNAL_SUPABASE_URL') ?? '';
 const SERVICE_ROLE_KEY = Deno.env.get('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const HUBSPOT_CLIENT_ID = Deno.env.get('HUBSPOT_CLIENT_ID') ?? '';
@@ -333,6 +336,176 @@ async function getSidebarFields(userId: string): Promise<unknown> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Team management (org-scoped, role-gated)
+// ---------------------------------------------------------------------------
+
+const TEAM_PROFILE_COLUMNS =
+  'id,user_id,first_name,last_name,email,company,role,status,last_active,extension_version,enforce_2fa,organization_id,created_at,updated_at';
+
+interface TeamProfile {
+  id: string;
+  user_id: string;
+  email: string | null;
+  role: string | null;
+  status: string | null;
+  organization_id: string | null;
+  [key: string]: unknown;
+}
+
+function escapeHtmlText(value: string): string {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function getProfileRow(userId: string): Promise<TeamProfile | null> {
+  const res = await db(
+    `user_profiles?user_id=eq.${userId}&select=${TEAM_PROFILE_COLUMNS}&limit=1`,
+  );
+  if (!res.ok) return null;
+  const rows = (await res.json()) as TeamProfile[];
+  return rows[0] ?? null;
+}
+
+function profileOrgId(profile: TeamProfile | null, fallbackUserId: string): string {
+  return String(profile?.organization_id || profile?.user_id || fallbackUserId);
+}
+
+/** Actor must be an active Owner/Admin. Returns their profile + org id. */
+async function requireTeamManager(userId: string): Promise<{ profile: TeamProfile; orgId: string }> {
+  const profile = await getProfileRow(userId);
+  if (!profile) throw new HttpError(403, 'Profile not found');
+  const role = String(profile.role || 'Member');
+  const status = String(profile.status || 'Active');
+  if (status !== 'Active' || !['Owner', 'Admin'].includes(role)) {
+    throw new HttpError(403, 'Only Owners and Admins can manage the team');
+  }
+  return { profile, orgId: profileOrgId(profile, userId) };
+}
+
+const TEAM_ROLES = new Set(['Owner', 'Admin', 'Member', 'Billing', 'Read-only']);
+const TEAM_STATUSES = new Set(['Active', 'Pending', 'Suspended']);
+const INVITABLE_ROLES = new Set(['Admin', 'Member', 'Billing', 'Read-only']);
+
+async function getTeamMembers(userId: string): Promise<unknown> {
+  const me = await getProfileRow(userId);
+  const orgId = profileOrgId(me, userId);
+  const res = await db(
+    `user_profiles?organization_id=eq.${orgId}&select=${TEAM_PROFILE_COLUMNS}&order=created_at.asc`,
+  );
+  if (!res.ok) throw new HttpError(500, 'Failed to load team members');
+  return { members: await res.json() };
+}
+
+async function updateTeamMember(userId: string, data: Record<string, unknown>): Promise<unknown> {
+  const targetUserId = String(data.targetUserId ?? '');
+  if (!targetUserId) throw new HttpError(400, 'Missing required field: targetUserId');
+
+  const { profile: me, orgId } = await requireTeamManager(userId);
+  const target = await getProfileRow(targetUserId);
+  if (!target || profileOrgId(target, targetUserId) !== orgId) {
+    throw new HttpError(404, 'Team member not found in your organization');
+  }
+
+  // Admins cannot modify Owners; nobody can demote or suspend themselves.
+  const targetRole = String(target.role || 'Member');
+  if (String(me.role) === 'Admin' && targetRole === 'Owner') {
+    throw new HttpError(403, 'Admins cannot modify an Owner');
+  }
+
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (data.role !== undefined) {
+    const role = String(data.role);
+    if (!TEAM_ROLES.has(role)) throw new HttpError(400, `Invalid role: ${role}`);
+    if (targetUserId === userId && role !== String(me.role)) {
+      throw new HttpError(400, 'You cannot change your own role');
+    }
+    patch.role = role;
+  }
+  if (data.status !== undefined) {
+    const status = String(data.status);
+    if (!TEAM_STATUSES.has(status)) throw new HttpError(400, `Invalid status: ${status}`);
+    if (targetUserId === userId && status !== 'Active') {
+      throw new HttpError(400, 'You cannot suspend yourself');
+    }
+    patch.status = status;
+  }
+  if (data.enforce_2fa !== undefined) {
+    patch.enforce_2fa = Boolean(data.enforce_2fa);
+  }
+  if (Object.keys(patch).length === 1) {
+    throw new HttpError(400, 'No valid updates provided');
+  }
+
+  const res = await db(`user_profiles?user_id=eq.${targetUserId}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new HttpError(500, `Failed to update team member (${res.status})`);
+  const rows = await res.json();
+  return { success: true, profile: rows[0] ?? null };
+}
+
+async function inviteTeamMember(userId: string, data: Record<string, unknown>): Promise<unknown> {
+  const email = String(data.email ?? '').trim().toLowerCase();
+  const role = String(data.role ?? 'Member');
+  const appUrlRaw = String(data.appUrl ?? 'https://whatsync.io');
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpError(400, 'A valid email address is required');
+  }
+  if (!INVITABLE_ROLES.has(role)) {
+    throw new HttpError(400, `Cannot invite with role: ${role}`);
+  }
+  const appUrl = /^https:\/\/[a-z0-9.-]+/i.test(appUrlRaw) || /^http:\/\/localhost(:\d+)?$/i.test(appUrlRaw)
+    ? appUrlRaw.replace(/\/+$/, '')
+    : 'https://whatsync.io';
+
+  const { profile: me, orgId } = await requireTeamManager(userId);
+
+  // Don't invite someone who's already in the org.
+  const existingRes = await db(
+    `user_profiles?email=eq.${encodeURIComponent(email)}&select=user_id,organization_id&limit=1`,
+  );
+  if (existingRes.ok) {
+    const rows = (await existingRes.json()) as TeamProfile[];
+    if (rows[0] && profileOrgId(rows[0], String(rows[0].user_id)) === orgId) {
+      throw new HttpError(400, 'This person is already a member of your team');
+    }
+  }
+
+  // Signed token — role and organization are only honored at signup when the
+  // signature verifies, so the link parameters cannot be forged.
+  const token = await signInviteToken({ email, role, organizationId: orgId, invitedBy: userId });
+  const inviteUrl = `${appUrl}/auth?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}&role=${encodeURIComponent(role)}`;
+
+  const inviterName = [me.first_name, me.last_name].filter(Boolean).join(' ') || me.email || 'A teammate';
+  const sendResult = await sendResendEmail({
+    to: email,
+    subject: `You're invited to join ${escapeHtmlText(String(inviterName))}'s WhatSync workspace`,
+    html: `
+      <h2>You've been invited to WhatSync</h2>
+      <p>${escapeHtmlText(String(inviterName))} invited you to join their workspace as <strong>${escapeHtmlText(role)}</strong>.</p>
+      <p><a href="${inviteUrl}">Accept the invitation</a> (link expires in 7 days).</p>
+      <p>If the button doesn't work, copy this link into your browser:<br>${inviteUrl}</p>
+    `,
+  });
+
+  if (!sendResult.ok) {
+    return {
+      success: true,
+      inviteUrl,
+      warning: `Invitation created, but the email could not be sent (${sendResult.error || 'email service unavailable'}). Share this link directly: ${inviteUrl}`,
+    };
+  }
+
+  return { success: true, inviteUrl };
+}
+
 async function saveSidebarFields(
   userId: string,
   data: Record<string, unknown>,
@@ -598,6 +771,14 @@ async function handleAction(
 
     case 'saveSidebarFields':
       return saveSidebarFields(userId, data);
+
+    // ----- Team management (org-scoped; identity from the JWT) -----
+    case 'getTeamMembers':
+      return getTeamMembers(userId);
+    case 'updateTeamMember':
+      return updateTeamMember(userId, data);
+    case 'inviteTeamMember':
+      return inviteTeamMember(userId, data);
 
     // ----- Automations (per-user, stored in the external DB) -----
     case 'getAutomations': {

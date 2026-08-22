@@ -7,6 +7,7 @@
 (function () {
   const STORAGE_KEY = 'external_auth_session';
   const SYNC_SETTINGS_KEY = 'whatsync.syncSettings';
+  const SIDEBAR_FIELDS_KEY = 'whatsync.sidebarFieldsUpdated';
 
   function syncSessionToExtension() {
     try {
@@ -43,9 +44,24 @@
     }
   }
 
+  // Forward the Sidebar Designer's "saved" signal into chrome.storage so the
+  // WhatsApp content script refreshes instantly. (A plain window 'storage'
+  // listener on web.whatsapp.com can never see whatsync.io's localStorage —
+  // storage events are same-origin — so this bridge is the only working path.)
+  function syncSidebarFieldsSignal() {
+    try {
+      const value = localStorage.getItem(SIDEBAR_FIELDS_KEY);
+      if (!value) return;
+      chrome.storage.local.set({ [SIDEBAR_FIELDS_KEY]: value });
+    } catch (e) {
+      console.warn('[Dashboard Bridge] Could not sync sidebar signal:', e);
+    }
+  }
+
   function syncAll() {
     syncSessionToExtension();
     syncIntegrationSettingsToExtension();
+    syncSidebarFieldsSignal();
   }
 
   syncAll();
@@ -53,6 +69,7 @@
   window.addEventListener('storage', (e) => {
     if (e.key === STORAGE_KEY && e.newValue) syncSessionToExtension();
     if (e.key === SYNC_SETTINGS_KEY && e.newValue) syncIntegrationSettingsToExtension();
+    if (e.key === SIDEBAR_FIELDS_KEY && e.newValue) syncSidebarFieldsSignal();
   });
 
   const interval = setInterval(syncAll, 5000);

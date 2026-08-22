@@ -47,9 +47,17 @@ async function reportSyncFailure(userId, context, message) {
   if (now - lastSyncFailureReportAt < SYNC_FAILURE_REPORT_MS) return;
   lastSyncFailureReportAt = now;
   try {
+    // The settings function authenticates the caller; without the bearer token
+    // this report is rejected with 401 and silently dropped.
+    const accessToken = await getStoredAccessToken();
+    if (!accessToken) return;
     await fetchWithTimeout(SETTINGS_EDGE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: EDGE_FUNCTIONS_ANON_KEY },
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: EDGE_FUNCTIONS_ANON_KEY,
+        Authorization: `Bearer ${accessToken}`,
+      },
       body: JSON.stringify({
         action: 'reportSyncFailure',
         data: { userId, context, message: String(message || 'Unknown error').slice(0, 500) },
@@ -2650,9 +2658,13 @@ async function getPrivacySettingsViaEdgeFunction(userId) {
 
   let workspacePrivacy = { mask_phone: true, mask_media: false, allowed_properties: [] };
   try {
+    // Authenticated call — without the bearer token the settings function
+    // returns 401 and the extension silently falls back to defaults forever.
+    const accessToken = await getStoredAccessToken();
+    const authHeaders = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
     const res = await fetchWithTimeout(SETTINGS_EDGE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': EDGE_FUNCTIONS_ANON_KEY },
+      headers: { 'Content-Type': 'application/json', 'apikey': EDGE_FUNCTIONS_ANON_KEY, ...authHeaders },
       body: JSON.stringify({ action: 'getPrivacySettings', data: { userId } })
     });
     if (res.ok) {

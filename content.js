@@ -193,31 +193,46 @@ async function hasExtensionAuthToken() {
 }
 
 class AutomationManager {
+  constructor() {
+    // Back-off for high-frequency message triggers: when the backend reports the
+    // user has no automations at all (or errors), stop firing per-message calls
+    // for a while instead of hammering the edge function on every message.
+    this._messageTriggersPausedUntil = 0;
+  }
+
   async getUserId() {
     return getExtensionUserId();
   }
 
   async trigger(triggerType, context) {
+    const isMessageTrigger = triggerType === 'message_sent' || triggerType === 'message_received';
+    if (isMessageTrigger && Date.now() < this._messageTriggersPausedUntil) {
+      return { success: true, skipped: true };
+    }
+
     const userId = await this.getUserId();
     if (!userId) {
-      console.warn('[Automations] No user session - skipping automation');
       return { success: false, error: 'Not authenticated' };
     }
 
     try {
       const { ok, status, json: result } = await callHubSpotEdgeFromContent('evaluateAutomations', {
-        userId,
         triggerType,
         context,
       });
 
       if (!ok) {
-        console.error(`[Automations] Error response: ${status}`);
+        console.warn(`[Automations] Error response: ${status}`);
+        if (isMessageTrigger) this._messageTriggersPausedUntil = Date.now() + 10 * 60 * 1000;
         return { success: false, error: `HTTP ${status}` };
+      }
+      if (isMessageTrigger && typeof result?.total === 'number' && result.total === 0) {
+        this._messageTriggersPausedUntil = Date.now() + 10 * 60 * 1000;
       }
       return result;
     } catch (error) {
       console.error('[Automations] Error:', error);
+      if (isMessageTrigger) this._messageTriggersPausedUntil = Date.now() + 10 * 60 * 1000;
       return { success: false, error: error.message };
     }
   }
@@ -870,60 +885,35 @@ function initializeMessageObservers() {
  */
 function processMessageNode(node) {
   try {
-    // Check if it's a message container
-    const messageContainer = node.querySelector('[data-testid="msg-container"]') || 
-                            (node.hasAttribute('data-testid') && node.getAttribute('data-testid').includes('msg') ? node : null);
-    
-    if (!messageContainer) return;
-    
-    // Get message text
-    const messageTextElement = messageContainer.querySelector('.selectable-text') ||
-                              messageContainer.querySelector('[data-testid="conversation-turn"]')?.querySelector('span');
-    const messageText = messageTextElement?.textContent?.trim() || '';
-    
+    // Identify the message row by its stable WhatsApp data-id (encodes both a
+    // unique message id and the direction: "true_" = outgoing, "false_" = incoming).
+    const row = node.closest?.('[data-id]') || node.querySelector?.('[data-id]');
+    const dataId = row?.getAttribute?.('data-id') || '';
+    if (!/^(true|false)_/.test(dataId)) return;
+
+    // Dedupe on the message's real id. (The old key included Date.now(), so it
+    // never matched and every DOM mutation re-fired the automation triggers.)
+    if (lastProcessedMessages.has(dataId)) return;
+    lastProcessedMessages.add(dataId);
+
+    // Clean up old message IDs (keep last 200)
+    if (lastProcessedMessages.size > 200) {
+      const entries = Array.from(lastProcessedMessages);
+      lastProcessedMessages = new Set(entries.slice(-100));
+    }
+
+    const messageText = extractMessageText(row);
     if (!messageText) return;
-    
-    // Create a unique ID for this message to avoid duplicate processing
-    const messageId = `${messageText.substring(0, 50)}-${Date.now()}`;
-    if (lastProcessedMessages.has(messageId)) return;
-    
-    // Check if it's an outgoing message (has checkmarks)
-    const isOutgoing = messageContainer.querySelector('[data-testid="msg-check"]') ||
-                      messageContainer.querySelector('[data-icon="double-check"]') ||
-                      messageContainer.querySelector('[data-icon="check"]');
-    
+
+    const isOutgoing = dataId.startsWith('true_');
     const contactPhone = getCurrentContactPhone();
     const contactName = getCurrentContactName();
-    
-    if (isOutgoing) {
-      // Message sent
-      lastProcessedMessages.add(messageId);
-      
-      automations.messageSent({
-        text: messageText,
-        phone: contactPhone,
-        contactName: contactName
-      }).catch(err => {
-        console.error('[Automations] Error triggering message_sent:', err);
+
+    const payload = { text: messageText, phone: contactPhone, contactName };
+    (isOutgoing ? automations.messageSent(payload) : automations.messageReceived(payload))
+      .catch(err => {
+        console.error('[Automations] Error triggering message automation:', err);
       });
-    } else {
-      // Message received
-      lastProcessedMessages.add(messageId);
-      
-      automations.messageReceived({
-        text: messageText,
-        phone: contactPhone,
-        contactName: contactName
-      }).catch(err => {
-        console.error('[Automations] Error triggering message_received:', err);
-      });
-    }
-    
-    // Clean up old message IDs (keep last 100)
-    if (lastProcessedMessages.size > 100) {
-      const entries = Array.from(lastProcessedMessages);
-      lastProcessedMessages = new Set(entries.slice(-50));
-    }
   } catch (error) {
     console.error('[Automations] Error processing message node:', error);
   }
@@ -1430,6 +1420,26 @@ async function setupDealPipelineForm(modal) {
     console.warn('[Deal Modal] Could not load owners:', err)
   );
 
+  // Populate Deal Type from the portal's real dealtype options (custom values
+  // included); static New/Existing Business options remain as the fallback.
+  (async () => {
+    const typeSelect = modal.querySelector('#deal-type');
+    if (!typeSelect) return;
+    try {
+      const resp = await sendExtensionMessage({
+        action: 'getPropertyOptions',
+        objectType: 'deals',
+        property: 'dealtype',
+      });
+      const options = (resp?.options || []).filter((o) => o && o.value && o.hidden !== true);
+      if (options.length) {
+        typeSelect.innerHTML = '<option value="">Select deal type</option>' + options
+          .map((o) => `<option value="${escapeHtml(String(o.value))}">${escapeHtml(o.label || String(o.value))}</option>`)
+          .join('');
+      }
+    } catch { /* keep static fallback options */ }
+  })();
+
   const [pipelines, syncSettings] = await Promise.all([
     fetchHubSpotDealPipelines(),
     getSyncSettings(),
@@ -1630,7 +1640,7 @@ function renderTemplatesInDropdown(templates) {
           <line x1="16" y1="17" x2="8" y2="17"></line>
         </svg>
       </div>
-      <span>${template.name || 'Untitled Template'}</span>
+      <span>${escapeHtml(template.name || 'Untitled Template')}</span>
     `;
     
     // Add click handler for template
@@ -1864,19 +1874,32 @@ function insertTemplateContentIntoWhatsAppInput(content) {
     
     if (!messageInput) {
       console.error('[Templates] ❌ Message input div not found');
-      console.error('[Templates] Debug: mainDiv:', mainDiv);
-      console.error('[Templates] Debug: Contenteditable divs in main:', mainDiv.querySelectorAll('div[contenteditable="true"]').length);
-      console.error('[Templates] Debug: All contenteditable textboxes in document:', document.querySelectorAll('div[contenteditable="true"][role="textbox"]').length);
       alert('Could not find the message input field. Please click on the message box first.');
       return false;
     }
-    
-    // Find the p tag inside the message input
-    const pTag = messageInput.querySelector('p._aupe.copyable-text.x15bjb6t.x1n2onr6');
-    
+
+    // Preferred path: let the editor itself handle the insertion. WhatsApp's
+    // Lexical editor honors execCommand('insertText'), which keeps its internal
+    // state consistent and survives WhatsApp's class-name churn.
+    try {
+      messageInput.focus();
+      document.execCommand('selectAll', false, null);
+      const inserted = document.execCommand('insertText', false, content);
+      if (inserted && (messageInput.textContent || '').includes(content.slice(0, 20))) {
+        console.log('[Templates] ✅ Template inserted via execCommand');
+        return true;
+      }
+    } catch (e) {
+      console.warn('[Templates] execCommand insertion failed, falling back to DOM:', e);
+    }
+
+    // Fallback: legacy DOM manipulation against WhatsApp's known markup.
+    const pTag = messageInput.querySelector('p.copyable-text') ||
+                 messageInput.querySelector('p');
+
     if (!pTag) {
       console.error('[Templates] ❌ p tag not found inside message input');
-      alert('Could not find the message input structure. Please refresh the page.');
+      alert('Could not insert the template. Please click on the message box and paste it manually.');
       return false;
     }
     
@@ -1897,8 +1920,8 @@ function insertTemplateContentIntoWhatsAppInput(content) {
     const spanTag = document.createElement('span');
     spanTag.className = '_aupe copyable-text xkrh14z';
     spanTag.setAttribute('data-lexical-text', 'true');
-    // Set innerHTML of span to include template content (in case content has HTML)
-    spanTag.innerHTML = content;
+    // Templates are plain text — never parse them as HTML.
+    spanTag.textContent = content;
     
     // Append the span to the p tag
     pTag.appendChild(spanTag);
@@ -1948,7 +1971,7 @@ function insertTemplateContentIntoWhatsAppInput(content) {
         const newSpan = document.createElement('span');
         newSpan.className = '_aupe copyable-text xkrh14z';
         newSpan.setAttribute('data-lexical-text', 'true');
-        newSpan.innerHTML = content;
+        newSpan.textContent = content;
         pTag.appendChild(newSpan);
         console.log('[Templates] ✅ Re-inserted span after removal');
       }
@@ -2460,13 +2483,15 @@ function formatSelectedMessages(messages, contactName = 'Contact') {
   console.log('[formatSelectedMessages] Messages count:', messages.length);
   
   let formatted = 'WhatsApp Messages:\n\n';
-  
-  messages.forEach((msg, index) => {
-    // Only include the message text, no sender name or timestamp
-    formatted += `${msg.text}\n\n`;
-    console.log(`[formatSelectedMessages] Message ${index + 1}: text="${msg.text.substring(0, 50)}"`);
+
+  messages.forEach((msg) => {
+    // Label each line with its sender so the logged conversation reads like a
+    // transcript in HubSpot (who said what, with the timestamp when known).
+    const sender = msg.isOutgoing ? 'You' : (contactName || 'Contact');
+    const time = msg.timestamp ? ` (${msg.timestamp})` : '';
+    formatted += `${sender}${time}: ${msg.text}\n\n`;
   });
-  
+
   return formatted.trim();
 }
 
@@ -2631,19 +2656,19 @@ function showNoteModal(contactName, contactEmail, contactId, preFilledContent = 
     }
   }
   
-  // Function to get current date and time in the format shown in screenshot
+  // Current date/time in the user's local timezone (with its real short name —
+  // a hard-coded "GMT" label used to misstate the activity time).
   function getCurrentDateTime() {
     const now = new Date();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const year = now.getFullYear();
-    let hours = now.getHours();
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12; // the hour '0' should be '12'
-    const hoursStr = String(hours).padStart(2, '0');
-    return `${month}/${day}/${year} ${hoursStr}:${minutes} ${ampm} GMT`;
+    return now.toLocaleString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZoneName: 'short'
+    });
   }
   
   const today = new Date();
@@ -2679,11 +2704,6 @@ function showNoteModal(contactName, contactEmail, contactId, preFilledContent = 
             <span class="note-modal-title">${modalTitle}</span>
           </div>
           <div class="note-modal-header-right">
-            <button class="note-modal-icon-btn" title="Expand">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-              </svg>
-            </button>
             <button class="note-modal-icon-btn note-modal-close" title="Close">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -2696,7 +2716,7 @@ function showNoteModal(contactName, contactEmail, contactId, preFilledContent = 
           <div class="note-recipient">
             <div class="note-recipient-left">
               <div class="note-recipient-label">Contacted</div>
-              <div class="note-recipient-name">${contactName}</div>
+              <div class="note-recipient-name">${escapeHtml(contactName || 'Contact')}</div>
             </div>
             <div class="note-recipient-right">
               <div class="note-recipient-label">Activity date</div>
@@ -2746,11 +2766,6 @@ function showNoteModal(contactName, contactEmail, contactId, preFilledContent = 
                 <line x1="3" y1="18" x2="3.01" y2="18"></line>
               </svg>
             </button>
-            <button class="note-toolbar-btn" id="note-attachment-btn" title="Attachment">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
-              </svg>
-            </button>
           </div>
           <div class="note-todo-section">
             <div class="note-todo-checkbox">
@@ -2794,6 +2809,11 @@ function showNoteModal(contactName, contactEmail, contactId, preFilledContent = 
   const closeBtn = modal.querySelector('.note-modal-close');
   const createBtn = document.getElementById('note-create-btn');
   const overlay = modal;
+
+  // Track the follow-up task selection so "Create a … task to follow up …" is
+  // honored at creation time (the dropdowns used to be pure decoration).
+  modal.dataset.followUpType = 'To-do';
+  modal.dataset.followUpDate = defaultDateOption.date.toISOString();
   
   // Close on overlay click
   overlay.addEventListener('click', (e) => {
@@ -2868,6 +2888,9 @@ function setupTodoDropdown() {
       e.preventDefault();
       e.stopPropagation();
       const selectedValue = item.getAttribute('data-value');
+      // Record the chosen follow-up task type for note creation.
+      const noteModal = document.getElementById('note-modal');
+      if (noteModal) noteModal.dataset.followUpType = selectedValue;
       // Update text but keep the chevron
       const chevron = todoType.querySelector('.note-todo-chevron');
       todoType.innerHTML = selectedValue;
@@ -2891,6 +2914,33 @@ function setupTodoDropdown() {
       dropdown.style.display = 'none';
     });
   });
+}
+
+// Resolve a follow-up dropdown option ("Tomorrow", "In 3 business days", …)
+// to a concrete Date, matching the labels shown in the note modal.
+function computeFollowUpDateFromOption(value) {
+  const today = new Date();
+  const addBusinessDays = (days) => {
+    const d = new Date(today);
+    let added = 0;
+    while (added < days) {
+      d.setDate(d.getDate() + 1);
+      if (d.getDay() !== 0 && d.getDay() !== 6) added++;
+    }
+    return d;
+  };
+  switch (value) {
+    case 'Today': return today;
+    case 'Tomorrow': { const d = new Date(today); d.setDate(d.getDate() + 1); return d; }
+    case 'In 2 business days': return addBusinessDays(2);
+    case 'In 3 business days': return addBusinessDays(3);
+    case 'In 1 week': return new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+    case 'In 2 weeks': return new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000);
+    case 'In 1 month': return new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
+    case 'In 3 months': return new Date(today.getFullYear(), today.getMonth() + 3, today.getDate());
+    case 'In 6 months': return new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
+    default: return addBusinessDays(3);
+  }
 }
 
 // Function to setup todo time dropdown
@@ -3054,6 +3104,9 @@ function setupTodoTimeDropdown() {
         datePicker.addEventListener('change', () => {
           const selectedDate = new Date(datePicker.value);
           if (selectedDate && !isNaN(selectedDate.getTime())) {
+            // Record the custom follow-up date for note creation.
+            const noteModal = document.getElementById('note-modal');
+            if (noteModal) noteModal.dataset.followUpDate = selectedDate.toISOString();
             // Format date as "Custom Date (Wednesday, January 21)"
             const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -3121,6 +3174,12 @@ function setupTodoTimeDropdown() {
         newText = `${selectedValue} (${selectedDate})`;
       } else {
         newText = selectedValue;
+      }
+
+      // Record the chosen follow-up date for note creation.
+      const noteModal = document.getElementById('note-modal');
+      if (noteModal) {
+        noteModal.dataset.followUpDate = computeFollowUpDateFromOption(selectedValue).toISOString();
       }
       
       // Find and update the text node (first child should be text)
@@ -3431,35 +3490,6 @@ function setupNoteToolbar(preFilledContent = '') {
     });
   }
   
-  // Attachment button
-  const attachmentBtn = document.getElementById('note-attachment-btn');
-  if (attachmentBtn) {
-    attachmentBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      // Create file input
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.multiple = true;
-      fileInput.style.display = 'none';
-      fileInput.addEventListener('change', (event) => {
-        const files = event.target.files;
-        if (files.length > 0) {
-          let fileList = '\n[Attachments: ';
-          for (let i = 0; i < files.length; i++) {
-            fileList += files[i].name;
-            if (i < files.length - 1) fileList += ', ';
-          }
-          fileList += ']';
-          document.execCommand('insertText', false, fileList);
-        }
-        fileInput.remove();
-      });
-      document.body.appendChild(fileInput);
-      fileInput.click();
-    });
-  }
-  
-  
   // Update toolbar button states based on selection
   function updateToolbarState() {
     formatButtons.forEach(btnId => {
@@ -3584,7 +3614,11 @@ function setupNoteToolbar(preFilledContent = '') {
       }
       
       const createTodo = document.getElementById('note-todo-checkbox').checked;
-      console.log('[Content] Create todo checkbox checked:', createTodo);
+      // Follow-up task selection tracked by the modal's dropdowns.
+      const noteModal = document.getElementById('note-modal');
+      const followUpType = noteModal?.dataset.followUpType || 'To-do';
+      const followUpDate = noteModal?.dataset.followUpDate || null;
+      console.log('[Content] Create todo checkbox checked:', createTodo, followUpType, followUpDate);
       console.log('[Content] Full note data:', {
         contactId: contactId,
         noteText: noteText?.substring(0, 100) + (noteText?.length > 100 ? '...' : ''),
@@ -3600,8 +3634,9 @@ function setupNoteToolbar(preFilledContent = '') {
       console.log('[Content] Button disabled, starting note creation...');
       
       // Create note in HubSpot (using actual HubSpot contact ID)
-      createHubSpotNote(contactId, noteText, noteContent, createTodo)
+      createHubSpotNote(contactId, noteText, noteContent, createTodo, followUpType, followUpDate)
         .then((result) => {
+          showWhatsyncToast(createTodo ? 'Note created + follow-up task scheduled' : 'Note created in HubSpot');
           console.log('[Content] ✅ Note created successfully!');
           console.log('[Content] Create note result:', result);
           
@@ -3630,6 +3665,20 @@ function setupNoteToolbar(preFilledContent = '') {
               } else {
                 // Just update the count if collapsed
                 refreshNotesCount(contactIdAttr, notesSection);
+              }
+            }
+          }
+
+          // A follow-up task may have been created alongside the note.
+          if (createTodo) {
+            const tasksSection = document.querySelector('.tasks-section');
+            const taskContactId = tasksSection?.getAttribute('data-contact-id');
+            if (tasksSection && taskContactId) {
+              tasksSection.dataset.tasksLoaded = 'false';
+              refreshTasksCount(taskContactId, tasksSection).catch(() => {});
+              const tasksContent = tasksSection.querySelector('.tasks-content');
+              if (tasksContent && tasksContent.style.display !== 'none') {
+                loadContactTasks(taskContactId, tasksSection).catch(() => {});
               }
             }
           }
@@ -4191,10 +4240,16 @@ function formatNoteItem(note) {
   // The backend now returns: note.metadata?.note_text (mapped to body), noteContent, and noteHtml
   // Priority: noteHtml > noteContent > body (mapped from metadata.note_text) > metadata.note_text > description
   let noteContent = '';
-  
+
   // First check for HTML content (preferred for rich formatting)
   if (note.noteHtml && note.noteHtml.trim()) {
     noteContent = note.noteHtml;
+  }
+  // HubSpot CRM v3 note objects keep their body here — this is the shape the
+  // edge function's getContactNotes actually returns, so check it early
+  // (previously every real HubSpot note rendered as "No content").
+  else if (note.properties?.hs_note_body && String(note.properties.hs_note_body).trim()) {
+    noteContent = note.properties.hs_note_body;
   }
   // Then check noteContent field
   else if (note.noteContent && note.noteContent.trim()) {
@@ -4246,8 +4301,8 @@ function formatNoteItem(note) {
     });
   }
   
-  const createdAt = note.created_at || note.createdAt || new Date().toISOString();
-  
+  const createdAt = note.created_at || note.createdAt || note.properties?.hs_createdate || new Date().toISOString();
+
   // Format date
   let formattedDate = '--';
   try {
@@ -4267,9 +4322,11 @@ function formatNoteItem(note) {
     console.error('Error formatting date:', e);
   }
   
-  // Truncate title if too long
-  const title = note.title || 'Note created via WhatsApp';
-  const truncatedTitle = title.length > 30 ? title.substring(0, 27) + '...' : title;
+  // Title: a snippet of the note body reads far better in the list than a
+  // generic "Note created via WhatsApp" placeholder.
+  const plainBody = String(noteContent || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const title = note.title || plainBody || 'Note';
+  const truncatedTitle = escapeHtml(title.length > 30 ? title.substring(0, 27) + '...' : title);
   
   return `
     <div class="note-item">
@@ -4774,7 +4831,7 @@ function formatTaskItem(task) {
   const cleanTaskName = taskName.replace(/<[^>]*>/g, '').trim();
   
   // Truncate title if too long (same as notes)
-  const truncatedTitle = cleanTaskName.length > 30 ? cleanTaskName.substring(0, 27) + '...' : cleanTaskName;
+  const truncatedTitle = escapeHtml(cleanTaskName.length > 30 ? cleanTaskName.substring(0, 27) + '...' : cleanTaskName);
   
   // Handle different notes/body field names for collapsible content
   const taskNotes = task.notes || task.body || task.properties?.hs_task_body || task.properties?.notes || task.properties?.description || '';
@@ -5035,6 +5092,11 @@ async function loadContactTickets(contactId, ticketsSection) {
       // Setup create ticket button in empty state
       setupTicketsEmptyCreateButton(ticketsSection);
     } else {
+      // Resolve human-readable stage labels + owner names before rendering.
+      await Promise.all([
+        ensureTicketStageLabels(),
+        getHubspotOwnerNameMap().catch(() => ({})),
+      ]);
       // Display tickets
       ticketsList.innerHTML = tickets.map(ticket => formatTicketItem(ticket)).join('');
       // Setup association link handlers
@@ -5169,12 +5231,37 @@ function setupTicketAssociationLinks(ticketsSection, contactId) {
   });
 }
 
+// Cache of ticket pipeline-stage id -> human label (raw stage ids like "2" mean
+// nothing to the user).
+let ticketStageLabelMap = {};
+async function ensureTicketStageLabels() {
+  try {
+    if (Object.keys(ticketStageLabelMap).length) return;
+    const resp = await sendExtensionMessage({
+      action: 'getPropertyOptions',
+      objectType: 'tickets',
+      property: 'hs_pipeline_stage',
+    });
+    const map = {};
+    (resp?.options || []).forEach((o) => {
+      if (o && o.value != null) map[String(o.value)] = o.label || String(o.value);
+    });
+    if (Object.keys(map).length) ticketStageLabelMap = map;
+  } catch (e) {
+    console.warn('[Content] Could not load ticket stage labels:', e);
+  }
+}
+
 // Function to format a single ticket item
 function formatTicketItem(ticket) {
   const ticketId = ticket.id || ticket.hs_object_id || '';
-  const ticketName = ticket.properties?.subject || ticket.properties?.hs_ticket_name || 'Untitled Ticket';
-  const ticketStatus = ticket.properties?.hs_pipeline_stage || ticket.properties?.hs_ticket_status || 'New';
-  const ticketOwner = ticket.properties?.hubspot_owner_id || '--';
+  const ticketName = escapeHtml(ticket.properties?.subject || ticket.properties?.hs_ticket_name || 'Untitled Ticket');
+  const rawStatus = String(ticket.properties?.hs_pipeline_stage || ticket.properties?.hs_ticket_status || 'New');
+  const ticketStatus = escapeHtml(ticketStageLabelMap[rawStatus] || rawStatus);
+  const ownerId = ticket.properties?.hubspot_owner_id || '';
+  const ticketOwner = ownerId
+    ? escapeHtml((hubspotOwnerNameCache && hubspotOwnerNameCache[String(ownerId)]) || `Owner #${ownerId}`)
+    : 'Unassigned';
   const createdAt = ticket.properties?.createdate || ticket.createdAt || new Date().toISOString();
   
   // Calculate open duration in hours
@@ -5262,7 +5349,7 @@ async function ensureDealStageLabels() {
 // Function to format deal item for display (matching screenshot format)
 function formatDealItem(deal) {
   const dealId = deal.id || deal.hs_object_id || '';
-  const dealName = deal.properties?.dealname || deal.properties?.name || 'Untitled Deal';
+  const dealName = escapeHtml(deal.properties?.dealname || deal.properties?.name || 'Untitled Deal');
   const dealAmount = deal.properties?.amount || null;
   const currencyCode = deal.properties?.deal_currency_code || deal.properties?.hs_currency_code || null;
   const closeDate = deal.properties?.closedate || deal.properties?.hs_expected_close_date || null;
@@ -5356,22 +5443,16 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
   // Format contact display name
   // Only show email in parentheses if it exists and is not empty/placeholder
   const hasValidEmail = contactEmail && contactEmail !== '--' && contactEmail.trim() !== '';
-  const contactDisplay = contactName && hasValidEmail
+  const contactDisplay = escapeHtml(contactName && hasValidEmail
     ? `${contactName} (${contactEmail})`
-    : contactName || (hasValidEmail ? contactEmail : '') || 'Contact';
-  
-  // Get today's date in MM/DD/YYYY format
-  const today = new Date();
-  const formattedDate = today.toLocaleDateString('en-US', {
-    month: '2-digit',
-    day: '2-digit',
-    year: 'numeric'
-  });
-  
+    : contactName || (hasValidEmail ? contactEmail : '') || 'Contact');
+  contactName = escapeHtml(contactName || '');
+  contactEmail = escapeHtml(contactEmail || '');
+
   // Determine which segment should be active
   const isCreateNewActive = defaultSegment === 'create-new';
   const isAddExistingActive = defaultSegment === 'add-existing';
-  
+
   // Determine title based on default segment
   const modalTitle = isAddExistingActive ? 'Add existing Ticket' : 'Create Ticket';
   
@@ -5405,36 +5486,30 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
             <div class="ticket-form-group">
               <label for="ticket-pipeline" class="ticket-label required">Pipeline</label>
               <select id="ticket-pipeline" name="pipeline" class="ticket-select" required>
-                <option value="support-pipeline" selected>Support Pipeline</option>
-                <option value="sales-pipeline">Sales Pipeline</option>
+                <option value="">Loading pipelines…</option>
               </select>
             </div>
-            
+
             <div class="ticket-form-group">
               <label for="ticket-status" class="ticket-label required">Ticket status</label>
               <select id="ticket-status" name="status" class="ticket-select" required>
-                <option value="new" selected>New</option>
-                <option value="open">Open</option>
-                <option value="in-progress">In Progress</option>
-                <option value="waiting">Waiting</option>
-                <option value="closed">Closed</option>
+                <option value="">Loading statuses…</option>
               </select>
             </div>
-            
+
             <div class="ticket-form-group">
               <label for="ticket-description" class="ticket-label">Ticket description</label>
               <textarea id="ticket-description" name="description" class="ticket-textarea" rows="4"></textarea>
             </div>
-            
+
             <div class="ticket-form-group">
               <label for="ticket-source" class="ticket-label">Source</label>
               <select id="ticket-source" name="source" class="ticket-select">
                 <option value="">Select source</option>
-                <option value="email">Email</option>
-                <option value="phone">Phone</option>
-                <option value="chat">Chat</option>
-                <option value="web">Web</option>
-                <option value="social">Social Media</option>
+                <option value="CHAT" selected>Chat (WhatsApp)</option>
+                <option value="EMAIL">Email</option>
+                <option value="PHONE">Phone</option>
+                <option value="FORM">Form</option>
               </select>
             </div>
             
@@ -5454,14 +5529,6 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
                 <option value="high">High</option>
                 <option value="urgent">Urgent</option>
               </select>
-            </div>
-            
-            <div class="ticket-form-group">
-              <label for="ticket-create-date" class="ticket-label">Create date</label>
-              <div class="ticket-date-wrapper">
-                <input type="date" id="ticket-create-date" name="createDate" class="ticket-date-input" value="${today.toISOString().split('T')[0]}">
-                <span class="ticket-date-display">${formattedDate}</span>
-              </div>
             </div>
             
             <div class="ticket-associate-section">
@@ -5592,13 +5659,16 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
   populateDealOwnerSelect(modal, '#ticket-owner').catch((err) =>
     console.warn('[Ticket Modal] Could not load owners:', err)
   );
+  // Populate pipeline + status dropdowns from the portal's REAL ticket pipelines
+  // (the old hard-coded stage ids didn't exist in most portals and broke creates).
+  setupTicketPipelineForm(modal).catch((err) =>
+    console.warn('[Ticket Modal] Could not load ticket pipelines:', err)
+  );
   const closeBtn = modal.querySelector('.ticket-close-btn');
   const cancelBtn = modal.querySelector('#ticket-cancel');
   const form = modal.querySelector('#ticket-form');
   const createAnotherBtn = modal.querySelector('#ticket-create-another');
   const contactRemoveBtn = modal.querySelector('#ticket-contact-remove');
-  const dateInput = modal.querySelector('#ticket-create-date');
-  const dateDisplay = modal.querySelector('.ticket-date-display');
   const segmentBtns = modal.querySelectorAll('.ticket-segment-btn');
   const titleElement = modal.querySelector('.ticket-header-title');
   
@@ -5657,24 +5727,6 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
     });
   });
   
-  // Date input handler
-  if (dateInput && dateDisplay) {
-    // Make date display clickable to trigger date input
-    dateDisplay.addEventListener('click', () => {
-      dateInput.click();
-    });
-    
-    dateInput.addEventListener('change', (e) => {
-      const selectedDate = new Date(e.target.value);
-      const formatted = selectedDate.toLocaleDateString('en-US', {
-        month: '2-digit',
-        day: '2-digit',
-        year: 'numeric'
-      });
-      dateDisplay.textContent = formatted;
-    });
-  }
-  
   // Contact remove handler
   if (contactRemoveBtn) {
     contactRemoveBtn.addEventListener('click', () => {
@@ -5687,29 +5739,48 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
       }
     });
   }
-  
+
+  // Refresh the sidebar tickets section after a successful create.
+  function refreshTicketsSidebarSection() {
+    const ticketsSection = document.querySelector('.tickets-section');
+    const contactIdAttr = ticketsSection?.getAttribute('data-contact-id');
+    if (!ticketsSection || !contactIdAttr) return;
+    ticketsSection.dataset.ticketsLoaded = 'false';
+    refreshTicketsCount(contactIdAttr, ticketsSection).catch(() => {});
+    const ticketsContent = ticketsSection.querySelector('.tickets-content');
+    if (ticketsContent && ticketsContent.style.display !== 'none') {
+      loadContactTickets(contactIdAttr, ticketsSection);
+    }
+  }
+
+  // Read the contact association's live state — if the user removed the contact
+  // tag, the ticket must not be silently associated with them anyway.
+  const getLiveContactId = () => modal.querySelector('#ticket-contact-id')?.value || null;
+
   // Form submit handler
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const submitBtn = form.querySelector('button[type="submit"]');
     const originalText = submitBtn.textContent;
-    
+
     try {
       // Disable submit button
       submitBtn.disabled = true;
       submitBtn.textContent = 'Creating...';
-      
+
       const formData = new FormData(form);
       const ticketData = Object.fromEntries(formData);
-      
+
       console.log('[Ticket Modal] Form submitted:', ticketData);
-      
+
       // Create ticket in HubSpot
-      await createHubSpotTicket(ticketData, contactId);
-      
+      await createHubSpotTicket(ticketData, getLiveContactId());
+
       // Show success
       console.log('[Ticket Modal] ✅ Ticket created successfully!');
-      
+      showWhatsyncToast('Ticket created in HubSpot');
+      refreshTicketsSidebarSection();
+
       // Close modal
       closeModal();
     } catch (error) {
@@ -5719,32 +5790,33 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
       submitBtn.textContent = originalText;
     }
   });
-  
+
   // Create and add another handler
   createAnotherBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     const originalText = createAnotherBtn.textContent;
-    
+
     try {
       // Disable button
       createAnotherBtn.disabled = true;
       createAnotherBtn.textContent = 'Creating...';
-      
+
       const formData = new FormData(form);
       const ticketData = Object.fromEntries(formData);
-      
+
       console.log('[Ticket Modal] Create and add another:', ticketData);
-      
+
       // Create ticket in HubSpot
-      await createHubSpotTicket(ticketData, contactId);
-      
+      await createHubSpotTicket(ticketData, getLiveContactId());
+
       console.log('[Ticket Modal] ✅ Ticket created successfully!');
-      
-      // Reset form but keep contact association
+      showWhatsyncToast('Ticket created in HubSpot');
+      refreshTicketsSidebarSection();
+
+      // Reset form but keep contact association; re-select the default pipeline/stage.
       form.reset();
-      dateInput.value = today.toISOString().split('T')[0];
-      dateDisplay.textContent = formattedDate;
-      
+      setupTicketPipelineForm(modal).catch(() => {});
+
       // Restore contact tag if it was removed
       const contactTag = document.getElementById('ticket-contact-tag');
       if (contactTag && contactTag.style.display === 'none') {
@@ -5753,7 +5825,7 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
         document.getElementById('ticket-contact-name').value = contactName;
         document.getElementById('ticket-contact-email').value = contactEmail;
       }
-      
+
       // Re-enable button
       createAnotherBtn.disabled = false;
       createAnotherBtn.textContent = originalText;
@@ -5764,6 +5836,55 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
       createAnotherBtn.textContent = originalText;
     }
   });
+}
+
+// Populate the ticket modal's Pipeline and Ticket status selects with the
+// portal's real ticket pipelines/stages (fetched via the edge function).
+async function setupTicketPipelineForm(modal) {
+  const pipelineSelect = modal.querySelector('#ticket-pipeline');
+  const stageSelect = modal.querySelector('#ticket-status');
+  if (!pipelineSelect || !stageSelect) return;
+
+  const response = await sendExtensionMessage({ action: 'getTicketPipelines' });
+  const pipelines = response?.success ? (response.pipelines || []) : [];
+
+  const renderStages = (pipelineId) => {
+    const pipeline = pipelines.find((p) => p.id === pipelineId);
+    stageSelect.innerHTML = '';
+    if (!pipeline?.stages?.length) {
+      stageSelect.innerHTML = '<option value="">No statuses available</option>';
+      return;
+    }
+    pipeline.stages.forEach((stage) => {
+      const option = document.createElement('option');
+      option.value = stage.id;
+      option.textContent = stage.label;
+      stageSelect.appendChild(option);
+    });
+  };
+
+  if (!pipelines.length) {
+    // Leave usable but honest fallbacks; the edge function strips empty values.
+    pipelineSelect.innerHTML = '<option value="">Default pipeline</option>';
+    stageSelect.innerHTML = '<option value="1">New</option>';
+    return;
+  }
+
+  pipelineSelect.innerHTML = '';
+  pipelines.forEach((pipeline) => {
+    const option = document.createElement('option');
+    option.value = pipeline.id;
+    option.textContent = pipeline.label;
+    pipelineSelect.appendChild(option);
+  });
+
+  pipelineSelect.value = pipelines[0].id;
+  renderStages(pipelines[0].id);
+
+  if (pipelineSelect.dataset.changeBound !== 'true') {
+    pipelineSelect.dataset.changeBound = 'true';
+    pipelineSelect.addEventListener('change', () => renderStages(pipelineSelect.value));
+  }
 }
 
 // Helper function to calculate business days and return label
@@ -5829,13 +5950,15 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
   if (existingModal) {
     existingModal.remove();
   }
-  
+
   // Format contact display name
   // Only show email in parentheses if it exists and is not empty/placeholder
   const hasValidEmail = contactEmail && contactEmail !== '--' && contactEmail.trim() !== '';
-  const contactDisplay = contactName && hasValidEmail
+  const contactDisplay = escapeHtml(contactName && hasValidEmail
     ? `${contactName} (${contactEmail})`
-    : contactName || (hasValidEmail ? contactEmail : '') || 'Contact';
+    : contactName || (hasValidEmail ? contactEmail : '') || 'Contact');
+  contactName = escapeHtml(contactName || '');
+  contactEmail = escapeHtml(contactEmail || '');
   
   // Get today's date and default close date (end of month)
   const today = new Date();
@@ -5918,13 +6041,11 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
               <label for="deal-type" class="deal-label">Deal type</label>
               <select id="deal-type" name="dealType" class="deal-select">
                 <option value="">Select deal type</option>
-                <option value="new-business">New Business</option>
-                <option value="existing-business">Existing Business</option>
-                <option value="renewal">Renewal</option>
-                <option value="upsell">Upsell</option>
+                <option value="newbusiness">New Business</option>
+                <option value="existingbusiness">Existing Business</option>
               </select>
             </div>
-            
+
             <div class="deal-form-group">
               <label for="deal-priority" class="deal-label">Priority</label>
               <select id="deal-priority" name="priority" class="deal-select">
@@ -5932,7 +6053,6 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
                 <option value="high">High</option>
-                <option value="urgent">Urgent</option>
               </select>
             </div>
             
@@ -5987,19 +6107,6 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
                     </svg>
                   </label>
                 </div>
-              </div>
-            </div>
-            
-            <div class="deal-line-item-section">
-              <div class="deal-section-title">Add line item</div>
-              <div class="deal-form-group">
-                <select id="deal-line-item" name="lineItem" class="deal-select">
-                  <option value="">Add a line item</option>
-                </select>
-              </div>
-              <div class="deal-form-group">
-                <label for="deal-quantity" class="deal-label">Quantity</label>
-                <input type="number" id="deal-quantity" name="quantity" class="deal-input" value="0" min="0">
               </div>
             </div>
             
@@ -6082,18 +6189,24 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
   // Segment button handlers
   const createForm = modal.querySelector('#deal-form');
   const existingForm = modal.querySelector('#deal-add-existing-form');
-  
+
+  // "Add existing" tab: real load/search/associate flow (was an empty shell).
+  const dealFormHandlers = setupAddExistingDealForm(modal, contactId, closeModal);
+  if (defaultSegment === 'add-existing' && dealFormHandlers?.loadDeals) {
+    dealFormHandlers.loadDeals(contactId);
+  }
+
   segmentBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       segmentBtns.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const segment = btn.getAttribute('data-segment');
-      
+
       // Update title based on segment
       if (titleElement) {
         titleElement.textContent = segment === 'add-existing' ? 'Add existing Deal' : 'Create Deal';
       }
-      
+
       // Show/hide forms based on segment
       if (segment === 'create-new') {
         createForm.style.display = 'block';
@@ -6101,8 +6214,11 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
       } else if (segment === 'add-existing') {
         createForm.style.display = 'none';
         existingForm.style.display = 'block';
+        if (dealFormHandlers?.loadDeals) {
+          dealFormHandlers.loadDeals(contactId);
+        }
       }
-      
+
       console.log('[Deal Modal] Segment changed to:', segment);
     });
   });
@@ -6155,15 +6271,20 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
       
       const formData = new FormData(form);
       const dealData = Object.fromEntries(formData);
-      
+
       console.log('[Deal Modal] Form submitted:', dealData);
-      
+
+      // Respect the contact tag's live state — if the user removed the contact,
+      // don't silently associate the deal with them anyway.
+      const liveContactId = modal.querySelector('#deal-contact-id')?.value || '';
+
       // Create deal in HubSpot
-      await createHubSpotDeal(dealData, contactId);
-      
+      await createHubSpotDeal(dealData, liveContactId || null);
+
       // Show success
       console.log('[Deal Modal] ✅ Deal created successfully!');
-      
+      showWhatsyncToast('Deal created in HubSpot');
+
       // Close modal
       closeModal();
     } catch (error) {
@@ -6184,13 +6305,15 @@ function showTaskModal(contactName, contactEmail, contactId) {
   if (existingModal) {
     existingModal.remove();
   }
-  
+
   // Format contact display name
   // Only show email in parentheses if it exists and is not empty/placeholder
   const hasValidEmail = contactEmail && contactEmail !== '--' && contactEmail.trim() !== '';
-  const contactDisplay = contactName && hasValidEmail
+  const contactDisplay = escapeHtml(contactName && hasValidEmail
     ? `${contactName} (${contactEmail})`
-    : contactName || (hasValidEmail ? contactEmail : '') || 'Contact';
+    : contactName || (hasValidEmail ? contactEmail : '') || 'Contact');
+  contactName = escapeHtml(contactName || '');
+  contactEmail = escapeHtml(contactEmail || '');
   
   // Calculate "In 3 business days" date
   const today = new Date();
@@ -6313,7 +6436,6 @@ function showTaskModal(contactName, contactEmail, contactId) {
                   <option value="todo" selected>To-do</option>
                   <option value="call">Call</option>
                   <option value="email">Email</option>
-                  <option value="meeting">Meeting</option>
                 </select>
               </div>
               <div class="task-classification-item">
@@ -7281,9 +7403,9 @@ function showTaskModal(contactName, contactEmail, contactId) {
           }
         }
         
-        // Show success message
-        alert('Task created successfully!');
-        
+        // Show success message (non-blocking)
+        showWhatsyncToast('Task created in HubSpot');
+
       } catch (error) {
         console.error('[Task Modal] Error creating task:', error);
         alert(`Error creating task: ${error.message || 'Unknown error'}`);
@@ -7428,20 +7550,15 @@ async function createHubSpotTicket(ticketData, contactId) {
       properties.content = await appendMessageHistoryIfEnabled(ticketData.description);
     }
     
-    // Pipeline stage - map status to HubSpot pipeline stage
-    // HubSpot uses hs_pipeline_stage for the stage ID
-    // Common values: '1' for new, '2' for open, '3' for in-progress, etc.
-    const statusMap = {
-      'new': '1',
-      'open': '2',
-      'in-progress': '3',
-      'waiting': '4',
-      'closed': '5'
-    };
-    if (ticketData.status) {
-      properties.hs_pipeline_stage = statusMap[ticketData.status] || '1';
+    // Pipeline + stage: the form now carries the portal's REAL pipeline/stage ids
+    // (loaded from the HubSpot pipelines API), so pass them through as-is.
+    if (ticketData.pipeline) {
+      properties.hs_pipeline = ticketData.pipeline;
     }
-    
+    if (ticketData.status) {
+      properties.hs_pipeline_stage = ticketData.status;
+    }
+
     // Priority - map to HubSpot priority values
     if (ticketData.priority) {
       const priorityMap = {
@@ -7452,17 +7569,18 @@ async function createHubSpotTicket(ticketData, contactId) {
       };
       properties.hs_ticket_priority = priorityMap[ticketData.priority] || null;
     }
-    
-    // Source
+
+    // Ticket owner (real HubSpot owner id from the owners dropdown)
+    if (ticketData.owner && ticketData.owner !== 'unassigned') {
+      properties.hubspot_owner_id = ticketData.owner;
+    }
+
+    // Source — the form values are already HubSpot's internal enum values
+    // (CHAT / EMAIL / PHONE / FORM); invalid values used to break the create.
     if (ticketData.source) {
-      properties.hs_ticket_source = ticketData.source.toUpperCase();
+      properties.hs_ticket_source = ticketData.source;
     }
-    
-    // Create date (if specified)
-    if (ticketData.createDate) {
-      properties.createdate = new Date(ticketData.createDate).getTime().toString();
-    }
-    
+
     console.log('[Content] Mapped HubSpot properties:', properties);
     
     // Prepare ticket data for edge function
@@ -7568,9 +7686,13 @@ async function createHubSpotDeal(dealData, contactId) {
       properties.dealtype = dealData.dealType;
     }
     
-    // Priority
+    // Priority — HubSpot deal hs_priority uses lowercase internal values
+    // (low / medium / high); uppercasing them made HubSpot reject the create.
     if (dealData.priority) {
-      properties.hs_priority = dealData.priority.toUpperCase();
+      const p = dealData.priority.toLowerCase();
+      if (['low', 'medium', 'high'].includes(p)) {
+        properties.hs_priority = p;
+      }
     }
     
     // Pipeline
@@ -7621,34 +7743,24 @@ async function createHubSpotDeal(dealData, contactId) {
       ownerId: ownerId || null       // For deal owner
     };
     
-    console.log('[Content] Sending deal creation request to edge function...');
-    console.log('[Content] Payload:', JSON.stringify(dealPayload, null, 2));
-    
-    // Call HubSpot edge function
-    const response = await fetch(HUBSPOT_EDGE_FUNCTION_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'createDeal',
-        data: dealPayload
-      })
+    console.log('[Content] Sending deal creation request to background...');
+
+    // Route through the background script so the request carries the user's
+    // session (auth headers, token refresh, timeout) like every other edge call.
+    // A raw fetch from here used to go out unauthenticated and always failed.
+    const response = await sendExtensionMessage({
+      action: 'createHubSpotDeal',
+      data: dealPayload
     });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[Content] ❌ Deal creation failed:', response.status, errorText);
-      throw new Error(`Failed to create deal: ${response.status} ${errorText}`);
+
+    if (!response) {
+      throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
     }
-    
-    const result = await response.json();
-    console.log('[Content] Response received from edge function');
-    console.log('[Content] Response:', JSON.stringify(result, null, 2));
-    
-    if (result.error) {
-      console.error('[Content] ❌ Deal creation error:', result.error);
-      throw new Error(result.error || 'Failed to create deal');
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to create deal');
     }
-    
+    const result = response.data;
+
     console.log('[Content] ✅ Deal created successfully!');
     console.log('[Content] Deal ID:', result.id || result.hs_object_id);
     
@@ -7714,31 +7826,25 @@ async function createHubSpotDeal(dealData, contactId) {
   }
 }
 
-// Function to associate deal with contact
-async function associateDealWithContact(dealId, contactId) {
-  try {
-    const response = await fetch(HUBSPOT_EDGE_FUNCTION_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'associateDealWithContact',
-        data: {
-          dealId: dealId,
-          contactId: contactId
-        }
-      })
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to associate deal: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    return result;
-  } catch (error) {
-    console.error('[Content] Error associating deal with contact:', error);
-    throw error;
-  }
+// Associate / disassociate deals with a contact (via background → edge function).
+async function associateDealsWithContact(contactId, dealIds) {
+  const response = await sendExtensionMessage({
+    action: 'associateDealsWithContact',
+    contactId,
+    dealIds,
+  });
+  if (!response?.success) throw new Error(response?.error || 'Failed to associate deals');
+  return response.data;
+}
+
+async function disassociateDealsFromContact(contactId, dealIds) {
+  const response = await sendExtensionMessage({
+    action: 'disassociateDealsFromContact',
+    contactId,
+    dealIds,
+  });
+  if (!response?.success) throw new Error(response?.error || 'Failed to disassociate deals');
+  return response.data;
 }
 
 // Function to log deal activity to Supabase database (hubspot_contact_logs table)
@@ -8173,6 +8279,171 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
     loadTickets: loadExistingTickets,
     searchTickets: searchTickets
   };
+}
+
+// Lightweight non-blocking success/info toast (replaces jarring alert() calls).
+function showWhatsyncToast(message, isError = false) {
+  try {
+    document.getElementById('whatsync-toast')?.remove();
+    const toast = document.createElement('div');
+    toast.id = 'whatsync-toast';
+    toast.className = `whatsync-toast${isError ? ' whatsync-toast-error' : ''}`;
+    toast.setAttribute('role', 'status');
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('visible'));
+    setTimeout(() => {
+      toast.classList.remove('visible');
+      setTimeout(() => toast.remove(), 300);
+    }, 2600);
+  } catch { /* purely cosmetic */ }
+}
+
+// "Add existing" deal tab: load the portal's deals, pre-check the ones already
+// associated with this contact, and save association changes on submit.
+function setupAddExistingDealForm(modal, contactId, closeModal) {
+  const searchInput = modal.querySelector('#deal-search-input');
+  const dealList = modal.querySelector('#deal-list');
+  const dealListLoading = modal.querySelector('#deal-list-loading');
+  const dealListEmpty = modal.querySelector('#deal-list-empty');
+  const addSelectedBtn = modal.querySelector('#deal-add-selected-btn');
+  const cancelBtn = modal.querySelector('#deal-cancel-existing');
+  const totalCount = modal.querySelector('#deal-total-count');
+  const countText = modal.querySelector('#deal-count-text');
+
+  if (!dealList || !addSelectedBtn) return null;
+
+  let allDeals = [];
+  const selectedDeals = new Set();
+  const currentlyAssociatedDeals = new Set();
+
+  function updateCounts(count) {
+    if (totalCount) totalCount.textContent = count;
+    if (countText) countText.textContent = count === 1 ? 'Deal' : 'Deals';
+    // Enable Save once the selection differs from the current associations.
+    const changed =
+      selectedDeals.size !== currentlyAssociatedDeals.size ||
+      [...selectedDeals].some((id) => !currentlyAssociatedDeals.has(id));
+    addSelectedBtn.disabled = !changed;
+  }
+
+  function renderDeals(deals) {
+    if (!deals || deals.length === 0) {
+      dealListEmpty.style.display = 'block';
+      dealList.innerHTML = '';
+      updateCounts(0);
+      return;
+    }
+    dealListEmpty.style.display = 'none';
+    dealList.innerHTML = deals.map((deal) => {
+      const dealId = String(deal.id || deal.hs_object_id || '');
+      const name = escapeHtml(deal.properties?.dealname || 'Untitled Deal');
+      const checked = selectedDeals.has(dealId) ? 'checked' : '';
+      return `
+        <div class="ticket-item-row">
+          <input type="checkbox" class="deal-item-checkbox" data-deal-id="${dealId}" ${checked}>
+          <label class="ticket-item-label">${name}</label>
+        </div>`;
+    }).join('');
+
+    dealList.querySelectorAll('.deal-item-checkbox').forEach((checkbox) => {
+      checkbox.addEventListener('change', (e) => {
+        const dealId = String(e.target.getAttribute('data-deal-id'));
+        if (e.target.checked) selectedDeals.add(dealId);
+        else selectedDeals.delete(dealId);
+        updateCounts(deals.length);
+      });
+    });
+    updateCounts(deals.length);
+  }
+
+  async function loadExistingDeals(targetContactId) {
+    try {
+      dealListLoading.style.display = 'block';
+      dealList.innerHTML = '';
+      dealListEmpty.style.display = 'none';
+
+      // All deals in the portal (getDeals without a contactId), plus this
+      // contact's currently-associated deals so we can pre-check them.
+      const [allResult, associated] = await Promise.all([
+        callHubSpotEdgeFromContent('getDeals', {}).catch(() => ({ ok: false, json: null })),
+        fetchDealsFromHubSpot(targetContactId).catch(() => []),
+      ]);
+      const list = allResult.ok ? (allResult.json?.results || []) : [];
+
+      selectedDeals.clear();
+      currentlyAssociatedDeals.clear();
+      (associated || []).forEach((deal) => {
+        const id = String(deal.id || deal.hs_object_id || '');
+        if (id) {
+          currentlyAssociatedDeals.add(id);
+          selectedDeals.add(id);
+        }
+      });
+
+      allDeals = list;
+      dealListLoading.style.display = 'none';
+      renderDeals(list);
+    } catch (error) {
+      console.error('[Deal Modal] Error loading deals:', error);
+      dealListLoading.style.display = 'none';
+      dealListEmpty.style.display = 'block';
+      dealListEmpty.innerHTML = '<p>Error loading deals. Please try again.</p>';
+    }
+  }
+
+  if (searchInput) {
+    let searchTimeout = null;
+    searchInput.addEventListener('input', (e) => {
+      clearTimeout(searchTimeout);
+      const term = e.target.value.trim().toLowerCase();
+      searchTimeout = setTimeout(() => {
+        const filtered = !term
+          ? allDeals
+          : allDeals.filter((d) => (d.properties?.dealname || '').toLowerCase().includes(term));
+        renderDeals(filtered);
+      }, 250);
+    });
+  }
+
+  addSelectedBtn.addEventListener('click', async () => {
+    try {
+      addSelectedBtn.disabled = true;
+      addSelectedBtn.textContent = 'Saving...';
+
+      const toAssociate = [...selectedDeals].filter((id) => !currentlyAssociatedDeals.has(id));
+      const toDisassociate = [...currentlyAssociatedDeals].filter((id) => !selectedDeals.has(id));
+
+      if (toAssociate.length) await associateDealsWithContact(contactId, toAssociate);
+      if (toDisassociate.length) await disassociateDealsFromContact(contactId, toDisassociate);
+
+      showWhatsyncToast('Deal associations updated');
+      if (closeModal) closeModal();
+
+      // Refresh the sidebar's deals section to reflect the new associations.
+      setTimeout(() => {
+        const dealsSection = document.querySelector('.deals-section');
+        const contactIdAttr = dealsSection?.getAttribute('data-contact-id');
+        if (dealsSection && contactIdAttr) {
+          dealsSection.dataset.dealsLoaded = 'false';
+          refreshDealsCount(contactIdAttr, dealsSection).catch(() => {});
+          const dealsContent = dealsSection.querySelector('.deals-content');
+          if (dealsContent && dealsContent.style.display !== 'none') {
+            loadContactDeals(contactIdAttr, dealsSection);
+          }
+        }
+      }, 100);
+    } catch (error) {
+      console.error('[Deal Modal] Error updating deal associations:', error);
+      showWhatsyncToast(`Error updating deals: ${error.message || 'unknown error'}`, true);
+      addSelectedBtn.disabled = false;
+      addSelectedBtn.textContent = 'Save';
+    }
+  });
+
+  if (cancelBtn && closeModal) cancelBtn.addEventListener('click', closeModal);
+
+  return { loadDeals: loadExistingDeals };
 }
 
 // Function to fetch tickets from HubSpot
@@ -8745,7 +9016,7 @@ function setupCreateContactForm(phoneNumber) {
 }
 
 // Function to create a note in HubSpot (via background script)
-async function createHubSpotNote(contactId, noteText, noteHtml, createTodo) {
+async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, followUpType = null, followUpDate = null) {
   console.log('[Content] ===== CREATE HUBSPOT NOTE =====');
   console.log('[Content] HubSpot Contact ID:', contactId);
   console.log('[Content] Note text length:', noteText?.length || 0);
@@ -8774,7 +9045,9 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo) {
       contactId: numericContactId,
       noteText: await appendMessageHistoryIfEnabled(noteText),
       noteHtml: noteHtml,
-      createTodo: createTodo
+      createTodo: createTodo,
+      followUpType: followUpType,
+      followUpDate: followUpDate
     }
   };
   
@@ -9572,9 +9845,9 @@ async function formatContactDetails(contacts, phoneNumber) {
   
   const firstName = props.firstname || '';
   const lastName = props.lastname || '';
-  const fullName = `${firstName} ${lastName}`.trim() || 'Unknown';
+  let fullName = `${firstName} ${lastName}`.trim() || 'Unknown';
   const phone = props.phone || '--';
-  const email = props.email || '--';
+  let email = props.email || '--';
   
   // Try multiple possible company property names from HubSpot
   // HubSpot stores company in 'company' property, or as associatedcompanyid/associatedcompanyname
@@ -9613,12 +9886,20 @@ async function formatContactDetails(contacts, phoneNumber) {
     }
   }
   
+  // Escape CRM-sourced values before interpolating them into sidebar HTML — a
+  // contact name/email containing quotes or angle brackets must never break
+  // (or script) the markup.
+  const avatarInitial = escapeHtml((fullName.charAt(0) || 'U').toUpperCase());
+  fullName = escapeHtml(fullName);
+  email = escapeHtml(email);
+  const jobTitleSafe = escapeHtml(jobTitle);
+
   return `
     <div class="contact-details">
       <div class="contact-header">
         <div class="contact-header-row-1">
           <div class="contact-avatar">
-            ${fullName.charAt(0).toUpperCase()}
+            ${avatarInitial}
           </div>
           <div class="contact-name-section">
             <h3>${fullName}</h3>
@@ -9626,7 +9907,7 @@ async function formatContactDetails(contacts, phoneNumber) {
           </div>
         </div>
         <div class="contact-job-section">
-          <span class="job-label">${jobTitle !== '--' ? jobTitle : 'Job'}</span>
+          <span class="job-label">${jobTitle !== '--' ? jobTitleSafe : 'Job'}</span>
         </div>
         <div class="contact-email-header">
           ${email !== '--' ? `
@@ -9749,7 +10030,7 @@ async function formatContactDetails(contacts, phoneNumber) {
             <svg class="chevron-icon notes-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
-            <span>Note created (<span class="notes-count">0</span>)</span>
+            <span>Notes (<span class="notes-count">0</span>)</span>
           </div>
           <div class="notes-header-actions">
             <button class="notes-add-btn" id="notes-add-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}" title="Add Note">
@@ -9789,7 +10070,7 @@ async function formatContactDetails(contacts, phoneNumber) {
             <svg class="chevron-icon tickets-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
-            <span>Ticket created (<span class="tickets-count">0</span>)</span>
+            <span>Tickets (<span class="tickets-count">0</span>)</span>
           </div>
           <div class="tickets-header-actions">
             <button class="tickets-add-btn" id="tickets-add-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}" title="Add Ticket">
@@ -9838,7 +10119,7 @@ async function formatContactDetails(contacts, phoneNumber) {
             <svg class="chevron-icon tasks-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
-            <span>Task created (<span class="tasks-count">0</span>)</span>
+            <span>Tasks (<span class="tasks-count">0</span>)</span>
           </div>
           <div class="tasks-header-actions">
             <button class="tasks-add-btn" id="tasks-add-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}" title="Add Task">
@@ -9879,7 +10160,7 @@ async function formatContactDetails(contacts, phoneNumber) {
             <svg class="chevron-icon deals-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
-            <span>Deal created (<span class="deals-count">0</span>)</span>
+            <span>Deals (<span class="deals-count">0</span>)</span>
           </div>
           <div class="deals-header-actions">
             <button class="deals-add-btn" id="deals-add-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}" title="Add Deal">

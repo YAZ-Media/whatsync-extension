@@ -624,20 +624,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('[Background] getHubSpotDeals request for contact:', contactId);
     
     // Get userId and accessToken from storage
-    chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
+    chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
-      const accessToken = storageData.accessToken || null;
-      const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      
+      // Session token may live in external_auth_session rather than accessToken.
+      const accessToken = await getStoredAccessToken();
+
       if (!userId || !accessToken) {
         sendResponse({ success: false, error: 'Not authenticated' });
         return;
       }
-      
+
       try {
         getHubSpotDealsViaEdgeFunction(contactId, userId, accessToken)
           .then(data => {
@@ -660,20 +656,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('[Background] getHubSpotOwners request');
     
     // Get userId and accessToken from storage
-    chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
+    chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
-      const accessToken = storageData.accessToken || null;
-      const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      
+      // Session token may live in external_auth_session rather than accessToken.
+      const accessToken = await getStoredAccessToken();
+
       if (!userId || !accessToken) {
         sendResponse({ success: false, error: 'Not authenticated' });
         return;
       }
-      
+
       try {
         getHubSpotOwnersViaEdgeFunction(userId, accessToken)
           .then(data => {
@@ -814,9 +806,62 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       } catch (error) {
         console.error('[Background] getDealPipelines failed:', error);
-        sendResponse({ success: false, error: error.message, pipelines: [] });
+        // Fallback: the hubspot edge function can also serve pipelines directly.
+        try {
+          const result = await callHubSpotEdgeFunction('getPipelines', { objectType: 'deals' });
+          sendResponse({ success: true, pipelines: result?.pipelines || [] });
+        } catch (fallbackError) {
+          sendResponse({ success: false, error: fallbackError.message, pipelines: [] });
+        }
       }
     });
+    return true;
+  }
+
+  // Ticket pipelines + stages, so the create-ticket form shows the portal's real
+  // pipelines instead of hard-coded guesses.
+  if (request.action === 'getTicketPipelines') {
+    (async () => {
+      try {
+        const result = await callHubSpotEdgeFunction('getPipelines', { objectType: 'tickets' });
+        sendResponse({ success: true, pipelines: result?.pipelines || [] });
+      } catch (error) {
+        console.error('[Background] getTicketPipelines failed:', error);
+        sendResponse({ success: false, error: error.message, pipelines: [] });
+      }
+    })();
+    return true;
+  }
+
+  // Create a deal (routed through the authenticated edge call — a raw fetch from
+  // the content script used to go out with no auth headers and always failed).
+  if (request.action === 'createHubSpotDeal') {
+    (async () => {
+      try {
+        const result = await callHubSpotEdgeFunction('createDeal', request.data || {});
+        sendResponse({ success: true, data: result });
+      } catch (error) {
+        console.error('[Background] createHubSpotDeal failed:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true;
+  }
+
+  if (request.action === 'associateDealsWithContact' || request.action === 'disassociateDealsFromContact') {
+    (async () => {
+      try {
+        const edgeAction = request.action === 'associateDealsWithContact' ? 'associateDeals' : 'disassociateDeals';
+        const result = await callHubSpotEdgeFunction(edgeAction, {
+          contactId: request.contactId,
+          dealIds: request.dealIds,
+        });
+        sendResponse({ success: true, data: result });
+      } catch (error) {
+        console.error(`[Background] ${request.action} failed:`, error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
     return true;
   }
   
@@ -825,20 +870,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('[Background] getHubSpotTasks request for contact:', contactId);
     
     // Get userId and accessToken from storage
-    chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
+    chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
-      const accessToken = storageData.accessToken || null;
-      const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      
+      // Session token may live in external_auth_session rather than accessToken.
+      const accessToken = await getStoredAccessToken();
+
       if (!userId || !accessToken) {
         sendResponse({ success: false, error: 'Not authenticated' });
         return;
       }
-      
+
       try {
         getHubSpotTasksViaEdgeFunction(contactId, userId, accessToken)
           .then(data => {
@@ -1083,8 +1124,11 @@ async function createHubSpotTicketViaEdgeFunction(ticketData, userId, accessToke
   console.log('[Background] Input ticketData:', JSON.stringify(ticketData, null, 2));
   
   try {
-    // Call edge function to create ticket
-    const result = await callHubSpotEdgeFunction('createTicket', ticketData);
+    // Call edge function to create ticket. contactId must ride along in the
+    // payload — the edge function uses it to associate the ticket with the
+    // contact (it used to be dropped here, leaving every ticket unassociated).
+    const payload = contactId ? { ...ticketData, contactId: String(contactId) } : ticketData;
+    const result = await callHubSpotEdgeFunction('createTicket', payload);
     
     console.log('[Background] ✅ Edge function call successful!');
     console.log('[Background] Result type:', typeof result);
@@ -1378,7 +1422,7 @@ async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
   console.log('[Background] ===== CREATE NOTE VIA EDGE FUNCTION =====');
   console.log('[Background] Input noteData:', JSON.stringify(noteData, null, 2));
   
-  const { contactId, noteText, noteHtml, createTodo } = noteData;
+  const { contactId, noteText, noteHtml, createTodo, followUpType, followUpDate } = noteData;
   
   console.log('[Background] Extracted values:');
   console.log('[Background]   - contactId:', contactId, '(Type:', typeof contactId + ')');
@@ -1456,8 +1500,10 @@ async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
       body: trimmedNote, // Another common alternative
       // Timestamp
       timestamp: timestamp, // Timestamp in milliseconds (used in engagement.timestamp or properties.hs_timestamp)
-      // Optional
-      createTodo: createTodo || false // Optional: for future todo functionality
+      // Optional follow-up task (the note modal's "Create a ... task to follow up")
+      createTodo: createTodo || false,
+      followUpType: followUpType || null,   // 'To-do' | 'Call' | 'Email'
+      followUpDate: followUpDate || null    // ISO date string for the task due date
     };
     
     console.log('[Background] Contact ID validation:');

@@ -671,6 +671,7 @@ serve(async (req) => {
           'auto_log_conversations',
           'default_pipeline_id',
           'default_stage_id',
+          'default_lifecycle_stage',
           'contact_owner_assignment',
           'round_robin_owner_index',
           'mask_phone_numbers',
@@ -762,7 +763,7 @@ serve(async (req) => {
         const userId = authedUserId;
 
         const settingsRes = await externalQuery('hubspot_integration_settings', 'GET', {
-          select: 'auto_sync_contacts,auto_create_companies,enrich_before_create,attach_message_history,auto_log_conversations,contact_owner_assignment,default_pipeline_id,default_stage_id,mask_phone_numbers,redact_media_files,data_retention_days,field_mappings',
+          select: 'auto_sync_contacts,auto_create_companies,enrich_before_create,attach_message_history,auto_log_conversations,contact_owner_assignment,default_pipeline_id,default_stage_id,default_lifecycle_stage,mask_phone_numbers,redact_media_files,data_retention_days,field_mappings',
           filters: { user_id: `eq.${userId}` },
         });
 
@@ -775,6 +776,7 @@ serve(async (req) => {
           contact_owner_assignment: 'round_robin',
           default_pipeline_id: null,
           default_stage_id: null,
+          default_lifecycle_stage: null,
           mask_phone_numbers: true,
           redact_media_files: true,
           data_retention_days: 90,

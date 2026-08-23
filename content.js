@@ -2614,153 +2614,179 @@ function setupAutoConversationLog() {
 }
 
 // ---------------------------------------------------------------------------
-// Smart conversation-log suggestion — when the open chat carries business
-// signals, a small prompt appears INSIDE the chat, right under the message
-// that triggered it. One click logs the recent conversation to HubSpot as a
-// WhatsApp communication — no modal, no detour through the sidebar.
+// Per-message HubSpot logging — every message in a matched chat carries a
+// small tick that appears on hover, inside the chat itself. Ticking messages
+// (from either party) multi-selects them; the floating bar's Log button saves
+// them all as ONE WhatsApp communication on the contact's HubSpot timeline.
 // ---------------------------------------------------------------------------
-const LOG_SUGGEST_SCAN_MESSAGES = 30; // how many recent messages are scanned
-const LOG_SUGGEST_LOG_MESSAGES = 15;  // how many go into the logged transcript
-const LOG_SUGGEST_SIGNAL_GROUPS = [
-  {
-    key: 'commercial',
-    label: 'pricing or commitments',
-    res: [
-      /\b(price|pricing|quote|quotation|proposal|offer|budget|invoice|payment|contract|agreement|deal|discount|deadline|deliverable|submission|tender|rfp|rfq|purchase order|approved?|confirm(?:ed)?|signed?)\b/i,
-      /(سعر|تسعير|عرض|ميزانية|فاتورة|دفع|عقد|اتفاق|خصم|تسليم|مناقصة|موافقة|توقيع|اعتماد)/,
-      /\b(aed|usd|sar|qar|kwd|eur)\s?\d/i,
-      /\d[\d,.]*\s?(aed|usd|sar|qar|kwd|درهم|ريال|دينار)/i,
-    ],
-  },
-  {
-    key: 'scheduling',
-    label: 'a meeting, call, or event',
-    res: [
-      /\b(meeting|meet(?:ing)? (?:up|at|on)|call you|a call|schedule[d]?|appointment|demo|presentation|site visit|event|webinar|conference|follow[- ]?up|zoom|google meet|teams meeting)\b/i,
-      /(اجتماع|مكالمة|اتصال|موعد|مقابلة|زيارة|فعالية|مؤتمر|متابعة|عرض تقديمي)/,
-      /\b(tomorrow|tonight|next week|next month) (?:at|في)?\s?\d{1,2}(:\d{2})?\s?(am|pm)?\b/i,
-      /\b\d{1,2}(:\d{2})\s?(am|pm)\b/i,
-    ],
-  },
-];
+const inlineLogSelection = new Set();
+let inlineLogChatKey = null;
+let inlineLogTimer = null;
 
-// Scans the visible tail of the chat. Returns null when the chat is not worth
-// suggesting, otherwise the winning signal group, the id + row element of the
-// last matching message (used to anchor the inline prompt), and the hit count.
-function detectLogWorthySignals() {
-  const rows = Array.from(document.querySelectorAll('#main [data-id], [data-id]'))
-    .filter((el) => WA_MESSAGE_ID_RE.test(el.getAttribute('data-id') || ''))
-    .slice(-LOG_SUGGEST_SCAN_MESSAGES);
-  const groupHits = {};
-  let totalHits = 0;
-  let lastMatch = null;
-  for (const el of rows) {
-    const text = extractMessageText(el).trim();
-    if (!text) continue;
-    for (const group of LOG_SUGGEST_SIGNAL_GROUPS) {
-      if (group.res.some((re) => re.test(text))) {
-        groupHits[group.key] = (groupHits[group.key] || 0) + 1;
-        totalHits++;
-        lastMatch = { id: el.getAttribute('data-id'), row: el, group };
-        break; // one hit per message
-      }
-    }
-  }
-  if (totalHits < 2 || !lastMatch) return null;
-  // Prefer the group with the most hits for the prompt wording; the anchor
-  // stays on the last matching message either way.
-  const topGroup = LOG_SUGGEST_SIGNAL_GROUPS.reduce((a, b) =>
-    (groupHits[b.key] || 0) > (groupHits[a.key] || 0) ? b : a
+function getMatchedContactId() {
+  return (
+    document
+      .getElementById('hubspot-sidebar')
+      ?.querySelector('.deals-section, .notes-section, .tickets-section')
+      ?.getAttribute('data-contact-id') || null
   );
-  return { group: topGroup, lastSignalId: lastMatch.id, anchorRow: lastMatch.row };
 }
 
-// Renders the inline prompt bubble under the last signal-carrying message in
-// the chat window. Clicking "Log to HubSpot" logs the recent transcript
-// immediately as a native WhatsApp communication. ✕ dismisses; both remember
-// the last signal so the prompt only returns when NEW signals arrive.
-function maybeSuggestConversationLog() {
-  try {
-    if (document.getElementById('ws-log-suggest')) return;
-    const sidebar = document.getElementById('hubspot-sidebar');
-    const contactId = sidebar
-      ?.querySelector('.deals-section, .notes-section, .tickets-section')
-      ?.getAttribute('data-contact-id');
-    if (!contactId) return; // only for matched HubSpot contacts
-    const chatKey = getCurrentChatHeaderKey();
-    if (!chatKey) return;
+function toggleInlineLogMessage(row, btn) {
+  const id = row.getAttribute('data-id');
+  if (!id) return;
+  if (inlineLogSelection.has(id)) {
+    inlineLogSelection.delete(id);
+    btn.classList.remove('ws-msg-log-btn-on');
+    row.classList.remove('ws-msg-row-selected');
+  } else {
+    inlineLogSelection.add(id);
+    btn.classList.add('ws-msg-log-btn-on');
+    row.classList.add('ws-msg-row-selected');
+  }
+  updateInlineLogToolbar();
+}
 
-    const detection = detectLogWorthySignals();
-    if (!detection) return;
-
-    // Handled (dismissed or logged) up to this signal already? Only re-prompt
-    // when a newer signal-carrying message shows up.
-    const handledKey = `wsLogSuggestHandled:${chatKey}`;
-    if (sessionStorage.getItem(handledKey) === detection.lastSignalId) return;
-
-    const contactName = sidebar.querySelector('.contact-name-section h3')?.textContent?.trim() || 'Contact';
-    const prompt = document.createElement('div');
-    prompt.id = 'ws-log-suggest';
-    prompt.className = 'ws-chat-log-suggest';
-    prompt.innerHTML = `
-      <div class="ws-chat-log-suggest-inner">
-        <span class="ws-chat-log-suggest-text">💡 This chat mentions ${detection.group.label} — log it to HubSpot?</span>
-        <button type="button" class="ws-chat-log-suggest-log">Log to HubSpot</button>
-        <button type="button" class="ws-chat-log-suggest-dismiss" title="Dismiss">✕</button>
-      </div>`;
-
-    // Anchor directly under the triggering message row, inside the chat.
-    const anchorRow = detection.anchorRow;
-    if (anchorRow.parentNode) {
-      anchorRow.parentNode.insertBefore(prompt, anchorRow.nextSibling);
-    } else {
+// Adds the hover tick to every message row that doesn't have one yet. Runs
+// repeatedly (WhatsApp virtualizes and re-renders its rows constantly), so it
+// must be cheap and idempotent.
+function injectInlineLogButtons() {
+  const main = document.querySelector('#main');
+  if (!main) return;
+  const rows = main.querySelectorAll('[data-id]');
+  rows.forEach((row) => {
+    const id = row.getAttribute('data-id') || '';
+    if (!WA_MESSAGE_ID_RE.test(id)) return;
+    if (row.querySelector(':scope > .ws-msg-log-btn')) {
+      // Re-apply selection state (WhatsApp can re-render the row's classes).
+      const btn = row.querySelector(':scope > .ws-msg-log-btn');
+      const on = inlineLogSelection.has(id);
+      btn.classList.toggle('ws-msg-log-btn-on', on);
+      row.classList.toggle('ws-msg-row-selected', on);
       return;
     }
-
-    const markHandled = () => {
-      try { sessionStorage.setItem(handledKey, detection.lastSignalId); } catch (_) { /* noop */ }
-    };
-
-    prompt.querySelector('.ws-chat-log-suggest-log').addEventListener('click', async () => {
-      const btn = prompt.querySelector('.ws-chat-log-suggest-log');
-      btn.disabled = true;
-      btn.textContent = 'Logging…';
-      try {
-        const messages = collectChatMessagesWithIds().slice(-LOG_SUGGEST_LOG_MESSAGES);
-        const transcript =
-          'WhatsApp Messages:\n\n' +
-          messages.map((m) => `${m.outgoing ? 'You' : contactName}: ${m.text}`).join('\n\n');
-        await logWhatsAppConversation(contactId, transcript);
-        markHandled();
-        prompt.querySelector('.ws-chat-log-suggest-inner').innerHTML =
-          '<span class="ws-chat-log-suggest-text">✓ Conversation logged to HubSpot</span>';
-        showWhatsyncToast('Conversation logged to HubSpot');
-        setTimeout(() => prompt.remove(), 4000);
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = 'Log to HubSpot';
-        showWhatsyncToast(e?.message || 'Failed to log conversation', true);
-        reportClientError('log_suggest_click', e?.message || String(e));
-      }
+    if (getComputedStyle(row).position === 'static') {
+      row.style.position = 'relative';
+    }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `ws-msg-log-btn ${isOutgoingMessageRow(row) ? 'ws-msg-log-btn-left' : 'ws-msg-log-btn-right'}`;
+    btn.title = 'Select to log in HubSpot';
+    btn.textContent = '✓';
+    if (inlineLogSelection.has(id)) {
+      btn.classList.add('ws-msg-log-btn-on');
+      row.classList.add('ws-msg-row-selected');
+    }
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleInlineLogMessage(row, btn);
     });
-    prompt.querySelector('.ws-chat-log-suggest-dismiss').addEventListener('click', () => {
-      markHandled();
-      prompt.remove();
-    });
-  } catch (e) {
-    console.warn('[Content] log suggestion failed:', e);
+    row.appendChild(btn);
+  });
+}
+
+function clearInlineLogSelection() {
+  inlineLogSelection.clear();
+  document.querySelectorAll('.ws-msg-log-btn-on').forEach((b) => b.classList.remove('ws-msg-log-btn-on'));
+  document.querySelectorAll('.ws-msg-row-selected').forEach((r) => r.classList.remove('ws-msg-row-selected'));
+  updateInlineLogToolbar();
+}
+
+function updateInlineLogToolbar() {
+  const main = document.querySelector('#main');
+  let bar = document.getElementById('ws-inline-log-toolbar');
+  if (inlineLogSelection.size === 0) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (!main) return;
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'ws-inline-log-toolbar';
+    bar.innerHTML = `
+      <span class="ws-inline-log-count"></span>
+      <button type="button" class="ws-inline-log-go">Log to HubSpot</button>
+      <button type="button" class="ws-inline-log-clear" title="Clear selection">✕</button>`;
+    bar.querySelector('.ws-inline-log-go').addEventListener('click', logInlineSelectedMessages);
+    bar.querySelector('.ws-inline-log-clear').addEventListener('click', clearInlineLogSelection);
+    if (getComputedStyle(main).position === 'static') {
+      main.style.position = 'relative';
+    }
+    main.appendChild(bar);
+  }
+  const count = bar.querySelector('.ws-inline-log-count');
+  if (count) {
+    count.textContent = `${inlineLogSelection.size} message${inlineLogSelection.size !== 1 ? 's' : ''} selected`;
   }
 }
 
-// WhatsApp re-renders its chat list constantly (which removes the inline
-// prompt) and new messages arrive while a chat is open — re-evaluate on a
-// gentle interval instead of only on sidebar render.
-let logSuggestTimer = null;
-function ensureLogSuggestWatcher() {
-  if (logSuggestTimer) return;
-  logSuggestTimer = setInterval(() => {
-    try { maybeSuggestConversationLog(); } catch (_) { /* noop */ }
-  }, 20000);
+// Logs everything ticked as a single WhatsApp communication in HubSpot,
+// in chat order, labeled per sender — one click, no modal.
+async function logInlineSelectedMessages() {
+  const bar = document.getElementById('ws-inline-log-toolbar');
+  const goBtn = bar?.querySelector('.ws-inline-log-go');
+  const contactId = getMatchedContactId();
+  if (!contactId) {
+    showWhatsyncToast('No HubSpot contact matched for this chat', true);
+    return;
+  }
+  const contactName =
+    document.querySelector('#hubspot-sidebar .contact-name-section h3')?.textContent?.trim() || 'Contact';
+
+  // Collect in DOM (chat) order so the transcript reads top to bottom.
+  const messages = [];
+  document.querySelectorAll('#main [data-id]').forEach((row) => {
+    const id = row.getAttribute('data-id');
+    if (!id || !inlineLogSelection.has(id)) return;
+    const text = extractMessageText(row).trim();
+    if (!text) return;
+    messages.push({
+      id,
+      text,
+      isOutgoing: isOutgoingMessageRow(row),
+      timestamp: extractMessageTimestamp(row),
+    });
+  });
+  if (!messages.length) {
+    showWhatsyncToast('Selected messages are no longer visible — scroll them into view', true);
+    return;
+  }
+
+  if (goBtn) {
+    goBtn.disabled = true;
+    goBtn.textContent = 'Logging…';
+  }
+  try {
+    const transcript = formatSelectedMessages(messages, contactName);
+    await logWhatsAppConversation(contactId, transcript);
+    clearInlineLogSelection();
+    showWhatsyncToast(`${messages.length} message${messages.length !== 1 ? 's' : ''} logged to HubSpot`);
+  } catch (e) {
+    if (goBtn) {
+      goBtn.disabled = false;
+      goBtn.textContent = 'Log to HubSpot';
+    }
+    showWhatsyncToast(e?.message || 'Failed to log messages', true);
+    reportClientError('inline_log', e?.message || String(e));
+  }
+}
+
+// Keeps the ticks present through WhatsApp's re-renders, and resets the
+// selection when the user switches chats. Only active for matched contacts.
+function ensureInlineMessageLogButtons() {
+  if (inlineLogTimer) return;
+  inlineLogTimer = setInterval(() => {
+    try {
+      const chatKey = getCurrentChatHeaderKey();
+      if (chatKey !== inlineLogChatKey) {
+        inlineLogChatKey = chatKey;
+        clearInlineLogSelection();
+      }
+      if (!getMatchedContactId()) return;
+      injectInlineLogButtons();
+    } catch (_) { /* noop */ }
+  }, 1500);
 }
 
 // Function to format selected messages for note
@@ -9147,7 +9173,8 @@ function setupCreateContactForm(phoneNumber) {
     lastNameInput.value = defaultLast;
   }
 
-  getSyncSettings().then((syncSettings) => {
+  const settingsPromise = getSyncSettings();
+  settingsPromise.then((syncSettings) => {
     const mode = syncSettings?.contact_owner_assignment || 'round_robin';
     if (ownerHint) {
       ownerHint.textContent = CONTACT_OWNER_ASSIGNMENT_HINTS[mode] || CONTACT_OWNER_ASSIGNMENT_HINTS.round_robin;
@@ -9156,12 +9183,16 @@ function setupCreateContactForm(phoneNumber) {
       ownerGroup.classList.add('contact-owner--auto-none');
     }
   });
-  
-  // Fetch and populate owners dropdown
+
+  // Fetch and populate owners dropdown. The first option describes what the
+  // org's assignment mode will actually do, instead of a vague
+  // 'automatic assignment'.
   if (ownerSelect) {
-    fetchHubSpotOwners().then(owners => {
-      ownerSelect.innerHTML = '<option value="">Use automatic assignment</option>';
-      
+    Promise.all([fetchHubSpotOwners(), settingsPromise]).then(([owners, syncSettings]) => {
+      const mode = syncSettings?.contact_owner_assignment || 'round_robin';
+      const autoLabel = CONTACT_OWNER_AUTO_LABELS[mode] || CONTACT_OWNER_AUTO_LABELS.round_robin;
+      ownerSelect.innerHTML = `<option value="">${escapeHtml(autoLabel)}</option>`;
+
       if (owners && owners.length > 0) {
         owners.forEach(owner => {
           const option = document.createElement('option');
@@ -9169,21 +9200,29 @@ function setupCreateContactForm(phoneNumber) {
           option.textContent = owner.email || owner.firstName + ' ' + owner.lastName || owner.id;
           ownerSelect.appendChild(option);
         });
-      } else {
-        ownerSelect.innerHTML = '<option value="">No owners available</option>';
       }
     }).catch(error => {
       console.error('[Content] Error loading owners:', error);
       if (ownerSelect) {
-        ownerSelect.innerHTML = '<option value="">Error loading owners</option>';
+        ownerSelect.innerHTML = '<option value="">Could not load owners</option>';
       }
     });
   }
 
   // Populate Lifecycle Stage + Lead Status from the user's REAL HubSpot property
   // options (custom stages/labels included), so the create form matches what
-  // they see in HubSpot instead of hardcoded defaults.
-  populateCreateFormSelect('lifecycleStage', 'lifecyclestage', 'Select Lifecycle Stage');
+  // they see in HubSpot instead of hardcoded defaults. Lifecycle Stage then
+  // preselects the default configured in the dashboard (Integrations page).
+  Promise.all([
+    populateCreateFormSelect('lifecycleStage', 'lifecyclestage', 'Select Lifecycle Stage'),
+    settingsPromise,
+  ]).then(([, syncSettings]) => {
+    const sel = document.getElementById('lifecycleStage');
+    const def = syncSettings?.default_lifecycle_stage;
+    if (sel && def && Array.from(sel.options).some((o) => o.value === def)) {
+      sel.value = def;
+    }
+  }).catch(() => { /* selects keep their placeholder */ });
   populateCreateFormSelect('leadStatus', 'hs_lead_status', 'Select Lead Status');
 
   // Auto-fill Company from the email domain (HubSpot create-form behavior):
@@ -9582,10 +9621,17 @@ async function getSyncSettings() {
   };
 }
 
+// What the default option in the Owner dropdown means, per the org's
+// assignment mode configured in the dashboard (Integrations page).
+const CONTACT_OWNER_AUTO_LABELS = {
+  round_robin: 'Automatic — next teammate (round robin)',
+  creator: 'Automatic — you',
+  none: 'No owner',
+};
 const CONTACT_OWNER_ASSIGNMENT_HINTS = {
-  round_robin: 'Owner is assigned automatically (round robin) when left blank.',
-  creator: 'Owner is set to your HubSpot user (matched by email) when left blank.',
-  none: 'No owner is assigned automatically. Pick one below to override.',
+  round_robin: 'Default from your dashboard settings: owners rotate across your team. Pick a person to override.',
+  creator: 'Default from your dashboard settings: you become the owner. Pick a person to override.',
+  none: 'No owner is set by default. Pick one below if you want.',
 };
 
 async function getPrivacySettings() {
@@ -10771,9 +10817,9 @@ async function updateSidebarContent() {
           setupTasksSection();
           // Setup deals section
           setupDealsSection();
-          // Suggest logging the conversation when the chat carries business signals
-          maybeSuggestConversationLog();
-          ensureLogSuggestWatcher();
+          // Per-message log ticks inside the chat (multi-select → one WhatsApp log)
+          injectInlineLogButtons();
+          ensureInlineMessageLogButtons();
           setupAutoConversationLog();
           runSelectorHealthCheckOnce();
           // Load notes count immediately (without expanding) - use setTimeout to ensure DOM is ready
@@ -10847,8 +10893,8 @@ async function updateSidebarContent() {
                 setupTicketsSection();
                 setupTasksSection();
                 setupDealsSection();
-                maybeSuggestConversationLog();
-                ensureLogSuggestWatcher();
+                injectInlineLogButtons();
+                ensureInlineMessageLogButtons();
                 setupAutoConversationLog();
                 runSelectorHealthCheckOnce();
                 return;

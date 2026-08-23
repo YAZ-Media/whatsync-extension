@@ -132,7 +132,11 @@ async function refreshTokensIfNeeded(userId: string): Promise<{ accessToken: str
   if (!Array.isArray(data) || data.length === 0) return null;
   const conn = data[0];
   
-  if (conn.status !== 'active' || !conn.access_token || !conn.refresh_token) return null;
+  // Both status spellings mean connected: this function writes 'active', but
+  // the hubspot function's refresh path historically wrote 'connected' —
+  // gating on 'active' alone silently disabled pipelines/sync-settings/owner
+  // lookups after the first token refresh.
+  if (!['active', 'connected'].includes(String(conn.status)) || !conn.access_token || !conn.refresh_token) return null;
 
   const expiresAt = new Date(conn.expires_at);
   const now = new Date();
@@ -426,6 +430,10 @@ serve(async (req) => {
         authUrl.searchParams.set('client_id', clientId);
         authUrl.searchParams.set('redirect_uri', redirectUri);
         authUrl.searchParams.set('scope', finalScopes);
+        // Optional scopes are granted when the portal/app supports them and
+        // skipped otherwise — sales-email-read lets the sidebar's Recent
+        // Activity timeline include logged sales emails.
+        authUrl.searchParams.set('optional_scope', 'sales-email-read');
         authUrl.searchParams.set('state', state);
         return new Response(
           JSON.stringify({ authUrl: authUrl.toString() }),
@@ -706,7 +714,7 @@ serve(async (req) => {
         }
 
         return new Response(
-          JSON.stringify({ status, portalId, connectedAt, connected: status === 'active' }),
+          JSON.stringify({ status, portalId, connectedAt, connected: ['active', 'connected'].includes(String(status)) }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }

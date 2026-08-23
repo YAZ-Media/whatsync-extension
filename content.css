@@ -2598,6 +2598,56 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     flex: 1;
 }
 
+/* Smart conversation-log suggestion banner */
+#hubspot-sidebar .ws-log-suggest {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 16px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(37, 211, 102, 0.35);
+    background: rgba(37, 211, 102, 0.08);
+    color: var(--sidebar-text, #1a1a1a);
+    font-size: 13px;
+}
+
+#hubspot-sidebar .ws-log-suggest-text {
+    flex: 1;
+    line-height: 1.4;
+}
+
+#hubspot-sidebar .ws-log-suggest-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+#hubspot-sidebar .ws-log-suggest-log {
+    background: #25D366;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#hubspot-sidebar .ws-log-suggest-log:hover {
+    background: #1fb959;
+}
+
+#hubspot-sidebar .ws-log-suggest-dismiss {
+    background: transparent;
+    border: none;
+    color: var(--sidebar-text-secondary, #667781);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
+}
+
 /* Stage as a pill directly under the title — the single most important fact
    about a deal, readable at a glance in both themes. */
 #hubspot-sidebar .deal-stage-badge {

@@ -2414,8 +2414,9 @@ function finishMessageSelection() {
   // Disable selection mode
   disableMessageSelectionMode();
   
-  // Open note modal with pre-filled content
-  showNoteModal(contactName, contactEmail, contactId, formattedMessages);
+  // Open the log modal with the transcript pre-filled — it saves as a native
+  // HubSpot WhatsApp communication, not a note.
+  showNoteModal(contactName, contactEmail, contactId, formattedMessages, { mode: 'whatsapp-log' });
 }
 
 // Function to extract message text. Current WhatsApp Web renders message text inside
@@ -2472,6 +2473,68 @@ async function appendMessageHistoryIfEnabled(text) {
   } catch (error) {
     console.warn('[Content] appendMessageHistoryIfEnabled failed:', error);
     return text || '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Smart conversation-log suggestion — when the open chat contains business
+// signals (pricing, proposals, approvals, deadlines...), offer one-click
+// logging to HubSpot instead of waiting for the user to remember.
+// ---------------------------------------------------------------------------
+const LOG_SUGGEST_SIGNALS = [
+  /\b(price|pricing|quote|quotation|proposal|offer|budget|invoice|payment|contract|agreement|deal|discount|deadline|deliverable|submission|tender|rfp|rfq|purchase order|approved?|confirm(?:ed)?|signed?)\b/i,
+  /(سعر|تسعير|عرض|ميزانية|فاتورة|دفع|عقد|اتفاق|خصم|تسليم|مناقصة|موافقة|توقيع|اعتماد)/,
+  /\b(aed|usd|sar|qar|kwd|eur)\s?\d/i,
+  /\d[\d,.]*\s?(aed|usd|sar|qar|kwd|درهم|ريال|دينار)/i,
+];
+
+function chatLooksWorthLogging() {
+  const lines = getRecentChatMessageTexts(15);
+  let hits = 0;
+  for (const line of lines) {
+    if (LOG_SUGGEST_SIGNALS.some((re) => re.test(line))) hits++;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
+// Renders a dismissible banner above the sidebar sections when the current
+// chat looks worth logging. One click opens the WhatsApp-log modal pre-filled
+// with the recent transcript. Dismissal is remembered per chat for the session.
+function maybeSuggestConversationLog() {
+  try {
+    const sidebar = document.getElementById('hubspot-sidebar');
+    if (!sidebar || sidebar.querySelector('#ws-log-suggest')) return;
+    const anchor = sidebar.querySelector('.deals-section, .notes-section, .tickets-section');
+    const contactId = anchor?.getAttribute('data-contact-id');
+    if (!anchor || !anchor.parentNode || !contactId) return; // only for matched HubSpot contacts
+    const chatKey = getCurrentChatHeaderKey();
+    if (!chatKey || sessionStorage.getItem(`wsLogSuggestDismissed:${chatKey}`)) return;
+    if (!chatLooksWorthLogging()) return;
+
+    const contactName = sidebar.querySelector('.contact-name-section h3')?.textContent?.trim() || 'Contact';
+    const banner = document.createElement('div');
+    banner.id = 'ws-log-suggest';
+    banner.className = 'ws-log-suggest';
+    banner.innerHTML = `
+      <div class="ws-log-suggest-text">💡 This chat mentions pricing or commitments — worth logging to HubSpot?</div>
+      <div class="ws-log-suggest-actions">
+        <button type="button" class="ws-log-suggest-log">Log conversation</button>
+        <button type="button" class="ws-log-suggest-dismiss" title="Dismiss">✕</button>
+      </div>`;
+    anchor.parentNode.insertBefore(banner, anchor);
+
+    banner.querySelector('.ws-log-suggest-log').addEventListener('click', () => {
+      const transcript = 'WhatsApp Messages:\n\n' + getRecentChatMessageTexts(10).join('\n\n');
+      banner.remove();
+      showNoteModal(contactName, '', contactId, transcript, { mode: 'whatsapp-log' });
+    });
+    banner.querySelector('.ws-log-suggest-dismiss').addEventListener('click', () => {
+      try { sessionStorage.setItem(`wsLogSuggestDismissed:${chatKey}`, '1'); } catch (_) { /* noop */ }
+      banner.remove();
+    });
+  } catch (e) {
+    console.warn('[Content] log suggestion failed:', e);
   }
 }
 
@@ -2625,9 +2688,13 @@ function setupTaskCreation() {
 }
 
 // Function to show note creation modal
-function showNoteModal(contactName, contactEmail, contactId, preFilledContent = '') {
-  // Determine modal title based on whether content is pre-filled (from message selection)
-  const modalTitle = preFilledContent && preFilledContent.trim() ? 'Log WhatsApp Message' : 'Note';
+function showNoteModal(contactName, contactEmail, contactId, preFilledContent = '', options = {}) {
+  // WhatsApp-log mode: the transcript is saved as HubSpot's native WhatsApp
+  // communication (the same object the CRM's "Log WhatsApp message" modal
+  // creates) instead of a plain note. Pre-filled content implies this mode
+  // since the only prefiller is the message-selection flow.
+  const isWhatsAppLog = options.mode === 'whatsapp-log' || !!(preFilledContent && preFilledContent.trim());
+  const modalTitle = isWhatsAppLog ? 'Log WhatsApp Message' : 'Note';
   // Remove existing modal if any
   const existingModal = document.getElementById('note-modal');
   if (existingModal) {
@@ -3633,10 +3700,20 @@ function setupNoteToolbar(preFilledContent = '') {
       createBtn.textContent = 'Creating...';
       console.log('[Content] Button disabled, starting note creation...');
       
-      // Create note in HubSpot (using actual HubSpot contact ID)
-      createHubSpotNote(contactId, noteText, noteContent, createTodo, followUpType, followUpDate)
+      // WhatsApp-log mode saves as a native WhatsApp communication (server
+      // falls back to a note if the portal refuses); plain mode stays a note.
+      const saveAction = isWhatsAppLog
+        ? logWhatsAppConversation(contactId, noteText, createTodo, followUpType, followUpDate)
+        : createHubSpotNote(contactId, noteText, noteContent, createTodo, followUpType, followUpDate);
+      saveAction
         .then((result) => {
-          showWhatsyncToast(createTodo ? 'Note created + follow-up task scheduled' : 'Note created in HubSpot');
+          showWhatsyncToast(
+            isWhatsAppLog
+              ? (result?.loggedAs === 'note'
+                ? 'Conversation logged in HubSpot (as a note)'
+                : 'WhatsApp message logged in HubSpot')
+              : (createTodo ? 'Note created + follow-up task scheduled' : 'Note created in HubSpot')
+          );
           console.log('[Content] ✅ Note created successfully!');
           console.log('[Content] Create note result:', result);
           
@@ -3919,6 +3996,9 @@ const ACTIVITY_META = {
   email: { label: 'Email', cls: 'email' },
   meeting: { label: 'Meeting', cls: 'meeting' },
   task: { label: 'Task', cls: 'task' },
+  // Server-side timeline types
+  whatsapp_logged: { label: 'WhatsApp message', cls: 'note' },
+  stage_change: { label: 'Stage change', cls: 'contact' },
   // Legacy extension-log types (kept for backward compatibility)
   contact_created: { label: 'Contact created', cls: 'contact' },
   note_created: { label: 'Note added', cls: 'note' },
@@ -9014,6 +9094,22 @@ function setupCreateContactForm(phoneNumber) {
   });
 }
 
+// Log a WhatsApp conversation transcript to HubSpot as a native WhatsApp
+// communication (the server falls back to a note when the portal refuses).
+async function logWhatsAppConversation(contactId, body, createTodo = false, followUpType = null, followUpDate = null) {
+  const numericContactId = typeof contactId === 'string' ? parseInt(contactId, 10) : contactId;
+  if (isNaN(numericContactId)) throw new Error('Invalid contact ID format');
+  const response = await sendExtensionMessage({
+    action: 'logHubSpotWhatsAppMessage',
+    data: { contactId: numericContactId, body, createTodo, followUpType, followUpDate },
+  });
+  if (!response) {
+    throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
+  }
+  if (!response.success) throw new Error(response.error || 'Failed to log WhatsApp message');
+  return response;
+}
+
 // Function to create a note in HubSpot (via background script)
 async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, followUpType = null, followUpDate = null) {
   console.log('[Content] ===== CREATE HUBSPOT NOTE =====');
@@ -10450,6 +10546,8 @@ async function updateSidebarContent() {
           setupTasksSection();
           // Setup deals section
           setupDealsSection();
+          // Suggest logging the conversation when the chat carries business signals
+          maybeSuggestConversationLog();
           // Load notes count immediately (without expanding) - use setTimeout to ensure DOM is ready
           setTimeout(() => {
             const notesSection = document.querySelector('.notes-section');
@@ -10521,6 +10619,7 @@ async function updateSidebarContent() {
                 setupTicketsSection();
                 setupTasksSection();
                 setupDealsSection();
+                maybeSuggestConversationLog();
                 return;
               }
             } catch (autoSyncError) {

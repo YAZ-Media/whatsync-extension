@@ -150,7 +150,11 @@ async function getHubSpotToken(userId: string): Promise<string> {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token ?? conn.refresh_token,
       expires_at: newExpiresAt,
-      status: 'connected',
+      // 'active' is the value hubspot-oauth's connection gate expects; writing
+      // 'connected' here used to flip every hubspot-oauth action (pipelines,
+      // sync settings, owner resolution) into a silent "not connected" state
+      // after the first token refresh.
+      status: 'active',
     }),
   });
 
@@ -630,6 +634,7 @@ async function getContactEngagementTimeline(
     { objectType: 'calls', type: 'call', titleProps: ['hs_call_title', 'hs_call_body'], tsProps: ['hs_timestamp', 'hs_createdate'] },
     { objectType: 'emails', type: 'email', titleProps: ['hs_email_subject'], tsProps: ['hs_timestamp', 'hs_createdate'] },
     { objectType: 'meetings', type: 'meeting', titleProps: ['hs_meeting_title'], tsProps: ['hs_meeting_start_time', 'hs_timestamp', 'hs_createdate'] },
+    { objectType: 'communications', type: 'whatsapp_logged', titleProps: ['hs_communication_body'], tsProps: ['hs_timestamp', 'hs_createdate'] },
   ];
 
   const results = await Promise.all(
@@ -1164,6 +1169,78 @@ async function handleAction(
       }
 
       return { success: true, data: result, followUpTask };
+    }
+
+    // ----- WhatsApp conversation logging -----
+    // Creates HubSpot's native WhatsApp communication (the same object the
+    // CRM's "Log WhatsApp message" modal creates). Falls back to a note when
+    // the portal/token can't create communications, so the transcript is
+    // never lost either way.
+    case 'logWhatsAppMessage': {
+      const { contactId, body, timestamp, createTodo, followUpType, followUpDate } =
+        data as Record<string, unknown>;
+      const text = String(body ?? '').trim();
+      if (!contactId) throw new HttpError(400, 'Missing required field: contactId');
+      if (!text) throw new HttpError(400, 'Missing required field: body');
+      const ts = timestamp ?? Date.now();
+
+      let result: unknown;
+      let loggedAs = 'whatsapp';
+      try {
+        result = await hubspot(token, 'POST', '/crm/v3/objects/communications', {
+          properties: {
+            hs_communication_channel_type: 'WHATS_APP',
+            hs_communication_logged_from: 'CRM',
+            hs_communication_body: text,
+            hs_timestamp: ts,
+          },
+          associations: [
+            {
+              to: { id: String(contactId) },
+              types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 81 }], // communication → contact
+            },
+          ],
+        });
+      } catch (e) {
+        console.warn('[hubspot] WhatsApp communication failed, falling back to note:', (e as Error)?.message);
+        loggedAs = 'note';
+        result = await hubspot(token, 'POST', '/crm/v3/objects/notes', {
+          properties: { hs_note_body: text, hs_timestamp: ts },
+          associations: [
+            {
+              to: { id: String(contactId) },
+              types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 202 }], // note → contact
+            },
+          ],
+        });
+      }
+
+      // Same follow-up-task promise the note modal makes.
+      let followUpTask: unknown = null;
+      if (createTodo === true) {
+        try {
+          const dueMs = followUpDate ? new Date(String(followUpDate)).getTime() : NaN;
+          const fallbackDue = Date.now() + 3 * 24 * 60 * 60 * 1000;
+          followUpTask = await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
+            properties: buildTaskProperties({
+              subject: 'Follow up on WhatsApp conversation',
+              body: text.slice(0, 500),
+              type: followUpType,
+              dueDate: Number.isNaN(dueMs) ? fallbackDue : dueMs,
+            }),
+            associations: [
+              {
+                to: { id: String(contactId) },
+                types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 204 }], // task → contact
+              },
+            ],
+          });
+        } catch (e) {
+          console.warn('[hubspot] follow-up task creation failed (message was logged):', (e as Error)?.message);
+        }
+      }
+
+      return { success: true, loggedAs, data: result, followUpTask };
     }
 
     case 'getContactNotes': {

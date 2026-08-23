@@ -710,6 +710,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  // Log a WhatsApp conversation as HubSpot's native WhatsApp communication
+  // (the edge function falls back to a note when the portal refuses).
+  if (request.action === 'logHubSpotWhatsAppMessage') {
+    (async () => {
+      try {
+        const { contactId, body, createTodo, followUpType, followUpDate } = request.data || {};
+        const result = await callHubSpotEdgeFunction('logWhatsAppMessage', {
+          contactId, body, createTodo, followUpType, followUpDate,
+        });
+        sendResponse({ success: true, loggedAs: result?.loggedAs || 'whatsapp', data: result?.data });
+      } catch (error) {
+        console.error('[Background] logWhatsAppMessage failed:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+
   // Fetch enumeration options for a single property of any object type
   // (contacts/lifecyclestage, contacts/hs_lead_status, deals/dealstage, ...).
   if (request.action === 'getContactPropertyOptions' || request.action === 'getPropertyOptions') {
@@ -2345,21 +2363,36 @@ async function callHubSpotOAuthEdgeFunction(action, data) {
 
   console.log('[Background] Calling hubspot-oauth edge function:', action);
 
-  const headers = {
-    'Content-Type': 'application/json',
-    apikey: EDGE_FUNCTIONS_ANON_KEY,
-  };
-  const accessToken = await getStoredAccessToken();
-  if (accessToken) {
-    headers.Authorization = `Bearer ${accessToken}`;
-  }
-
-  try {
-    const response = await fetchWithTimeout(HUBSPOT_OAUTH_ENDPOINT, {
+  let accessToken = await getStoredAccessToken();
+  const doRequest = (token) => {
+    const headers = {
+      'Content-Type': 'application/json',
+      apikey: EDGE_FUNCTIONS_ANON_KEY,
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return fetchWithTimeout(HUBSPOT_OAUTH_ENDPOINT, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody)
     });
+  };
+
+  try {
+    let response = await doRequest(accessToken);
+
+    // hubspot-oauth requires a valid session on every action — refresh the
+    // token once and retry so an expired session doesn't silently degrade
+    // pipelines/sync-settings/owner lookups.
+    if (response.status === 401 && accessToken) {
+      const refreshToken = await getStoredRefreshToken();
+      const refreshed = refreshToken ? await refreshAccessToken(refreshToken) : null;
+      if (refreshed && refreshed !== accessToken) {
+        accessToken = refreshed;
+        response = await doRequest(accessToken);
+      }
+    }
 
     if (!response.ok) {
       let error;

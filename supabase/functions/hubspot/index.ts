@@ -1622,30 +1622,46 @@ async function handleAction(
 }
 
 // ---------------------------------------------------------------------------
-// Scheduled follow-up sweep — creates a HubSpot follow-up task for every
-// contact whose WhatsApp activity has gone quiet, so "forgot to follow up"
-// stops depending on human memory. Runs daily via CI cron (service-key gated
-// at the entry point; it acts across users so no user session applies).
+// Scheduled inactivity sweep — the server half of the "inactivity" automation
+// trigger. It does NOTHING by itself: it only acts for users whose org created
+// an enabled automation with trigger='inactivity' in the dashboard, and it
+// runs THAT automation's actions. The idle-day threshold comes from an
+// optional "idle_days" condition on the automation (default 3). Runs daily
+// via CI cron (service-key gated at the entry point).
 // ---------------------------------------------------------------------------
 
-const FOLLOW_UP_IDLE_DAYS = 3;
+const DEFAULT_INACTIVITY_DAYS = 3;
+
+type InactivityAutomation = {
+  id: string;
+  name: string;
+  conditions: unknown;
+  actions: unknown;
+};
+
+function automationIdleDays(auto: InactivityAutomation): number {
+  const conds = (Array.isArray(auto.conditions) ? auto.conditions : []) as Array<{
+    field?: string;
+    value?: string;
+  }>;
+  const c = conds.find((x) => x?.field === 'idle_days');
+  const n = c ? parseInt(String(c.value), 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_INACTIVITY_DAYS;
+}
 
 async function runFollowUpSweep(): Promise<unknown> {
-  const cutoff = new Date(Date.now() - FOLLOW_UP_IDLE_DAYS * 86400000).toISOString();
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
 
   const res = await db(
     `hubspot_contact_logs?created_at=gte.${since}` +
-      `&select=user_id,hubspot_contact_id,first_name,last_name,activity_type,created_at` +
+      `&select=user_id,hubspot_contact_id,activity_type,created_at` +
       `&order=created_at.desc&limit=2000`,
   );
-  if (!res.ok) throw new HttpError(500, 'Follow-up sweep: failed to load activity logs');
+  if (!res.ok) throw new HttpError(500, 'Inactivity sweep: failed to load activity logs');
 
   type LogRow = {
     user_id: string;
     hubspot_contact_id: string | null;
-    first_name: string | null;
-    last_name: string | null;
     activity_type: string;
     created_at: string;
   };
@@ -1660,49 +1676,69 @@ async function runFollowUpSweep(): Promise<unknown> {
     if (!latest.has(k)) latest.set(k, r);
   }
 
-  let created = 0;
+  // Per-user cache of enabled inactivity automations. Users without one are
+  // skipped entirely — this feature is opt-in via the Automations page.
+  const autosByUser = new Map<string, InactivityAutomation[]>();
+  const loadAutos = async (userId: string): Promise<InactivityAutomation[]> => {
+    if (autosByUser.has(userId)) return autosByUser.get(userId) as InactivityAutomation[];
+    const aRes = await db(
+      `automations?user_id=eq.${userId}&enabled=eq.true&trigger=eq.inactivity&select=id,name,conditions,actions`,
+    );
+    const autos = (aRes.ok ? await aRes.json() : []) as InactivityAutomation[];
+    autosByUser.set(userId, autos);
+    return autos;
+  };
+
+  let acted = 0;
   let skipped = 0;
   let errors = 0;
   for (const r of latest.values()) {
-    if (r.created_at > cutoff) { skipped++; continue; } // recently active
-    // The reminder itself is logged as the latest activity, which both shows
-    // in the timeline and prevents re-reminding until real activity resumes.
-    if (r.activity_type === 'follow_up_created') { skipped++; continue; }
     try {
+      const autos = await loadAutos(r.user_id);
+      if (!autos.length) { skipped++; continue; }
+      // The sweep's own log entry becomes the latest activity, which both
+      // shows in the timeline and prevents re-firing until real activity.
+      if (r.activity_type === 'follow_up_created') { skipped++; continue; }
+
+      const idleDays = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000);
+      const due = autos.filter((a) => idleDays >= automationIdleDays(a));
+      if (!due.length) { skipped++; continue; }
+
       const token = await getHubSpotToken(r.user_id);
-      const name = [r.first_name, r.last_name].filter(Boolean).join(' ') || 'this contact';
-      await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
-        properties: {
-          hs_task_subject: `Follow up with ${name} — no WhatsApp activity for ${FOLLOW_UP_IDLE_DAYS}+ days`,
-          hs_task_status: 'NOT_STARTED',
-          hs_task_priority: 'MEDIUM',
-          hs_task_type: 'TODO',
-          hs_timestamp: new Date().toISOString(),
-        },
-        associations: [
-          {
-            to: { id: String(r.hubspot_contact_id) },
-            types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 204 }], // task → contact
-          },
-        ],
-      });
-      await insertActivityLog(
-        r.user_id,
-        buildLogRow('follow_up_created', 'task', 'Automatic follow-up task created', {
-          hubspotContactId: r.hubspot_contact_id,
-          firstName: r.first_name,
-          lastName: r.last_name,
-          description: `No WhatsApp activity for ${FOLLOW_UP_IDLE_DAYS}+ days`,
-        }),
-      );
-      created++;
+      let executed = 0;
+      for (const auto of due) {
+        const actions = (Array.isArray(auto.actions) ? auto.actions : []) as Array<{
+          type?: string;
+          config?: Record<string, unknown>;
+        }>;
+        for (const act of actions) {
+          try {
+            await executeAutomationAction(token, act, String(r.hubspot_contact_id));
+            executed++;
+          } catch (e) {
+            errors++;
+            console.warn('[sweep] action failed:', auto.id, act?.type, (e as Error)?.message);
+          }
+        }
+      }
+
+      if (executed > 0) {
+        await insertActivityLog(
+          r.user_id,
+          buildLogRow('follow_up_created', 'task', 'Inactivity automation ran', {
+            hubspotContactId: r.hubspot_contact_id,
+            description: `No WhatsApp activity for ${idleDays} days — ${executed} action(s) executed`,
+          }),
+        );
+        acted++;
+      }
     } catch (e) {
       errors++;
       console.warn('[sweep] item failed:', r.user_id, r.hubspot_contact_id, (e as Error)?.message);
     }
   }
 
-  return { success: true, evaluated: latest.size, created, skipped, errors };
+  return { success: true, evaluated: latest.size, acted, skipped, errors };
 }
 
 // ---------------------------------------------------------------------------

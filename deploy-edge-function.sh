@@ -27,12 +27,18 @@ ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6I
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 FAILURES=0
 
+# Shared curl options: retry transient failures (connection resets are normal
+# for a second or two right after a redeploy, while the gateway cold-starts)
+# and never let a curl exit code kill the script — every check reports into
+# FAILURES instead.
+CURL_OPTS=(-s --retry 5 --retry-all-errors --retry-delay 2 --max-time 20)
+
 # CORS preflight. hubspot answers 204 explicitly; the others return 200 with
 # CORS headers — both mean the function booted and is routable.
 check_options() {
   local fn="$1"
   local status
-  status=$(curl -s -o /dev/null -w "%{http_code}" -X OPTIONS "${BASE_URL}/${fn}" -H "apikey: $ANON_KEY")
+  status=$(curl "${CURL_OPTS[@]}" -o /dev/null -w "%{http_code}" -X OPTIONS "${BASE_URL}/${fn}" -H "apikey: $ANON_KEY" || echo "000")
   if [ "$status" = "200" ] || [ "$status" = "204" ]; then
     echo -e "${GREEN}OK: ${fn} CORS preflight (${status})${NC}"
   else
@@ -47,8 +53,8 @@ check_post() {
   local fn="$1" payload="$2" want_status="$3" want_marker="$4" label="$5"
   local tmp status body
   tmp=$(mktemp)
-  status=$(curl -s -o "$tmp" -w "%{http_code}" -X POST "${BASE_URL}/${fn}" \
-    -H "Content-Type: application/json" -H "apikey: $ANON_KEY" -d "$payload")
+  status=$(curl "${CURL_OPTS[@]}" -o "$tmp" -w "%{http_code}" -X POST "${BASE_URL}/${fn}" \
+    -H "Content-Type: application/json" -H "apikey: $ANON_KEY" -d "$payload" || echo "000")
   body=$(cat "$tmp"); rm -f "$tmp"
   if [ "$status" = "$want_status" ] && echo "$body" | grep -q "$want_marker"; then
     echo -e "${GREEN}OK: ${fn} ${label}${NC}"
@@ -89,10 +95,10 @@ smoke() {
   # Authenticated round-trip (only when a user JWT is provided).
   if [ -n "${SUPABASE_JWT:-}" ]; then
     local body
-    body=$(curl -s -X POST "${BASE_URL}/hubspot" \
+    body=$(curl "${CURL_OPTS[@]}" -X POST "${BASE_URL}/hubspot" \
       -H "Content-Type: application/json" -H "apikey: $ANON_KEY" \
       -H "Authorization: Bearer $SUPABASE_JWT" \
-      -d '{"action":"getTemplates"}')
+      -d '{"action":"getTemplates"}' || echo "")
     if echo "$body" | grep -q '"templates"'; then
       echo -e "${GREEN}OK: hubspot authenticated getTemplates round-trip${NC}"
     else

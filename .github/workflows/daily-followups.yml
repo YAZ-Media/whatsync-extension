@@ -1,0 +1,32 @@
+name: Daily follow-up sweep
+
+# Creates HubSpot follow-up tasks for contacts whose WhatsApp activity has
+# gone quiet (3+ days), via the hubspot edge function's runFollowUpSweep
+# action. Requires one repository secret:
+#   SUPABASE_SERVICE_ROLE_KEY  (Supabase Dashboard → Project Settings → API)
+# Until it is set, runs skip with a warning instead of failing.
+
+on:
+  schedule:
+    - cron: '0 5 * * *' # 09:00 Gulf Standard Time, daily
+  workflow_dispatch: {}
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run follow-up sweep
+        env:
+          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -z "$SERVICE_KEY" ]; then
+            echo "::warning::SUPABASE_SERVICE_ROLE_KEY secret is not set — follow-up sweep skipped. Add it in GitHub → Settings → Secrets and variables → Actions."
+            exit 0
+          fi
+          body=$(curl -sS --retry 3 --retry-all-errors --max-time 120 -X POST \
+            "https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/hubspot" \
+            -H "Authorization: Bearer $SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"action":"runFollowUpSweep"}')
+          echo "Sweep result: $body"
+          echo "$body" | grep -q '"success":true' || { echo "::error::Sweep failed: $body"; exit 1; }

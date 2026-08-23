@@ -97,7 +97,33 @@ interface HubSpotConnection {
   status: string;
 }
 
+// Resolve which user's HubSpot connection to use: the user's own when one
+// exists, otherwise their organization Owner's — so invited team members
+// inherit the workspace connection instead of each completing OAuth.
+async function resolveConnectionUserId(userId: string): Promise<string> {
+  const own = await db(
+    `hubspot_connections?user_id=eq.${userId}&select=user_id,status,access_token&limit=1`,
+  );
+  if (own.ok) {
+    const rows = (await own.json()) as Array<{ access_token: string | null; status: string }>;
+    if (rows[0]?.access_token && rows[0].status !== 'not_connected') return userId;
+  }
+
+  const profRes = await db(`user_profiles?user_id=eq.${userId}&select=organization_id&limit=1`);
+  if (!profRes.ok) return userId;
+  const orgId = ((await profRes.json())[0] as { organization_id?: string } | undefined)?.organization_id;
+  if (!orgId || orgId === userId) return userId;
+
+  const ownerRes = await db(
+    `user_profiles?organization_id=eq.${orgId}&role=eq.Owner&select=user_id&order=created_at.asc&limit=1`,
+  );
+  if (!ownerRes.ok) return userId;
+  const owner = (await ownerRes.json())[0] as { user_id?: string } | undefined;
+  return owner?.user_id || userId;
+}
+
 async function getHubSpotToken(userId: string): Promise<string> {
+  userId = await resolveConnectionUserId(userId);
   const res = await db(
     `hubspot_connections?user_id=eq.${userId}&select=id,user_id,access_token,refresh_token,expires_at,status&limit=1`,
   );
@@ -820,6 +846,22 @@ async function handleAction(
 ): Promise<unknown> {
   // Pure-database actions don't need a HubSpot token
   switch (action) {
+    // ----- Client telemetry -----
+    // The extension self-reports failures (broken WhatsApp selectors, message
+    // errors) so silent degradation becomes visible in the client_errors table.
+    case 'reportClientError': {
+      const context = String(data.context ?? 'unknown').slice(0, 120);
+      const message = String(data.message ?? '').slice(0, 2000);
+      const version = String(data.version ?? '').slice(0, 20);
+      if (!message) return { success: true };
+      const res = await db('client_errors', {
+        method: 'POST',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({ user_id: userId, context, message, extension_version: version }),
+      });
+      return { success: res.ok };
+    }
+
     case 'getSidebarFields':
       return getSidebarFields(userId);
 
@@ -1580,6 +1622,90 @@ async function handleAction(
 }
 
 // ---------------------------------------------------------------------------
+// Scheduled follow-up sweep — creates a HubSpot follow-up task for every
+// contact whose WhatsApp activity has gone quiet, so "forgot to follow up"
+// stops depending on human memory. Runs daily via CI cron (service-key gated
+// at the entry point; it acts across users so no user session applies).
+// ---------------------------------------------------------------------------
+
+const FOLLOW_UP_IDLE_DAYS = 3;
+
+async function runFollowUpSweep(): Promise<unknown> {
+  const cutoff = new Date(Date.now() - FOLLOW_UP_IDLE_DAYS * 86400000).toISOString();
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+
+  const res = await db(
+    `hubspot_contact_logs?created_at=gte.${since}` +
+      `&select=user_id,hubspot_contact_id,first_name,last_name,activity_type,created_at` +
+      `&order=created_at.desc&limit=2000`,
+  );
+  if (!res.ok) throw new HttpError(500, 'Follow-up sweep: failed to load activity logs');
+
+  type LogRow = {
+    user_id: string;
+    hubspot_contact_id: string | null;
+    first_name: string | null;
+    last_name: string | null;
+    activity_type: string;
+    created_at: string;
+  };
+  const rows = (await res.json()) as LogRow[];
+
+  // Rows arrive newest-first, so the first row per (user, contact) is that
+  // contact's latest activity.
+  const latest = new Map<string, LogRow>();
+  for (const r of rows) {
+    if (!r.hubspot_contact_id) continue;
+    const k = `${r.user_id}:${r.hubspot_contact_id}`;
+    if (!latest.has(k)) latest.set(k, r);
+  }
+
+  let created = 0;
+  let skipped = 0;
+  let errors = 0;
+  for (const r of latest.values()) {
+    if (r.created_at > cutoff) { skipped++; continue; } // recently active
+    // The reminder itself is logged as the latest activity, which both shows
+    // in the timeline and prevents re-reminding until real activity resumes.
+    if (r.activity_type === 'follow_up_created') { skipped++; continue; }
+    try {
+      const token = await getHubSpotToken(r.user_id);
+      const name = [r.first_name, r.last_name].filter(Boolean).join(' ') || 'this contact';
+      await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
+        properties: {
+          hs_task_subject: `Follow up with ${name} — no WhatsApp activity for ${FOLLOW_UP_IDLE_DAYS}+ days`,
+          hs_task_status: 'NOT_STARTED',
+          hs_task_priority: 'MEDIUM',
+          hs_task_type: 'TODO',
+          hs_timestamp: new Date().toISOString(),
+        },
+        associations: [
+          {
+            to: { id: String(r.hubspot_contact_id) },
+            types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 204 }], // task → contact
+          },
+        ],
+      });
+      await insertActivityLog(
+        r.user_id,
+        buildLogRow('follow_up_created', 'task', 'Automatic follow-up task created', {
+          hubspotContactId: r.hubspot_contact_id,
+          firstName: r.first_name,
+          lastName: r.last_name,
+          description: `No WhatsApp activity for ${FOLLOW_UP_IDLE_DAYS}+ days`,
+        }),
+      );
+      created++;
+    } catch (e) {
+      errors++;
+      console.warn('[sweep] item failed:', r.user_id, r.hubspot_contact_id, (e as Error)?.message);
+    }
+  }
+
+  return { success: true, evaluated: latest.size, created, skipped, errors };
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1602,6 +1728,16 @@ Deno.serve(async (req) => {
 
     if (!action || typeof action !== 'string') {
       return json({ error: 'Missing required field: action' }, 400);
+    }
+
+    // Scheduler-only action: authenticated by the service-role key (it acts
+    // across users, so no user session applies). Hard 403 otherwise.
+    if (action === 'runFollowUpSweep') {
+      const bearer = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
+      if (!bearer || bearer !== SERVICE_ROLE_KEY) {
+        return json({ error: 'Forbidden' }, 403);
+      }
+      return json(await runFollowUpSweep());
     }
 
     // Identity comes from the JWT only — payload userId values are ignored.

@@ -122,8 +122,38 @@ async function externalQuery(
 // (Previously the body userId was trusted unauthenticated, which let anyone
 // with the public anon key act on any account.)
 
+// Resolve which user's HubSpot connection to use: the user's own when one
+// exists, otherwise their organization Owner's — invited team members inherit
+// the workspace connection instead of each completing OAuth.
+async function resolveConnectionUserId(userId: string): Promise<string> {
+  const own = await externalQuery('hubspot_connections', 'GET', {
+    select: 'user_id,status,access_token',
+    filters: { user_id: `eq.${userId}` },
+  });
+  if (own.ok && Array.isArray(own.data) && own.data[0]?.access_token && own.data[0].status !== 'not_connected') {
+    return userId;
+  }
+
+  const prof = await externalQuery('user_profiles', 'GET', {
+    select: 'organization_id',
+    filters: { user_id: `eq.${userId}` },
+  });
+  const orgId = prof.ok && Array.isArray(prof.data) ? prof.data[0]?.organization_id : null;
+  if (!orgId || orgId === userId) return userId;
+
+  const owner = await externalQuery('user_profiles', 'GET', {
+    select: 'user_id',
+    filters: { organization_id: `eq.${orgId}`, role: 'eq.Owner', order: 'created_at.asc', limit: '1' },
+  });
+  if (owner.ok && Array.isArray(owner.data) && owner.data[0]?.user_id) {
+    return owner.data[0].user_id;
+  }
+  return userId;
+}
+
 // Refresh HubSpot tokens if expired
 async function refreshTokensIfNeeded(userId: string): Promise<{ accessToken: string; refreshToken: string; expiresAt: Date } | null> {
+  userId = await resolveConnectionUserId(userId);
   const { data } = await externalQuery('hubspot_connections', 'GET', {
     select: 'access_token,refresh_token,expires_at,status',
     filters: { user_id: `eq.${userId}` },
@@ -310,10 +340,12 @@ serve(async (req) => {
       case 'getConnectionAndSettings': {
         const userId = authedUserId;
 
-        // Get connection (non-sensitive fields only)
+        // Get connection (non-sensitive fields only) — team members without
+        // their own OAuth inherit the org Owner's connection.
+        const connUserId = await resolveConnectionUserId(userId);
         const connRes = await externalQuery('hubspot_connections', 'GET', {
           select: 'status,portal_id,connected_at,updated_at',
-          filters: { user_id: `eq.${userId}` },
+          filters: { user_id: `eq.${connUserId}` },
         });
 
         let connection = { status: 'not_connected', portal_id: null, connected_at: null };
@@ -633,6 +665,7 @@ serve(async (req) => {
           'auto_create_companies',
           'enrich_before_create',
           'attach_message_history',
+          'auto_log_conversations',
           'default_pipeline_id',
           'default_stage_id',
           'contact_owner_assignment',
@@ -699,9 +732,10 @@ serve(async (req) => {
       case 'getConnectionStatus': {
         const userId = authedUserId;
 
+        const connUserId = await resolveConnectionUserId(userId);
         const connRes = await externalQuery('hubspot_connections', 'GET', {
           select: 'status,portal_id,connected_at',
-          filters: { user_id: `eq.${userId}` },
+          filters: { user_id: `eq.${connUserId}` },
         });
 
         let status = 'not_connected';
@@ -725,7 +759,7 @@ serve(async (req) => {
         const userId = authedUserId;
 
         const settingsRes = await externalQuery('hubspot_integration_settings', 'GET', {
-          select: 'auto_sync_contacts,auto_create_companies,enrich_before_create,attach_message_history,contact_owner_assignment,default_pipeline_id,default_stage_id,mask_phone_numbers,redact_media_files,data_retention_days,field_mappings',
+          select: 'auto_sync_contacts,auto_create_companies,enrich_before_create,attach_message_history,auto_log_conversations,contact_owner_assignment,default_pipeline_id,default_stage_id,mask_phone_numbers,redact_media_files,data_retention_days,field_mappings',
           filters: { user_id: `eq.${userId}` },
         });
 
@@ -734,6 +768,7 @@ serve(async (req) => {
           auto_create_companies: false,
           enrich_before_create: true,
           attach_message_history: false,
+          auto_log_conversations: false,
           contact_owner_assignment: 'round_robin',
           default_pipeline_id: null,
           default_stage_id: null,

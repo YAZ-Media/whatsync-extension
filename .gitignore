@@ -1,4 +1,5 @@
 # Documentation / notes (not required for extension)
 *.md
 !DEPLOYMENT.md
+!STORE_LISTING.md
 dist/

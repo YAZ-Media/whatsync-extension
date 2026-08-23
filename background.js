@@ -710,6 +710,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  // Client telemetry passthrough — the sidebar reports selector-health and
+  // runtime failures so silent breakage becomes visible server-side.
+  if (request.action === 'reportClientError') {
+    (async () => {
+      try {
+        const version = chrome.runtime.getManifest?.().version || '';
+        await callHubSpotEdgeFunction('reportClientError', {
+          context: request.context,
+          message: request.message,
+          version,
+        });
+        sendResponse({ success: true });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+
   // Log a WhatsApp conversation as HubSpot's native WhatsApp communication
   // (the edge function falls back to a note when the portal refuses).
   if (request.action === 'logHubSpotWhatsAppMessage') {

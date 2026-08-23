@@ -2477,6 +2477,143 @@ async function appendMessageHistoryIfEnabled(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Client telemetry — failures in here used to die silently (broken WhatsApp
+// selectors, dead message channels). Report them once per context per session
+// so the client_errors table shows degradation before users do.
+// ---------------------------------------------------------------------------
+const reportedErrorContexts = new Set();
+
+function reportClientError(context, message) {
+  try {
+    if (reportedErrorContexts.has(context) || reportedErrorContexts.size > 20) return;
+    reportedErrorContexts.add(context);
+    sendExtensionMessage({
+      action: 'reportClientError',
+      context,
+      message: String(message || '').slice(0, 1500),
+    }).catch(() => {});
+  } catch (_) { /* telemetry must never break the sidebar */ }
+}
+
+// Verify the WhatsApp DOM shapes this extension depends on. WhatsApp ships
+// markup changes without notice; when a selector dies the sidebar degrades
+// silently — this makes that visible server-side.
+let selectorHealthChecked = false;
+function runSelectorHealthCheckOnce() {
+  if (selectorHealthChecked) return;
+  selectorHealthChecked = true;
+  try {
+    const failures = [];
+    if (!document.querySelector('#main')) failures.push('#main (conversation pane)');
+    const rows = Array.from(document.querySelectorAll('#main [data-id], [data-id]'))
+      .filter((el) => WA_MESSAGE_ID_RE.test(el.getAttribute('data-id') || ''));
+    if (rows.length === 0) failures.push('[data-id] message rows');
+    else if (!rows.some((el) => el.querySelector('.selectable-text'))) failures.push('.selectable-text message body');
+    if (!getCurrentChatHeaderKey()) failures.push('conversation header title');
+    if (failures.length) {
+      reportClientError('selector_health', `WhatsApp selectors failing: ${failures.join('; ')}`);
+    }
+  } catch (e) {
+    reportClientError('selector_health_crash', e?.message || String(e));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Automatic conversation capture (opt-in via auto_log_conversations).
+// For matched contacts, new messages are auto-logged to HubSpot as native
+// WhatsApp communications — batched every few minutes and on tab-hide, with
+// a per-contact bookmark so nothing is logged twice. The first run only sets
+// the bookmark (never dumps historical messages).
+// ---------------------------------------------------------------------------
+const AUTOLOG_INTERVAL_MS = 4 * 60 * 1000;
+const AUTOLOG_MAX_MESSAGES = 30;
+const autoLogCtx = { chatKey: null, contactId: null, timer: null };
+let autoLogVisibilityHooked = false;
+
+function collectChatMessagesWithIds() {
+  return Array.from(document.querySelectorAll('#main [data-id], [data-id]'))
+    .filter((el) => WA_MESSAGE_ID_RE.test(el.getAttribute('data-id') || ''))
+    .map((el) => ({
+      id: el.getAttribute('data-id'),
+      text: extractMessageText(el).trim(),
+      outgoing: isOutgoingMessageRow(el),
+    }))
+    .filter((m) => m.text);
+}
+
+async function autoLogActiveChat() {
+  try {
+    if (!autoLogCtx.contactId) return;
+    if (getCurrentChatHeaderKey() !== autoLogCtx.chatKey) return; // chat changed under us
+    const settings = await getSyncSettings();
+    if (settings?.auto_log_conversations !== true) return;
+
+    const storageKey = `wsAutoLog:${autoLogCtx.contactId}`;
+    const state = await new Promise((resolve) =>
+      chrome.storage.local.get([storageKey], (r) => resolve(r[storageKey] || null))
+    );
+
+    const all = collectChatMessagesWithIds();
+    if (!all.length) return;
+    const last = all[all.length - 1];
+
+    // First sight of this contact: bookmark only — capture starts from now.
+    if (!state?.lastMessageId) {
+      chrome.storage.local.set({ [storageKey]: { lastMessageId: last.id, at: Date.now() } });
+      return;
+    }
+    if (state.lastMessageId === last.id) return; // nothing new
+
+    // Everything after the bookmark. If the bookmarked message scrolled out of
+    // the DOM (many new messages), fall back to the visible tail.
+    const idx = all.findIndex((m) => m.id === state.lastMessageId);
+    const fresh = (idx >= 0 ? all.slice(idx + 1) : all.slice(-15)).slice(-AUTOLOG_MAX_MESSAGES);
+    if (!fresh.length) return;
+
+    const contactName =
+      document.querySelector('#hubspot-sidebar .contact-name-section h3')?.textContent?.trim() || 'Contact';
+    const transcript =
+      'WhatsApp Messages (auto-logged):\n\n' +
+      fresh.map((m) => `${m.outgoing ? 'You' : contactName}: ${m.text}`).join('\n\n');
+
+    await logWhatsAppConversation(autoLogCtx.contactId, transcript);
+    chrome.storage.local.set({ [storageKey]: { lastMessageId: last.id, at: Date.now() } });
+    showWhatsyncToast('Conversation auto-logged to HubSpot');
+  } catch (e) {
+    console.warn('[Content] auto-log failed:', e);
+    reportClientError('auto_log', e?.message || String(e));
+  }
+}
+
+function setupAutoConversationLog() {
+  try {
+    const sidebar = document.getElementById('hubspot-sidebar');
+    const contactId = sidebar
+      ?.querySelector('.deals-section, .notes-section, .tickets-section')
+      ?.getAttribute('data-contact-id');
+    const chatKey = getCurrentChatHeaderKey();
+    if (!contactId || !chatKey) return;
+    if (autoLogCtx.chatKey === chatKey && autoLogCtx.contactId === contactId) return;
+
+    if (autoLogCtx.timer) clearInterval(autoLogCtx.timer);
+    autoLogCtx.chatKey = chatKey;
+    autoLogCtx.contactId = contactId;
+    autoLogCtx.timer = setInterval(autoLogActiveChat, AUTOLOG_INTERVAL_MS);
+    // Set the bookmark right away so capture covers this visit's new messages.
+    autoLogActiveChat();
+
+    if (!autoLogVisibilityHooked) {
+      autoLogVisibilityHooked = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) autoLogActiveChat();
+      });
+    }
+  } catch (e) {
+    console.warn('[Content] auto-log setup failed:', e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Smart conversation-log suggestion — when the open chat contains business
 // signals (pricing, proposals, approvals, deadlines...), offer one-click
 // logging to HubSpot instead of waiting for the user to remember.
@@ -10548,6 +10685,8 @@ async function updateSidebarContent() {
           setupDealsSection();
           // Suggest logging the conversation when the chat carries business signals
           maybeSuggestConversationLog();
+          setupAutoConversationLog();
+          runSelectorHealthCheckOnce();
           // Load notes count immediately (without expanding) - use setTimeout to ensure DOM is ready
           setTimeout(() => {
             const notesSection = document.querySelector('.notes-section');
@@ -10620,6 +10759,8 @@ async function updateSidebarContent() {
                 setupTasksSection();
                 setupDealsSection();
                 maybeSuggestConversationLog();
+                setupAutoConversationLog();
+                runSelectorHealthCheckOnce();
                 return;
               }
             } catch (autoSyncError) {

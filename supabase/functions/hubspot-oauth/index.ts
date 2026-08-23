@@ -351,6 +351,9 @@ serve(async (req) => {
         let connection = { status: 'not_connected', portal_id: null, connected_at: null };
         if (connRes.ok && Array.isArray(connRes.data) && connRes.data.length > 0) {
           connection = connRes.data[0];
+          // Normalize the legacy 'connected' spelling so every client (website,
+          // extension) sees the same canonical 'active' status.
+          if (connection.status === 'connected') connection = { ...connection, status: 'active' };
         }
 
         // Get or create settings
@@ -742,7 +745,7 @@ serve(async (req) => {
         let portalId = null;
         let connectedAt = null;
         if (connRes.ok && Array.isArray(connRes.data) && connRes.data.length > 0) {
-          status = connRes.data[0].status;
+          status = connRes.data[0].status === 'connected' ? 'active' : connRes.data[0].status;
           portalId = connRes.data[0].portal_id;
           connectedAt = connRes.data[0].connected_at;
         }

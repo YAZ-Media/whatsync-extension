@@ -2614,65 +2614,153 @@ function setupAutoConversationLog() {
 }
 
 // ---------------------------------------------------------------------------
-// Smart conversation-log suggestion — when the open chat contains business
-// signals (pricing, proposals, approvals, deadlines...), offer one-click
-// logging to HubSpot instead of waiting for the user to remember.
+// Smart conversation-log suggestion — when the open chat carries business
+// signals, a small prompt appears INSIDE the chat, right under the message
+// that triggered it. One click logs the recent conversation to HubSpot as a
+// WhatsApp communication — no modal, no detour through the sidebar.
 // ---------------------------------------------------------------------------
-const LOG_SUGGEST_SIGNALS = [
-  /\b(price|pricing|quote|quotation|proposal|offer|budget|invoice|payment|contract|agreement|deal|discount|deadline|deliverable|submission|tender|rfp|rfq|purchase order|approved?|confirm(?:ed)?|signed?)\b/i,
-  /(سعر|تسعير|عرض|ميزانية|فاتورة|دفع|عقد|اتفاق|خصم|تسليم|مناقصة|موافقة|توقيع|اعتماد)/,
-  /\b(aed|usd|sar|qar|kwd|eur)\s?\d/i,
-  /\d[\d,.]*\s?(aed|usd|sar|qar|kwd|درهم|ريال|دينار)/i,
+const LOG_SUGGEST_SCAN_MESSAGES = 30; // how many recent messages are scanned
+const LOG_SUGGEST_LOG_MESSAGES = 15;  // how many go into the logged transcript
+const LOG_SUGGEST_SIGNAL_GROUPS = [
+  {
+    key: 'commercial',
+    label: 'pricing or commitments',
+    res: [
+      /\b(price|pricing|quote|quotation|proposal|offer|budget|invoice|payment|contract|agreement|deal|discount|deadline|deliverable|submission|tender|rfp|rfq|purchase order|approved?|confirm(?:ed)?|signed?)\b/i,
+      /(سعر|تسعير|عرض|ميزانية|فاتورة|دفع|عقد|اتفاق|خصم|تسليم|مناقصة|موافقة|توقيع|اعتماد)/,
+      /\b(aed|usd|sar|qar|kwd|eur)\s?\d/i,
+      /\d[\d,.]*\s?(aed|usd|sar|qar|kwd|درهم|ريال|دينار)/i,
+    ],
+  },
+  {
+    key: 'scheduling',
+    label: 'a meeting, call, or event',
+    res: [
+      /\b(meeting|meet(?:ing)? (?:up|at|on)|call you|a call|schedule[d]?|appointment|demo|presentation|site visit|event|webinar|conference|follow[- ]?up|zoom|google meet|teams meeting)\b/i,
+      /(اجتماع|مكالمة|اتصال|موعد|مقابلة|زيارة|فعالية|مؤتمر|متابعة|عرض تقديمي)/,
+      /\b(tomorrow|tonight|next week|next month) (?:at|في)?\s?\d{1,2}(:\d{2})?\s?(am|pm)?\b/i,
+      /\b\d{1,2}(:\d{2})\s?(am|pm)\b/i,
+    ],
+  },
 ];
 
-function chatLooksWorthLogging() {
-  const lines = getRecentChatMessageTexts(15);
-  let hits = 0;
-  for (const line of lines) {
-    if (LOG_SUGGEST_SIGNALS.some((re) => re.test(line))) hits++;
-    if (hits >= 2) return true;
+// Scans the visible tail of the chat. Returns null when the chat is not worth
+// suggesting, otherwise the winning signal group, the id + row element of the
+// last matching message (used to anchor the inline prompt), and the hit count.
+function detectLogWorthySignals() {
+  const rows = Array.from(document.querySelectorAll('#main [data-id], [data-id]'))
+    .filter((el) => WA_MESSAGE_ID_RE.test(el.getAttribute('data-id') || ''))
+    .slice(-LOG_SUGGEST_SCAN_MESSAGES);
+  const groupHits = {};
+  let totalHits = 0;
+  let lastMatch = null;
+  for (const el of rows) {
+    const text = extractMessageText(el).trim();
+    if (!text) continue;
+    for (const group of LOG_SUGGEST_SIGNAL_GROUPS) {
+      if (group.res.some((re) => re.test(text))) {
+        groupHits[group.key] = (groupHits[group.key] || 0) + 1;
+        totalHits++;
+        lastMatch = { id: el.getAttribute('data-id'), row: el, group };
+        break; // one hit per message
+      }
+    }
   }
-  return false;
+  if (totalHits < 2 || !lastMatch) return null;
+  // Prefer the group with the most hits for the prompt wording; the anchor
+  // stays on the last matching message either way.
+  const topGroup = LOG_SUGGEST_SIGNAL_GROUPS.reduce((a, b) =>
+    (groupHits[b.key] || 0) > (groupHits[a.key] || 0) ? b : a
+  );
+  return { group: topGroup, lastSignalId: lastMatch.id, anchorRow: lastMatch.row };
 }
 
-// Renders a dismissible banner above the sidebar sections when the current
-// chat looks worth logging. One click opens the WhatsApp-log modal pre-filled
-// with the recent transcript. Dismissal is remembered per chat for the session.
+// Renders the inline prompt bubble under the last signal-carrying message in
+// the chat window. Clicking "Log to HubSpot" logs the recent transcript
+// immediately as a native WhatsApp communication. ✕ dismisses; both remember
+// the last signal so the prompt only returns when NEW signals arrive.
 function maybeSuggestConversationLog() {
   try {
+    if (document.getElementById('ws-log-suggest')) return;
     const sidebar = document.getElementById('hubspot-sidebar');
-    if (!sidebar || sidebar.querySelector('#ws-log-suggest')) return;
-    const anchor = sidebar.querySelector('.deals-section, .notes-section, .tickets-section');
-    const contactId = anchor?.getAttribute('data-contact-id');
-    if (!anchor || !anchor.parentNode || !contactId) return; // only for matched HubSpot contacts
+    const contactId = sidebar
+      ?.querySelector('.deals-section, .notes-section, .tickets-section')
+      ?.getAttribute('data-contact-id');
+    if (!contactId) return; // only for matched HubSpot contacts
     const chatKey = getCurrentChatHeaderKey();
-    if (!chatKey || sessionStorage.getItem(`wsLogSuggestDismissed:${chatKey}`)) return;
-    if (!chatLooksWorthLogging()) return;
+    if (!chatKey) return;
+
+    const detection = detectLogWorthySignals();
+    if (!detection) return;
+
+    // Handled (dismissed or logged) up to this signal already? Only re-prompt
+    // when a newer signal-carrying message shows up.
+    const handledKey = `wsLogSuggestHandled:${chatKey}`;
+    if (sessionStorage.getItem(handledKey) === detection.lastSignalId) return;
 
     const contactName = sidebar.querySelector('.contact-name-section h3')?.textContent?.trim() || 'Contact';
-    const banner = document.createElement('div');
-    banner.id = 'ws-log-suggest';
-    banner.className = 'ws-log-suggest';
-    banner.innerHTML = `
-      <div class="ws-log-suggest-text">💡 This chat mentions pricing or commitments — worth logging to HubSpot?</div>
-      <div class="ws-log-suggest-actions">
-        <button type="button" class="ws-log-suggest-log">Log conversation</button>
-        <button type="button" class="ws-log-suggest-dismiss" title="Dismiss">✕</button>
+    const prompt = document.createElement('div');
+    prompt.id = 'ws-log-suggest';
+    prompt.className = 'ws-chat-log-suggest';
+    prompt.innerHTML = `
+      <div class="ws-chat-log-suggest-inner">
+        <span class="ws-chat-log-suggest-text">💡 This chat mentions ${detection.group.label} — log it to HubSpot?</span>
+        <button type="button" class="ws-chat-log-suggest-log">Log to HubSpot</button>
+        <button type="button" class="ws-chat-log-suggest-dismiss" title="Dismiss">✕</button>
       </div>`;
-    anchor.parentNode.insertBefore(banner, anchor);
 
-    banner.querySelector('.ws-log-suggest-log').addEventListener('click', () => {
-      const transcript = 'WhatsApp Messages:\n\n' + getRecentChatMessageTexts(10).join('\n\n');
-      banner.remove();
-      showNoteModal(contactName, '', contactId, transcript, { mode: 'whatsapp-log' });
+    // Anchor directly under the triggering message row, inside the chat.
+    const anchorRow = detection.anchorRow;
+    if (anchorRow.parentNode) {
+      anchorRow.parentNode.insertBefore(prompt, anchorRow.nextSibling);
+    } else {
+      return;
+    }
+
+    const markHandled = () => {
+      try { sessionStorage.setItem(handledKey, detection.lastSignalId); } catch (_) { /* noop */ }
+    };
+
+    prompt.querySelector('.ws-chat-log-suggest-log').addEventListener('click', async () => {
+      const btn = prompt.querySelector('.ws-chat-log-suggest-log');
+      btn.disabled = true;
+      btn.textContent = 'Logging…';
+      try {
+        const messages = collectChatMessagesWithIds().slice(-LOG_SUGGEST_LOG_MESSAGES);
+        const transcript =
+          'WhatsApp Messages:\n\n' +
+          messages.map((m) => `${m.outgoing ? 'You' : contactName}: ${m.text}`).join('\n\n');
+        await logWhatsAppConversation(contactId, transcript);
+        markHandled();
+        prompt.querySelector('.ws-chat-log-suggest-inner').innerHTML =
+          '<span class="ws-chat-log-suggest-text">✓ Conversation logged to HubSpot</span>';
+        showWhatsyncToast('Conversation logged to HubSpot');
+        setTimeout(() => prompt.remove(), 4000);
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Log to HubSpot';
+        showWhatsyncToast(e?.message || 'Failed to log conversation', true);
+        reportClientError('log_suggest_click', e?.message || String(e));
+      }
     });
-    banner.querySelector('.ws-log-suggest-dismiss').addEventListener('click', () => {
-      try { sessionStorage.setItem(`wsLogSuggestDismissed:${chatKey}`, '1'); } catch (_) { /* noop */ }
-      banner.remove();
+    prompt.querySelector('.ws-chat-log-suggest-dismiss').addEventListener('click', () => {
+      markHandled();
+      prompt.remove();
     });
   } catch (e) {
     console.warn('[Content] log suggestion failed:', e);
   }
+}
+
+// WhatsApp re-renders its chat list constantly (which removes the inline
+// prompt) and new messages arrive while a chat is open — re-evaluate on a
+// gentle interval instead of only on sidebar render.
+let logSuggestTimer = null;
+function ensureLogSuggestWatcher() {
+  if (logSuggestTimer) return;
+  logSuggestTimer = setInterval(() => {
+    try { maybeSuggestConversationLog(); } catch (_) { /* noop */ }
+  }, 20000);
 }
 
 // Function to format selected messages for note
@@ -10685,6 +10773,7 @@ async function updateSidebarContent() {
           setupDealsSection();
           // Suggest logging the conversation when the chat carries business signals
           maybeSuggestConversationLog();
+          ensureLogSuggestWatcher();
           setupAutoConversationLog();
           runSelectorHealthCheckOnce();
           // Load notes count immediately (without expanding) - use setTimeout to ensure DOM is ready
@@ -10759,6 +10848,7 @@ async function updateSidebarContent() {
                 setupTasksSection();
                 setupDealsSection();
                 maybeSuggestConversationLog();
+                ensureLogSuggestWatcher();
                 setupAutoConversationLog();
                 runSelectorHealthCheckOnce();
                 return;

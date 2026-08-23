@@ -662,7 +662,56 @@ async function getContactEngagementTimeline(
     }),
   );
 
-  const merged = results.flat();
+  // Contact milestones — creation and lifecycle/lead-status changes from the
+  // property history. Without these, a contact with no logged engagements shows
+  // an empty timeline even though HubSpot's own activity view is full.
+  const milestones: Array<{ id: string | null; type: string; title: string | null; timestamp: string | null }> = [];
+  try {
+    const [contact, lifecycleProp, leadProp] = (await Promise.all([
+      hubspot(
+        token,
+        'GET',
+        `/crm/v3/objects/contacts/${contactId}?properties=createdate&propertiesWithHistory=lifecyclestage,hs_lead_status`,
+      ),
+      hubspot(token, 'GET', '/crm/v3/properties/contacts/lifecyclestage').catch(() => null),
+      hubspot(token, 'GET', '/crm/v3/properties/contacts/hs_lead_status').catch(() => null),
+    ])) as [
+      { properties?: Record<string, string>; propertiesWithHistory?: Record<string, Array<{ value?: string; timestamp?: string }>> },
+      { options?: Array<{ value: string; label: string }> } | null,
+      { options?: Array<{ value: string; label: string }> } | null,
+    ];
+
+    const labelFor = (
+      prop: { options?: Array<{ value: string; label: string }> } | null,
+      value: string,
+    ): string => {
+      const opt = (prop?.options || []).find((o) => String(o.value) === value);
+      return opt?.label || value;
+    };
+
+    const histories = contact?.propertiesWithHistory || {};
+    for (const [propName, propDef, label] of [
+      ['lifecyclestage', lifecycleProp, 'Lifecycle stage'],
+      ['hs_lead_status', leadProp, 'Lead status'],
+    ] as Array<[string, { options?: Array<{ value: string; label: string }> } | null, string]>) {
+      for (const h of histories[propName] || []) {
+        if (h?.value == null || !h.timestamp) continue;
+        milestones.push({
+          id: null,
+          type: 'stage_change',
+          title: `${label} set to ${labelFor(propDef, String(h.value))}`,
+          timestamp: h.timestamp,
+        });
+      }
+    }
+
+    const createdAt = contact?.properties?.createdate;
+    if (createdAt) {
+      milestones.push({ id: null, type: 'contact_created', title: 'Contact created', timestamp: createdAt });
+    }
+  } catch (_e) { /* milestones are best-effort — never sink the timeline */ }
+
+  const merged = [...results.flat(), ...milestones];
   merged.sort((a, b) => {
     const ta = a.timestamp ? new Date(String(a.timestamp)).getTime() : 0;
     const tb = b.timestamp ? new Date(String(b.timestamp)).getTime() : 0;

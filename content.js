@@ -4584,9 +4584,12 @@ function setupDealsSection() {
     });
   }
   
-  // Initial count refresh
-  refreshDealsCount(contactId, dealsSection).catch(error => {
-    console.error('[Content] Error refreshing deals count on setup:', error);
+  // Load the full deals list up-front (it updates the count and auto-expands
+  // when deals exist). The old count-only fetch downloaded the same data and
+  // threw it away, forcing an identical second fetch on first expand — that
+  // was the 3-4 second "shows nothing" gap.
+  loadContactDeals(contactId, dealsSection).catch(error => {
+    console.error('[Content] Error loading deals on setup:', error);
   });
 }
 
@@ -5410,27 +5413,18 @@ function formatDealItem(deal) {
   return `
     <div class="deal-item" data-deal-id="${dealId}">
       <div class="deal-item-header">
-        <div class="deal-icon-wrapper">
-          <svg class="deal-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <line x1="12" y1="1" x2="12" y2="23" stroke="#1976d2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke="#1976d2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-          </svg>
-        </div>
         <div class="deal-item-title">${dealName}</div>
         ${hubSpotOpenLink('deal', dealId, 'Open deal in HubSpot')}
       </div>
+      <span class="deal-stage-badge">${escapeHtml(formattedStage)}</span>
       <div class="deal-item-details">
         <div class="deal-item-property">
-          <span class="deal-property-label">Amount:</span>
+          <span class="deal-property-label">Amount</span>
           <span class="deal-property-value">${formattedAmount}</span>
         </div>
         <div class="deal-item-property">
-          <span class="deal-property-label">Close Date:</span>
+          <span class="deal-property-label">Close date</span>
           <span class="deal-property-value">${formattedCloseDate}</span>
-        </div>
-        <div class="deal-item-property">
-          <span class="deal-property-label">Deal Stage:</span>
-          <span class="deal-stage-value">${escapeHtml(formattedStage)}</span>
         </div>
       </div>
     </div>
@@ -10034,6 +10028,47 @@ async function formatContactDetails(contacts, phoneNumber) {
         </div>
       </div>
       `}
+      <!-- Deals Section (deliberately first — deals are the record the team acts on most) -->
+      ${!isSidebarFieldEnabled('section_deals') ? '' : `
+      <div class="deals-section" data-contact-id="${hubspotContactId}">
+        <div class="deals-header">
+          <div class="deals-title">
+            <svg class="chevron-icon deals-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+            <span>Deals (<span class="deals-count">0</span>)</span>
+          </div>
+          <div class="deals-header-actions">
+            <button class="deals-add-btn" id="deals-add-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}" title="Add Deal">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              <span>Add</span>
+            </button>
+          </div>
+        </div>
+        <div class="deals-content" style="display: none;">
+          <div class="deals-loading" style="display: none;">
+            <div class="loading-spinner"></div>
+            <p>Loading deals...</p>
+          </div>
+          <div class="deals-list"></div>
+          <div class="deals-empty" style="display: none;">
+            <div class="deals-empty-content">
+              <p class="deals-empty-text">No deals found for this contact.</p>
+              <button class="deals-create-btn" id="deals-empty-create-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span>Create Deal</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      `}
       ${!isSidebarFieldEnabled('section_notes') ? '' : `
       <div class="notes-section" data-contact-id="${hubspotContactId}">
         <div class="notes-header">
@@ -10157,47 +10192,6 @@ async function formatContactDetails(contacts, phoneNumber) {
                   <line x1="5" y1="12" x2="19" y2="12"></line>
                 </svg>
                 <span>Create Task</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      `}
-      <!-- Deals Section -->
-      ${!isSidebarFieldEnabled('section_deals') ? '' : `
-      <div class="deals-section" data-contact-id="${hubspotContactId}">
-        <div class="deals-header">
-          <div class="deals-title">
-            <svg class="chevron-icon deals-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-            <span>Deals (<span class="deals-count">0</span>)</span>
-          </div>
-          <div class="deals-header-actions">
-            <button class="deals-add-btn" id="deals-add-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}" title="Add Deal">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-              </svg>
-              <span>Add</span>
-            </button>
-          </div>
-        </div>
-        <div class="deals-content" style="display: none;">
-          <div class="deals-loading" style="display: none;">
-            <div class="loading-spinner"></div>
-            <p>Loading deals...</p>
-          </div>
-          <div class="deals-list"></div>
-          <div class="deals-empty" style="display: none;">
-            <div class="deals-empty-content">
-              <p class="deals-empty-text">No deals found for this contact.</p>
-              <button class="deals-create-btn" id="deals-empty-create-btn" data-contact-id="${hubspotContactId}" data-name="${fullName}" data-email="${email}">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="12" y1="5" x2="12" y2="19"></line>
-                  <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-                <span>Create Deal</span>
               </button>
             </div>
           </div>

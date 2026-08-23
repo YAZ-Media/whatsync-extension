@@ -186,7 +186,25 @@ async function callHubSpotEdgeFunction(action, data = {}) {
       throw new Error(message);
     }
 
-    const body = await response.json();
+    let body = await response.json();
+
+    // The hubspot edge function reports auth failures as HTTP 200 with
+    // { error, status: 401 } in the body — the transport-level 401 retry above
+    // never sees those. Refresh the session once and retry, otherwise an
+    // expired access token silently breaks every call (stage labels, activity
+    // timeline, ...) until something else happens to refresh it.
+    if (body && body.status === 401 && typeof body.error === 'string' && accessToken) {
+      const refreshToken = await getStoredRefreshToken();
+      const refreshed = refreshToken ? await refreshAccessToken(refreshToken) : null;
+      if (refreshed && refreshed !== accessToken) {
+        accessToken = refreshed;
+        const retryResponse = await doRequest(accessToken);
+        if (retryResponse.ok) {
+          body = await retryResponse.json();
+        }
+      }
+    }
+
     // The hubspot edge function wraps failures as HTTP 200 with an
     // { error, status, notConnected } body (so the API gateway doesn't swallow
     // the detail). Surface those as thrown errors so callers never mistake an

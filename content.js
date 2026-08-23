@@ -5257,7 +5257,10 @@ function formatTicketItem(ticket) {
   const ticketId = ticket.id || ticket.hs_object_id || '';
   const ticketName = escapeHtml(ticket.properties?.subject || ticket.properties?.hs_ticket_name || 'Untitled Ticket');
   const rawStatus = String(ticket.properties?.hs_pipeline_stage || ticket.properties?.hs_ticket_status || 'New');
-  const ticketStatus = escapeHtml(ticketStageLabelMap[rawStatus] || rawStatus);
+  // Same rule as deal stages: an unresolvable numeric stage id is never shown raw.
+  const ticketStatus = escapeHtml(
+    ticketStageLabelMap[rawStatus] || (/^\d+$/.test(rawStatus) ? 'Status unavailable' : rawStatus)
+  );
   const ownerId = ticket.properties?.hubspot_owner_id || '';
   const ticketOwner = ownerId
     ? escapeHtml((hubspotOwnerNameCache && hubspotOwnerNameCache[String(ownerId)]) || `Owner #${ownerId}`)
@@ -5330,14 +5333,17 @@ async function ensureDealStageLabels() {
       console.warn('[Content] dealstage property options unavailable:', e);
     }
 
-    // Fallback / supplement: pipelines API stage labels.
-    if (!Object.keys(map).length) {
+    // Supplement with the pipelines API — always merged, since either source
+    // can be missing stages the other knows about.
+    try {
       const pipelines = await fetchHubSpotDealPipelines();
       (pipelines || []).forEach((p) => {
         (p.stages || []).forEach((s) => {
-          if (s && s.id != null) map[String(s.id)] = s.label || String(s.id);
+          if (s && s.id != null && !map[String(s.id)]) map[String(s.id)] = s.label || String(s.id);
         });
       });
+    } catch (e) {
+      console.warn('[Content] deal pipelines unavailable for stage labels:', e);
     }
 
     if (Object.keys(map).length) dealStageLabelMap = map;
@@ -5391,11 +5397,15 @@ function formatDealItem(deal) {
   
   // Prefer the server-resolved label (attached by the getDeals edge function), then the
   // client pipeline/property map, then a cleaned fallback — so we never show a raw id.
+  // A purely numeric internal id means nothing to the user; if every lookup missed,
+  // say so instead of printing the number.
   const rawStage = String(dealStage);
   const serverStageLabel = deal.properties?.dealstageLabel;
   const formattedStage = serverStageLabel
     || dealStageLabelMap[rawStage]
-    || rawStage.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+    || (/^\d+$/.test(rawStage)
+      ? 'Stage unavailable'
+      : rawStage.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()));
   
   return `
     <div class="deal-item" data-deal-id="${dealId}">
@@ -5420,12 +5430,7 @@ function formatDealItem(deal) {
         </div>
         <div class="deal-item-property">
           <span class="deal-property-label">Deal Stage:</span>
-          <span class="deal-stage-value">
-            ${formattedStage}
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: inline-block; margin-left: 4px; vertical-align: middle;">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </span>
+          <span class="deal-stage-value">${escapeHtml(formattedStage)}</span>
         </div>
       </div>
     </div>
@@ -9911,9 +9916,10 @@ async function formatContactDetails(contacts, phoneNumber) {
             ${hubSpotOpenLink('contact', hubspotContactId, 'Open contact in HubSpot')}
           </div>
         </div>
+        ${jobTitle !== '--' ? `
         <div class="contact-job-section">
-          <span class="job-label">${jobTitle !== '--' ? jobTitleSafe : 'Job'}</span>
-        </div>
+          <span class="job-label">${jobTitleSafe}</span>
+        </div>` : ''}
         <div class="contact-email-header">
           ${email !== '--' ? `
             <a href="mailto:${email}" class="email-link">${email}</a>

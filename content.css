@@ -520,22 +520,30 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     flex: 1;
 }
 
-/* Inline-editable enum fields (Lifecycle stage, Lead status) in the About section */
+/* Inline-editable enum fields (Lifecycle stage, Lead status) in the About section.
+   Colors must come from the theme as a PAIR — a themed text color on a hardcoded
+   white control rendered white-on-white in dark mode. */
 #hubspot-sidebar .info-edit-select {
     width: 100%;
     max-width: 180px;
     padding: 4px 8px;
     font-size: 13px;
-    color: var(--sidebar-text, #1e3a8a);
-    background-color: #fff;
-    border: 1px solid #d1d5db;
+    color: var(--sidebar-text, #1a1a1a);
+    background-color: var(--sidebar-bg, #ffffff);
+    border: 1px solid var(--sidebar-border, #d1d5db);
     border-radius: 6px;
     cursor: pointer;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
+/* The dropdown list popup inherits these in Chromium — keep it readable in both themes. */
+#hubspot-sidebar .info-edit-select option {
+    color: var(--sidebar-text, #1a1a1a);
+    background-color: var(--sidebar-bg, #ffffff);
+}
+
 #hubspot-sidebar .info-edit-select:hover {
-    border-color: #9ca3af;
+    border-color: var(--sidebar-text-secondary, #9ca3af);
 }
 
 #hubspot-sidebar .info-edit-select:focus {

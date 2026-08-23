@@ -1,7 +1,8 @@
-name: Deploy hubspot edge function
+name: Deploy edge functions
 
-# Deploys the Supabase edge function automatically whenever its source changes
-# on main, then smoke-tests the live endpoint. Requires one repository secret:
+# Deploys all WhatSync Supabase edge functions automatically whenever their
+# source changes on main, then smoke-tests the live endpoint. Requires one
+# repository secret:
 #   SUPABASE_ACCESS_TOKEN  (Supabase Dashboard → Account → Access Tokens)
 # Set it under GitHub → Settings → Secrets and variables → Actions.
 
@@ -33,8 +34,14 @@ jobs:
         with:
           version: latest
 
-      - name: Deploy function
-        run: supabase functions deploy hubspot --project-ref "$PROJECT_REF"
+      - name: Deploy functions
+        # verify_jwt stays off (config.toml + flag): the functions authenticate
+        # against the external auth project's JWTs themselves; platform
+        # verification would reject every request at the gateway.
+        run: |
+          for fn in hubspot hubspot-oauth settings external-auth billing save-activity-config; do
+            supabase functions deploy "$fn" --project-ref "$PROJECT_REF" --no-verify-jwt
+          done
 
       - name: Smoke-test live endpoint
         run: |

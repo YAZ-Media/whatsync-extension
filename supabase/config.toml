@@ -263,6 +263,27 @@ policy = "oneshot"
 # Port to attach the Chrome inspector for debugging edge functions.
 inspector_port = 8083
 
+# All WhatSync functions authenticate requests themselves against the EXTERNAL
+# auth project's JWTs — platform JWT verification (which checks against THIS
+# project's secret) must stay off or every request is rejected at the gateway.
+[functions.hubspot]
+verify_jwt = false
+
+[functions.hubspot-oauth]
+verify_jwt = false
+
+[functions.settings]
+verify_jwt = false
+
+[functions.external-auth]
+verify_jwt = false
+
+[functions.billing]
+verify_jwt = false
+
+[functions.save-activity-config]
+verify_jwt = false
+
 # Use these configurations to customize your Edge Function.
 # [functions.MY_FUNCTION_NAME]
 # enabled = true

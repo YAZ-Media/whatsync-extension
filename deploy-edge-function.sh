@@ -1,7 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# Deploy the `hubspot` edge function to Supabase and smoke-test the live endpoint.
+# Deploy the WhatSync edge functions to Supabase and smoke-test the live endpoint.
+#
+# Deploys all six functions (hubspot, hubspot-oauth, settings, external-auth,
+# billing, save-activity-config) with JWT verification disabled — they
+# authenticate against the EXTERNAL auth project's JWTs themselves, so platform
+# verification (against this project's secret) must stay off.
 #
 # Requirements:
 #   SUPABASE_ACCESS_TOKEN  personal access token (Supabase Dashboard → Account → Access Tokens)
@@ -10,11 +15,12 @@ set -euo pipefail
 #   SUPABASE_JWT           access token of a logged-in WhatSync user
 #
 # Usage:
-#   SUPABASE_ACCESS_TOKEN=sbp_... ./deploy-edge-function.sh
+#   SUPABASE_ACCESS_TOKEN=sbp_... ./deploy-edge-function.sh            # all functions
+#   SUPABASE_ACCESS_TOKEN=sbp_... ./deploy-edge-function.sh hubspot    # one function
 
 PROJECT_REF="ogsvchujqpayuckxuwdf"
-FUNCTION_NAME="hubspot"
-FUNCTION_URL="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
+ALL_FUNCTIONS=(hubspot hubspot-oauth settings external-auth billing save-activity-config)
+FUNCTION_URL="https://${PROJECT_REF}.supabase.co/functions/v1/hubspot"
 ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -26,10 +32,19 @@ if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then
   exit 1
 fi
 
-echo -e "${YELLOW}Deploying ${FUNCTION_NAME} to project ${PROJECT_REF}...${NC}"
-npx --yes supabase functions deploy "$FUNCTION_NAME" --project-ref "$PROJECT_REF"
+if [ "$#" -gt 0 ]; then
+  FUNCTIONS=("$@")
+else
+  FUNCTIONS=("${ALL_FUNCTIONS[@]}")
+fi
 
-echo -e "${YELLOW}Smoke-testing the live endpoint...${NC}"
+for fn in "${FUNCTIONS[@]}"; do
+  echo -e "${YELLOW}Deploying ${fn} to project ${PROJECT_REF}...${NC}"
+  # --no-verify-jwt is belt-and-braces on top of supabase/config.toml.
+  npx --yes supabase functions deploy "$fn" --project-ref "$PROJECT_REF" --no-verify-jwt
+done
+
+echo -e "${YELLOW}Smoke-testing the live hubspot endpoint...${NC}"
 
 # 1. CORS preflight must answer 204.
 status=$(curl -s -o /dev/null -w "%{http_code}" -X OPTIONS "$FUNCTION_URL" -H "apikey: $ANON_KEY")
@@ -65,4 +80,4 @@ else
   echo -e "${YELLOW}SKIP: authenticated round-trip (set SUPABASE_JWT to enable)${NC}"
 fi
 
-echo -e "${GREEN}Deploy verified — the hubspot edge function is live.${NC}"
+echo -e "${GREEN}Deploy verified — the WhatSync edge functions are live.${NC}"

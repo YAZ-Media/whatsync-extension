@@ -1,7 +1,7 @@
 name: Deploy edge functions
 
 # Deploys all WhatSync Supabase edge functions automatically whenever their
-# source changes on main, then smoke-tests the live endpoint. Requires one
+# source changes on main, then smoke-tests every live endpoint. Requires one
 # repository secret:
 #   SUPABASE_ACCESS_TOKEN  (Supabase Dashboard → Account → Access Tokens)
 # Set it under GitHub → Settings → Secrets and variables → Actions.
@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - 'supabase/functions/**'
+      - 'deploy-edge-function.sh'
       - '.github/workflows/deploy-edge-function.yml'
   workflow_dispatch: {}
 
@@ -26,7 +27,7 @@ jobs:
       - name: Check secret is configured
         run: |
           if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
-            echo "::error::SUPABASE_ACCESS_TOKEN secret is not set. Add it in GitHub → Settings → Secrets and variables → Actions, then re-run this workflow."
+            echo "::error::SUPABASE_ACCESS_TOKEN secret is not set. Add it in GitHub → Settings → Secrets and variables → Actions, then re-run this workflow. (Until then, deploys must be run manually — see DEPLOYMENT.md.)"
             exit 1
           fi
 
@@ -43,21 +44,5 @@ jobs:
             supabase functions deploy "$fn" --project-ref "$PROJECT_REF" --no-verify-jwt
           done
 
-      - name: Smoke-test live endpoint
-        run: |
-          URL="https://${PROJECT_REF}.supabase.co/functions/v1/hubspot"
-          ANON="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M"
-
-          status=$(curl -s -o /dev/null -w "%{http_code}" -X OPTIONS "$URL" -H "apikey: $ANON")
-          [ "$status" = "204" ] || { echo "::error::CORS preflight returned $status (expected 204)"; exit 1; }
-          echo "CORS preflight OK (204)"
-
-          # The function wraps errors as HTTP 200 with { error, status } in the
-          # body (so supabase-js clients see the detail) — check the body.
-          body=$(curl -s -X POST "$URL" \
-            -H "Content-Type: application/json" -H "apikey: $ANON" \
-            -d '{"action":"getTemplates"}')
-          echo "$body" | grep -q '"status":401' || { echo "::error::Unauthenticated POST response: $body"; exit 1; }
-          echo "Auth gate OK (401 error body without user session)"
-
-          echo "Deploy verified — hubspot edge function is live."
+      - name: Smoke-test live endpoints
+        run: bash deploy-edge-function.sh smoke

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WhatSync — WhatsApp to HubSpot Sync",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Sync WhatsApp Web conversations with HubSpot: view contacts, log chats as WhatsApp messages, and create tickets, tasks, and deals.",
   "icons": {
     "16": "icons/icon16.png",

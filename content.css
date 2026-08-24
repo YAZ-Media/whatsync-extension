@@ -37,6 +37,17 @@ body.hubspot-sidebar-open #app .two {
     transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* WhatsApp positions its context menus / dropdowns against the full window,
+   so one opened near the panel edge can extend into the sidebar's strip.
+   Keep those portal layers above the sidebar (belt-and-braces alongside the
+   sidebar's modest z-index) so no menu ever renders half-hidden. */
+body.hubspot-sidebar-open #app [data-animate-dropdown],
+body.hubspot-sidebar-open #app [data-animate-menu],
+body.hubspot-sidebar-open #app [data-animate-modal-popup],
+body.hubspot-sidebar-open #app [data-animate-modal-backdrop] {
+    z-index: 99999 !important;
+}
+
 /* ==================== WhatsApp Theme Variables ==================== */
 /* Default (Light Theme) Variables */
 :root {
@@ -235,7 +246,12 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     height: 100vh;
     background: var(--sidebar-bg, #ffffff);
     border-left: none;
-    z-index: 999998;
+    /* Deliberately BELOW WhatsApp's popup portals (context menus, dropdowns,
+       media viewer — those layers sit around z 10000). The chat reflows beside
+       the sidebar rather than under it, so the sidebar only needs to beat
+       WhatsApp's base panes; a sky-high value here made right-click menus that
+       overflow into this strip disappear underneath the panel. */
+    z-index: 9990;
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12);
     transform: translateX(100%);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s ease;

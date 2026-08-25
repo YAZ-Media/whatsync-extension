@@ -2665,7 +2665,9 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    opacity: 0;
+    /* Always faintly visible so people can discover it without hovering;
+       brightens on row hover, solid green when selected. */
+    opacity: 0.45;
     transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
     z-index: 5;
     padding: 0;
@@ -2684,6 +2686,7 @@ body.whatsapp-theme-light .ws-msg-log-btn {
 }
 
 .ws-msg-log-btn:hover {
+    opacity: 1;
     border-color: #25D366;
     color: #25D366;
 }

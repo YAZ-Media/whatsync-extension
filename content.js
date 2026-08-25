@@ -2788,6 +2788,9 @@ function ensureInlineMessageLogButtons() {
     } catch (_) { /* noop */ }
   }, 1500);
 }
+// Start immediately — the interval no-ops until a chat with a matched HubSpot
+// contact is open, so this never depends on sidebar render timing.
+ensureInlineMessageLogButtons();
 
 // Function to format selected messages for note
 function formatSelectedMessages(messages, contactName = 'Contact') {

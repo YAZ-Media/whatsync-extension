@@ -138,7 +138,29 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = EDGE_FUNCTION_TIM
   }
 }
 
+const hubspotReadCache = new Map();
+const hubspotReadsInFlight = new Map();
 async function callHubSpotEdgeFunction(action, data = {}) {
+  const cacheable = ['getPropertyOptions', 'getOwners', 'getOwnerById', 'getSidebarFields'].includes(action);
+  if (!cacheable) {
+    if (/^(create|update|delete|save)/i.test(action)) hubspotReadCache.clear();
+    return requestHubSpotEdgeFunction(action, data);
+  }
+  const { userId, userLoggedIn } = await chrome.storage.local.get(['userId', 'userLoggedIn']);
+  if (!userId || !userLoggedIn) throw new Error('Not authenticated');
+  const key = JSON.stringify([userId, action, data]);
+  const cached = hubspotReadCache.get(key);
+  if (cached && Date.now() - cached.at < 15000) return structuredClone(cached.value);
+  if (hubspotReadsInFlight.has(key)) return hubspotReadsInFlight.get(key);
+  const promise = requestHubSpotEdgeFunction(action, data).then(value => {
+    if (hubspotReadCache.size >= 100) hubspotReadCache.delete(hubspotReadCache.keys().next().value);
+    hubspotReadCache.set(key, { value, at: Date.now() });
+    return value;
+  }).finally(() => hubspotReadsInFlight.delete(key));
+  hubspotReadsInFlight.set(key, promise);
+  return promise;
+}
+async function requestHubSpotEdgeFunction(action, data = {}) {
   const requestBody = { action, data };
   const needsAuth = edgeRequestRequiresAuth(data);
   let accessToken = await getStoredAccessToken();
@@ -347,6 +369,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   if (request.action === 'clearHubSpotCache') {
     hubspotConnectionCache = null;
+    hubspotReadCache.clear();
     chrome.storage.local.remove(HUBSPOT_CONNECTION_STORAGE_KEY);
     sendResponse({ success: true });
     return true;
@@ -1906,11 +1929,14 @@ async function doRefreshAccessToken(refreshTokenArg) {
         }
       }
       console.error('[Background] Failed to refresh token:', response.status, errorText);
-      return null;
+      if (response.status === 400 || response.status === 401) return null;
+      throw new Error('Sign-in service is temporarily unavailable.');
     }
 
     const data = await response.json();
     const newAccessToken = data.access_token;
+    if (!newAccessToken || !data.refresh_token) throw new Error('Invalid refresh response; session preserved.');
+    if ((await getStoredRefreshToken()) !== refreshToken) return getStoredAccessToken();
     const newRefreshToken = data.refresh_token || refreshToken; // Use new refresh token if provided
 
     // Update storage with new tokens. The content script reads its token from
@@ -1943,7 +1969,7 @@ async function doRefreshAccessToken(refreshTokenArg) {
     return newAccessToken;
   } catch (error) {
     console.error('[Background] Error refreshing access token:', error);
-    return null;
+    throw error;
   }
 }
 
@@ -2287,22 +2313,18 @@ async function findExistingHubSpotContactByPhone(phone) {
     const hits = await searchHubSpotContactsByPhone(getPhoneVariations(phone));
     return hits[0] || null;
   } catch (error) {
-    console.warn('[Background] Contact search failed:', error?.message);
-    return null;
+    throw error;
   }
 }
 
 async function maybeCreateCompanyForContact(createdContact, payload, syncSettings) {
-  if (!syncSettings?.auto_create_companies) return;
-  const companyName = payload?.properties?.company || payload?.sourceData?.company;
-  if (!companyName || !String(companyName).trim()) return;
+  if (!syncSettings?.auto_create_companies || !payload?.properties?.company?.trim()) return;
   try {
-    await callHubSpotEdgeFunction('createCompany', {
-      properties: { name: String(companyName).trim() },
-    });
-    console.log('[Background] auto_create_companies: company record created for', companyName);
+    const result = await callHubSpotEdgeFunction('associateCompanyByName', {contactId: createdContact.id});
+    if (!result.linked) createdContact.whatsyncWarning = result.warning || 'Contact saved. Company linking needs review in HubSpot.';
   } catch (error) {
-    console.warn('[Background] auto_create_companies failed:', error);
+    createdContact.whatsyncWarning = 'Contact saved. Company linking failed; review its company association in HubSpot.';
+    console.warn('[Background] Company association could not be saved.');
   }
 }
 
@@ -2331,9 +2353,9 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
         if (existing) {
           console.log('[Background] enrich_before_create: using existing contact', existing.id);
           if (userId && accessToken) {
-            await logContactCreationToSupabase(userId, accessToken, payload, existing, syncSettings);
+            // No create occurred; do not write a creation log.
           }
-          return existing;
+          throw new Error('A contact with this phone already exists in HubSpot. Refresh the sidebar to open that record.');
         }
       }
     }
@@ -2359,7 +2381,8 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
       // Log to Supabase if userId and accessToken are provided
       if (userId && accessToken) {
         const syncSettings = await getSyncSettingsForUser(userId);
-        await logContactCreationToSupabase(userId, accessToken, payload, createdContact, syncSettings);
+        await logContactCreationToSupabase(userId, accessToken, payload, createdContact, syncSettings)
+          .catch(() => console.warn('[Background] Contact saved; activity log unavailable.'));
         await maybeCreateCompanyForContact(createdContact, payload, syncSettings);
       } else {
         console.warn('[Background] Missing userId or accessToken, skipping Supabase log');
@@ -2600,10 +2623,10 @@ function applyFieldMappings(sourceData, mappings, extraProperties = {}) {
       if (mapping.target === 'firstname' || mapping.target === 'lastname') {
         // Don't clobber names sent explicitly in properties (the create form
         // provides firstname/lastname directly, which are authoritative).
-        if (first && !properties.firstname) properties.firstname = first;
-        if (last && !properties.lastname) properties.lastname = last;
+        if (first && !Object.prototype.hasOwnProperty.call(extraProperties, 'firstname')) properties.firstname = first;
+        if (last && !Object.prototype.hasOwnProperty.call(extraProperties, 'lastname')) properties.lastname = last;
       } else if (!properties[mapping.target]) {
-        properties[mapping.target] = String(value);
+        if (!Object.prototype.hasOwnProperty.call(extraProperties, mapping.target)) properties[mapping.target] = String(value);
       }
       continue;
     }
@@ -2618,7 +2641,7 @@ function applyFieldMappings(sourceData, mappings, extraProperties = {}) {
       continue;
     }
 
-    properties[mapping.target] = String(value);
+    if (!Object.prototype.hasOwnProperty.call(extraProperties, mapping.target)) properties[mapping.target] = String(value);
   }
 
   // HubSpot rejects the whole create/update if any read-only (calculated)
@@ -2879,13 +2902,7 @@ async function checkHubSpotContactViaEdgeFunction(phoneNumber) {
   const phoneVariations = getPhoneVariations(phoneNumber);
 
   try {
-    let matchingContacts = [];
-    try {
-      matchingContacts = await searchHubSpotContactsByPhone(phoneVariations);
-    } catch (searchError) {
-      console.warn('[Background] Server-side contact search failed, falling back to scan:', searchError?.message);
-      matchingContacts = await scanHubSpotContactsByPhone(phoneVariations);
-    }
+    const matchingContacts = await searchHubSpotContactsByPhone(phoneVariations);
 
     if (matchingContacts.length > 0) {
       console.log('[Background] ✅ Found', matchingContacts.length, 'matching contact(s)');
@@ -2909,71 +2926,6 @@ async function checkHubSpotContactViaEdgeFunction(phoneNumber) {
                 }
                 contact.properties.associatedcompanyid = companyId;
               }
-            }
-          }
-          
-          // Check if we're missing properties that were requested
-          const missingProps = [];
-          if (!props.company && !props.associatedcompanyname) missingProps.push('company', 'associatedcompanyname');
-          if (!props.associatedcompanyid) missingProps.push('associatedcompanyid');
-          if (!props.jobtitle) missingProps.push('jobtitle');
-          if (!props.lifecyclestage && !props.hs_lifecyclestage) missingProps.push('lifecyclestage');
-          if (!props.hs_lead_status && !props.lead_status) missingProps.push('hs_lead_status');
-          if (!props.createdate && !props.hs_createdate) missingProps.push('createdate');
-          
-          // If we have a contact ID and missing properties, try to fetch the full contact
-          if (contactId && missingProps.length > 0) {
-            try {
-              console.log('[Background] Missing properties for contact', contactId, ':', missingProps);
-              console.log('[Background] Attempting to fetch full contact details...');
-              
-              // Try to get the full contact with all properties
-              const fullContactData = {
-                contactId: contactId,
-                properties: ['firstname', 'lastname', 'email', 'phone', 'company', 'associatedcompanyname', 'associatedcompanyid', 'jobtitle', 'lifecyclestage', 'hs_lead_status', 'createdate']
-              };
-              
-              const fullContactResult = await callHubSpotEdgeFunction('getContact', fullContactData);
-              const fullContact = fullContactResult?.results?.[0] || fullContactResult?.data || fullContactResult;
-              
-              if (fullContact && fullContact.properties) {
-                console.log('[Background] Full contact properties:', Object.keys(fullContact.properties));
-                
-                // Merge missing properties into the contact
-                if (!contact.properties) {
-                  contact.properties = {};
-                }
-                
-                // Update missing properties
-                if (fullContact.properties.company && !props.company) {
-                  contact.properties.company = fullContact.properties.company;
-                }
-                if (fullContact.properties.associatedcompanyname && !props.associatedcompanyname) {
-                  contact.properties.associatedcompanyname = fullContact.properties.associatedcompanyname;
-                }
-                if (fullContact.properties.associatedcompanyid && !props.associatedcompanyid) {
-                  contact.properties.associatedcompanyid = fullContact.properties.associatedcompanyid;
-                }
-                if (fullContact.properties.jobtitle && !props.jobtitle) {
-                  contact.properties.jobtitle = fullContact.properties.jobtitle;
-                }
-                if (fullContact.properties.lifecyclestage && !props.lifecyclestage) {
-                  contact.properties.lifecyclestage = fullContact.properties.lifecyclestage;
-                }
-                if (fullContact.properties.hs_lifecyclestage && !props.hs_lifecyclestage) {
-                  contact.properties.hs_lifecyclestage = fullContact.properties.hs_lifecyclestage;
-                }
-                if (fullContact.properties.hs_lead_status && !props.hs_lead_status) {
-                  contact.properties.hs_lead_status = fullContact.properties.hs_lead_status;
-                }
-                if (fullContact.properties.createdate && !props.createdate) {
-                  contact.properties.createdate = fullContact.properties.createdate;
-                }
-                
-                console.log('[Background] ✅ Enriched contact with missing properties');
-              }
-            } catch (error) {
-              console.warn('[Background] Failed to fetch full contact:', error);
             }
           }
           

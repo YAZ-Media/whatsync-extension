@@ -15,6 +15,7 @@ OUT="dist/whatsync-${VERSION}.zip"
 FILES=(
   manifest.json
   background.js
+  contact-intelligence.js
   content.js
   content.css
   config.js

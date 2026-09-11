@@ -3,3 +3,13 @@
 !DEPLOYMENT.md
 !STORE_LISTING.md
 dist/
+
+# Website is maintained in its own Git repository under the main workspace.
+website/
+.claude/
+.DS_Store
+
+!LAUNCH_READINESS.md
+!DESIGN_SYSTEM.md
+!release/
+!release/*.md

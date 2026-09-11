@@ -1,3 +1,4 @@
+import { assertWorkspaceAccess } from '../_shared/entitlements.ts';
 // Supabase Edge Function: hubspot
 //
 // Multi-tenant HubSpot proxy for the WhatSync extension.
@@ -1157,6 +1158,21 @@ async function handleAction(
       return hubspot(token, 'GET', `/crm/v3/objects/companies/${companyId}`);
     }
 
+    case 'associateCompanyByName': {
+      const contactId = String(data.contactId || '');
+      if (!/^\d+$/.test(contactId)) throw new HttpError(400, 'A valid contact ID is required.');
+      // Read the saved value, rather than trusting an unrelated client-supplied name.
+      const contact = await hubspot(token, 'GET', `/crm/v3/objects/contacts/${contactId}?properties=company`) as { properties?: {company?: string} };
+      const name = contact.properties?.company?.trim();
+      if (!name) return { linked: false, warning: 'Contact saved without a company name.' };
+      const found = await hubspot(token, 'POST', '/crm/v3/objects/companies/search', {
+        filterGroups: [{filters: [{propertyName: 'name', operator: 'EQ', value: name}]}], properties: ['name'], limit: 2,
+      }) as { results?: Array<{id: string}>; total?: number };
+      if (found.results?.length !== 1 || (found.total || 0) > 1) return {linked: false, warning: found.results?.length ? 'Multiple companies match. Choose the correct company in HubSpot.' : 'Company name saved. No existing company record matches; create or link it in HubSpot.'};
+      await hubspot(token, 'PUT', `/crm/v4/objects/contacts/${contactId}/associations/default/companies/${found.results[0].id}`);
+      return {linked: true, companyId: found.results[0].id};
+    }
+
     case 'createCompany':
       return hubspot(token, 'POST', '/crm/v3/objects/companies', {
         properties: (data.properties as Record<string, unknown>) ?? data,
@@ -1704,6 +1720,7 @@ async function runFollowUpSweep(): Promise<unknown> {
       const due = autos.filter((a) => idleDays >= automationIdleDays(a));
       if (!due.length) { skipped++; continue; }
 
+      await assertWorkspaceAccess(r.user_id, true);
       const token = await getHubSpotToken(r.user_id);
       let executed = 0;
       for (const auto of due) {
@@ -1779,6 +1796,7 @@ Deno.serve(async (req) => {
     // Identity comes from the JWT only — payload userId values are ignored.
     const userId = await getAuthenticatedUserId(req);
 
+    await assertWorkspaceAccess(userId, /^(create|update|delete|save|log|associate|disassociate|evaluate|execute|invite)/i.test(action));
     const result = await handleAction(action, (data as Record<string, unknown>) ?? {}, userId);
 
     return json(result ?? { success: true });

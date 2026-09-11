@@ -1,0 +1,143 @@
+import Stripe from 'npm:stripe@18.5.0';
+import { createClient } from 'npm:@supabase/supabase-js@2';
+import { authenticateRequest } from '../_shared/auth.ts';
+import { PLAN_KEYS, isPlan, canManageBilling } from '../_shared/billing-policy.ts';
+
+const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info, stripe-signature' };
+const json = (body: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
+const env = (key: string) => Deno.env.get(key) || '';
+const priceId = (plan: string) => env(`STRIPE_PRICE_${plan.toUpperCase()}`);
+const salesEnabled = () => env('BILLING_SALES_ENABLED') === 'true';
+const stripeClient = () => {
+  if (!env('STRIPE_SECRET_KEY')) throw new Error('Billing provider is not configured.');
+  return new Stripe(env('STRIPE_SECRET_KEY'), { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2 });
+};
+const database = () => {
+  if (!env('EXTERNAL_SUPABASE_URL') || !env('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY')) throw new Error('Billing database is not configured.');
+  return createClient(env('EXTERNAL_SUPABASE_URL'), env('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY'), { auth: { persistSession: false, autoRefreshToken: false } });
+};
+const origin = () => {
+  const url = new URL(env('APP_URL') || 'https://whatsync.io');
+  if (url.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(url.hostname)) throw new Error('Invalid application URL.');
+  return url.origin;
+};
+function must<T extends { error: unknown }>(result: T): T {
+  if (result.error) throw new Error('Billing data is temporarily unavailable. Please retry.');
+  return result;
+}
+
+export async function handleBilling(req: Request): Promise<Response> {
+  if (req.method === 'OPTIONS') return json(null, 204);
+  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+  // Stripe webhooks use a signature, never a client-supplied userId or JWT bypass.
+  if (req.headers.has('stripe-signature')) {
+    if (!env('STRIPE_WEBHOOK_SECRET') || !env('STRIPE_SECRET_KEY')) return json({ error: 'Webhook not configured' }, 503);
+    const stripe = stripeClient();
+    let event: Stripe.Event;
+    try {
+      event = await stripe.webhooks.constructEventAsync(await req.text(), req.headers.get('stripe-signature')!, env('STRIPE_WEBHOOK_SECRET'), undefined, Stripe.createSubtleCryptoProvider());
+    } catch { return json({ error: 'Invalid webhook signature' }, 400); }
+    try {
+      const supported = ['customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','invoice.paid','invoice.payment_failed','checkout.session.completed'];
+      if (!supported.includes(event.type)) return json({ received: true });
+      const ext = database();
+      const object = event.data.object as unknown as Record<string, unknown>;
+      const customerId = typeof object.customer === 'string' ? object.customer : null;
+      if (!customerId) return json({ received: true });
+      const account = must(await ext.from('billing_customers').select('account_id').eq('stripe_customer_id', customerId).maybeSingle()).data;
+      // Ignore another product's customers; metadata alone cannot grant access.
+      if (!account) return json({ received: true });
+      const parent = object.parent as { subscription_details?: { subscription?: string } } | undefined;
+      const subscriptionId = event.type.startsWith('customer.subscription.') ? String(object.id) : (object.subscription || parent?.subscription_details?.subscription) as string | undefined;
+      if (!subscriptionId) return json({ received: true });
+      // Fetch current provider state, rather than trusting potentially old event snapshots.
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      if (subscription.customer !== customerId) return json({ error: 'Customer mismatch' }, 400);
+      const item = subscription.items.data[0];
+      const plan = PLAN_KEYS.find(plan => priceId(plan) === item?.price.id);
+      if (!plan || subscription.items.data.length !== 1) throw new Error('Unrecognized subscription price');
+      const periodEnd = item?.current_period_end;
+      const snapshot = {
+        stripe_subscription_id: subscription.id, account_id: account.account_id, plan_name: plan,
+        status: subscription.status, currency: item.price.currency, unit_amount: item.price.unit_amount,
+        current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+        cancel_at_period_end: subscription.cancel_at_period_end, livemode: subscription.livemode,
+      };
+      // Transactional replay protection and event ordering. Failed writes return 500 for Stripe retry.
+      must(await ext.rpc('apply_billing_event', { p_event_id: event.id, p_created: event.created, p_snapshot: snapshot }));
+      return json({ received: true });
+    } catch (error) {
+      console.error('Billing webhook could not be applied:', error instanceof Error ? error.message : 'unknown');
+      return json({ error: 'Webhook processing failed; please retry' }, 500);
+    }
+  }
+  try {
+    const { action, data = {} } = await req.json();
+    if (action === 'getPlans') {
+      if (!salesEnabled()) return json({ salesEnabled: false, plans: [] });
+      const stripe = stripeClient();
+      const plans = await Promise.all(PLAN_KEYS.map(async name => {
+        if (!priceId(name)) throw new Error('A subscription price is not configured.');
+        const price = await stripe.prices.retrieve(priceId(name));
+        if (!price.active || !price.recurring || price.unit_amount === null) throw new Error('Invalid subscription price configuration.');
+        return { name, amount: price.unit_amount, currency: price.currency, interval: price.recurring.interval, intervalCount: price.recurring.interval_count };
+      }));
+      return json({ salesEnabled: true, plans });
+    }
+    const auth = await authenticateRequest(req, data.userId || null);
+    if (!auth.ok) return json({ error: auth.error }, auth.status);
+    const ext = database();
+    const profile = must(await ext.from('user_profiles').select('role,status,organization_id,email').eq('user_id', auth.userId).maybeSingle()).data;
+    if (!profile || profile.status !== 'Active') return json({ error: 'An active workspace account is required.' }, 403);
+    const accountId = profile.organization_id || auth.userId;
+    const operator = env('BILLING_ADMIN_USER_IDS').split(',').map(s => s.trim()).filter(Boolean).includes(auth.userId);
+    if (action === 'getAdminAccess') return json({ isOperator: operator });
+    if (action === 'listSubscribers') {
+      if (!operator) return json({ error: 'Operator access required.' }, 403);
+      const page = Math.max(0, Math.min(Number(data.page) || 0, 10000));
+      const filter = ['active','trialing','past_due','canceled','unpaid','incomplete','incomplete_expired','paused'].includes(data.status) ? data.status : null;
+      let query = ext.from('billing_subscriptions').select('account_id,plan_name,status,currency,unit_amount,current_period_end,cancel_at_period_end,updated_at,livemode,billing_customers(billing_email)', { count: 'exact' }).order('updated_at',{ascending:false}).order('account_id');
+      if (filter) query = query.eq('status', filter);
+      const rows = must(await query.range(page * 50, page * 50 + 49));
+      return json({ subscribers: rows.data?.map(row => ({...row, billing_email: (row.billing_customers as unknown as {billing_email?:string})?.billing_email || null})), total: rows.count, page });
+    }
+    if (!['Owner','Admin','Billing','Read-only'].includes(profile.role)) return json({ error: 'Billing access required.' },403);
+    const customer = must(await ext.from('billing_customers').select('stripe_customer_id').eq('account_id', accountId).maybeSingle()).data;
+    if (action === 'getBillingData') {
+      const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
+      return json({ subscription, hasCustomer: !!customer, salesEnabled: salesEnabled() });
+    }
+    if (!canManageBilling(profile.role, profile.status)) return json({ error: 'Only a workspace owner or billing manager can manage this subscription.' },403);
+    if (['savePaymentMethod','processPayment','changePlan','deletePaymentMethod','setDefaultPaymentMethod'].includes(action)) return json({ error: 'Use secure hosted checkout or the billing portal. Card details are not accepted here.' },410);
+    const stripe = stripeClient();
+    if (action === 'createPortalSession') {
+      if (!customer) return json({ error: 'No billing account yet. Choose a subscription first.' },409);
+      const session = await stripe.billingPortal.sessions.create({ customer:customer.stripe_customer_id,return_url:`${origin()}/dashboard/billing` });
+      return json({ url:session.url });
+    }
+    if (action === 'createCheckoutSession') {
+      if (!salesEnabled()) return json({ error:'Subscriptions are not open yet.' },503);
+      if (!isPlan(data.planName) || !priceId(data.planName)) return json({ error:'Choose a configured subscription plan.' },400);
+      let customerId = customer?.stripe_customer_id;
+      if (!customerId) {
+        const created = await stripe.customers.create({email:profile.email,metadata:{account_id:accountId}}, {idempotencyKey:`whatsync-customer-${accountId}`});
+        customerId = created.id;
+        must(await ext.from('billing_customers').upsert({account_id:accountId,stripe_customer_id:customerId,billing_email:profile.email},{onConflict:'account_id'}));
+      }
+      const subscriptions = await stripe.subscriptions.list({customer:customerId,status:'all',limit:100});
+      if (subscriptions.data.some(s => !['canceled','incomplete_expired'].includes(s.status))) return json({error:'This workspace already has a subscription. Use Manage billing to change it.'},409);
+      const session = await stripe.checkout.sessions.create({
+        mode:'subscription',customer:customerId,client_reference_id:accountId,
+        line_items:[{price:priceId(data.planName),quantity:1}],
+        success_url:`${origin()}/dashboard/billing?checkout=returned`,cancel_url:`${origin()}/dashboard/billing?checkout=canceled`,
+        subscription_data:{metadata:{account_id:accountId}},allow_promotion_codes:true,
+      }, {idempotencyKey:`checkout-${accountId}-${Math.floor(Date.now()/1800000)}`});
+      return json({url:session.url});
+    }
+    return json({error:'Unknown billing action'},400);
+  } catch (error) {
+    console.error('Billing request failed:', error instanceof Error ? error.message : 'unknown');
+    return json({error:error instanceof Error ? error.message : 'Billing is temporarily unavailable.'},500);
+  }
+}
+

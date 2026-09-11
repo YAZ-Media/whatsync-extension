@@ -1,69 +1,26 @@
-# Chrome Web Store submission guide
+# Store submission preparation — candidate only
 
-Everything needed to publish WhatSync, so teammates get automatic updates
-instead of `git pull` + manual reloads.
+Do not submit until the live acceptance matrix in LAUNCH_READINESS.md passes. Store approval is a separate requirement, not a test result.
 
-## One-time setup
+## Proposed listing copy (verify against the accepted build)
 
-1. Register a Chrome Web Store developer account (one-time $5) at
-   https://chrome.google.com/webstore/devconsole with the yazmarketing Google
-   account.
-2. Run `./package-extension.sh` — it produces `dist/whatsync-<version>.zip`
-   containing only the shipped files (icons included).
-3. Upload the zip, fill in the listing below, and pick **Unlisted** visibility
-   (installable via direct link — right for an internal team tool; switch to
-   Public later if WhatSync goes commercial).
+Name: WhatSync — WhatsApp to HubSpot Sync
 
-Each release afterwards: bump `manifest.json` version → `./package-extension.sh`
-→ upload the new zip. Chrome pushes the update to every installed browser
-within hours.
+Summary: View HubSpot contacts beside WhatsApp Web and capture conversations, notes and follow-up tasks in your CRM.
 
-## Listing copy
+Description: WhatSync helps teams keep CRM details close to their WhatsApp conversations. View the connected HubSpot contact, review locally detected contact details with their message source, and save selected messages or a note. Use your connected HubSpot account's owners and property options when creating contacts, tasks, tickets and deals. Templates insert a draft for you to review and send. Configured automation rules can create CRM actions after supported extension events.
 
-**Name:** WhatSync — WhatsApp to HubSpot Sync
+A WhatSync account and a connected HubSpot account are required. Availability and pricing must match the published Pricing page. The extension reads the open WhatsApp Web chat and depends on its page structure; it is not a replacement for the WhatsApp Business Platform. Do not advertise guaranteed full historical sync, every customized HubSpot form, message delivery guarantees, HubSpot @mention notifications, certification or shared-portal access before validating those capabilities.
 
-**Summary (132 chars max):**
-See HubSpot context beside every WhatsApp chat and log conversations, deals,
-tasks and tickets without leaving WhatsApp Web.
+## Permission explanations
 
-**Description:**
-WhatSync puts your HubSpot CRM inside WhatsApp Web. Open a chat and instantly
-see who you're talking to: contact details, owner, lifecycle stage, deals with
-live stage names, recent activity. Log the conversation as a native HubSpot
-WhatsApp message in one click — or let WhatSync spot chats worth recording
-(pricing, proposals, approvals — English and Arabic) and suggest it. Create
-notes, tasks, tickets and deals inline, send message templates, and run
-automation rules on real conversation events. Team-ready: workspace roles,
-shared HubSpot connection, and privacy controls (phone masking, media
-redaction, retention).
+- `web.whatsapp.com`: renders the sidebar, reads the selected conversation and inserts user-selected template drafts.
+- `whatsync.io` / `www.whatsync.io`: synchronizes session and dashboard preference changes with the extension.
+- `ogsvchujqpayuckxuwdf.supabase.co`: authenticated WhatSync backend requests.
+- `storage`: persistent session, preferences and local cache.
+- `alarms`: session refresh scheduling.
+- `tabs`, `activeTab`, `scripting`: supported page interactions and dashboard/auth navigation. Review each permission against the final implementation before submission; remove anything unused.
 
-Requires a WhatSync account (whatsync.io) and a HubSpot portal.
+Single purpose: keep a connected HubSpot CRM updated from the user's WhatsApp Web work.
 
-**Category:** Workflow & Planning · **Language:** English
-
-## Permission justifications (the review form asks for each)
-
-| Permission | Justification |
-|---|---|
-| `host: web.whatsapp.com` | Renders the CRM sidebar beside chats and reads the open conversation to match the contact and log messages the user chooses to log. |
-| `host: whatsync.io` | Dashboard bridge: sidebar layout changes made on the WhatSync dashboard apply to the extension immediately. |
-| `host: *.supabase.co` | WhatSync's backend API (authentication and HubSpot proxy). |
-| `storage` | Caches session, settings, and per-chat bookmarks locally. |
-| `alarms` | Periodic settings refresh. |
-| `tabs` / `activeTab` / `scripting` | Opens the dashboard/OAuth flows and injects the sidebar. |
-
-**Single purpose:** connect WhatsApp Web conversations to the user's HubSpot
-CRM.
-
-**Data use disclosures:** the extension transmits conversation text only when
-the user logs it (or has explicitly enabled auto-logging) to the user's own
-HubSpot portal via WhatSync's backend; credentials are OAuth tokens; no data
-is sold or shared with third parties. Privacy policy: https://whatsync.io/privacy
-
-## Assets checklist
-
-- Icon 128×128: `icons/icon128.png` (shipped in the zip) ✓
-- Screenshots (1280×800, 3–5): capture the sidebar on a real chat — contact
-  card, deal card with stage badge, smart log suggestion, activity timeline,
-  and the dashboard's Sidebar Designer.
-- Promo tile 440×280: optional for Unlisted.
+Prepare actual screenshots from the accepted build, an original icon, setup/support/privacy/terms URLs, and any reviewer access required by the store. The combined release bundle is not the extension upload: upload only `whatsync-1.5.0.zip`. Confirm the Chrome Web Store's current submission requirements in its developer dashboard; no approval or update time is promised here.

@@ -208,25 +208,25 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     width: 40px;
     height: 40px;
     border-radius: 20px;
-    background: linear-gradient(135deg, #25D366 0%, #20BA5A 100%);
+    background: linear-gradient(135deg, #ff7a59 0%, #ed6445 100%);
     color: #ffffff;
     border: none;
     cursor: pointer;
     transition: all 0.2s ease;
-    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.25);
+    box-shadow: 0 2px 8px rgba(255, 122, 89, 0.25);
     margin-left: 4px;
     position: relative;
 }
 
 #hubspot-navbar #checkOpenchat:hover {
-    background: linear-gradient(135deg, #20BA5A 0%, #1EA855 100%);
-    box-shadow: 0 4px 12px rgba(37, 211, 102, 0.35);
+    background: linear-gradient(135deg, #ed6445 0%, #1EA855 100%);
+    box-shadow: 0 4px 12px rgba(255, 122, 89, 0.35);
     transform: translateY(-1px);
 }
 
 #hubspot-navbar #checkOpenchat:active {
     transform: translateY(0);
-    box-shadow: 0 2px 6px rgba(37, 211, 102, 0.25);
+    box-shadow: 0 2px 6px rgba(255, 122, 89, 0.25);
 }
 
 #hubspot-navbar #checkOpenchat svg {
@@ -266,11 +266,11 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
 #hubspot-sidebar .sidebar-header {
     flex-shrink: 0;
     padding: 20px 24px;
-    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    background: linear-gradient(135deg, #ff7a59 0%, #e85d3f 100%);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 2px 8px rgba(255, 122, 89, 0.3);
 }
 
 #hubspot-sidebar .sidebar-header h3 {
@@ -365,7 +365,7 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     align-items: center;
     justify-content: center;
     font-size: 48px;
-    box-shadow: 0 4px 16px rgba(37, 211, 102, 0.15);
+    box-shadow: 0 4px 16px rgba(255, 122, 89, 0.15);
 }
 
 #hubspot-sidebar .no-chat-selected h4 {
@@ -400,11 +400,11 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     width: 48px;
     height: 48px;
     border: 4px solid #e2e8f0;
-    border-top: 4px solid #25d366;
+    border-top: 4px solid #ff7a59;
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin: 0 auto 20px;
-    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.2);
+    box-shadow: 0 2px 8px rgba(255, 122, 89, 0.2);
 }
 
 @keyframes spin {
@@ -564,8 +564,8 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
 
 #hubspot-sidebar .info-edit-select:focus {
     outline: none;
-    border-color: #25D366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.2);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.2);
 }
 
 #hubspot-sidebar .info-edit-select:disabled {
@@ -574,8 +574,8 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
 }
 
 #hubspot-sidebar .info-edit-select.edit-saved {
-    border-color: #25D366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.25);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.25);
 }
 
 #hubspot-sidebar .info-edit-select.edit-error {
@@ -601,8 +601,8 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(37, 211, 102, 0.12);
-    color: #25D366;
+    background: rgba(255, 122, 89, 0.12);
+    color: #ff7a59;
     margin-bottom: 10px;
 }
 
@@ -631,18 +631,18 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     padding: 11px 22px;
     border: none;
     border-radius: 10px;
-    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    background: linear-gradient(135deg, #ff7a59 0%, #e85d3f 100%);
     color: #fff;
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
-    box-shadow: 0 4px 14px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 4px 14px rgba(255, 122, 89, 0.3);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 #hubspot-sidebar .ws-state-btn:hover {
     transform: translateY(-1px);
-    box-shadow: 0 6px 18px rgba(37, 211, 102, 0.4);
+    box-shadow: 0 6px 18px rgba(255, 122, 89, 0.4);
 }
 
 #hubspot-sidebar .ws-state-btn:active {
@@ -657,7 +657,7 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
 }
 
 #hubspot-sidebar .ws-state-link {
-    color: #25d366;
+    color: #ff7a59;
     text-decoration: none;
     font-weight: 600;
 }
@@ -712,7 +712,7 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
 }
 
 #hubspot-sidebar .ws-login-input:focus {
-    border-color: #25d366;
+    border-color: #ff7a59;
 }
 
 #hubspot-sidebar .ws-login-error {
@@ -798,7 +798,7 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
 }
 
 #hubspot-sidebar .activity-icon-note { background: #f59e0b; }
-#hubspot-sidebar .activity-icon-call { background: #25D366; }
+#hubspot-sidebar .activity-icon-call { background: #ff7a59; }
 #hubspot-sidebar .activity-icon-email { background: #3b82f6; }
 #hubspot-sidebar .activity-icon-meeting { background: #8b5cf6; }
 #hubspot-sidebar .activity-icon-ticket { background: #6366f1; }
@@ -1105,12 +1105,12 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
    The full logo fills its viewBox, so add a touch more padding to match the
    visual weight of the stroke icons and stay centered. */
 #hubspot-sidebar .action-btn-whatsapp svg {
-    background: rgba(37, 211, 102, 0.12);
+    background: rgba(255, 122, 89, 0.12);
     padding: 12px;
 }
 
 #hubspot-sidebar .action-btn-whatsapp:hover svg {
-    background: rgba(37, 211, 102, 0.2);
+    background: rgba(255, 122, 89, 0.2);
 }
 
 /* More Actions Dropdown */
@@ -1229,12 +1229,12 @@ body.whatsapp-message-selection-mode #main {
 
 @keyframes hubspotFocusPulse {
     0%, 100% {
-        box-shadow: inset 0 0 0 2.5px rgba(37, 211, 102, 0.55),
-                    0 0 28px rgba(37, 211, 102, 0.22);
+        box-shadow: inset 0 0 0 2.5px rgba(255, 122, 89, 0.55),
+                    0 0 28px rgba(255, 122, 89, 0.22);
     }
     50% {
-        box-shadow: inset 0 0 0 2.5px rgba(37, 211, 102, 0.9),
-                    0 0 46px rgba(37, 211, 102, 0.4);
+        box-shadow: inset 0 0 0 2.5px rgba(255, 122, 89, 0.9),
+                    0 0 46px rgba(255, 122, 89, 0.4);
     }
 }
 
@@ -1244,7 +1244,7 @@ body.whatsapp-message-selection-mode #main [data-id] {
 }
 
 body.whatsapp-message-selection-mode #main [data-id]:hover {
-    background-color: rgba(37, 211, 102, 0.08);
+    background-color: rgba(255, 122, 89, 0.08);
     border-radius: 6px;
 }
 
@@ -1263,10 +1263,10 @@ body.whatsapp-message-selection-mode .message-in:hover {
 
 body.whatsapp-message-selection-mode .message-out.message-selected,
 body.whatsapp-message-selection-mode .message-in.message-selected {
-    background-color: rgba(37, 211, 102, 0.15) !important;
-    border: 2px solid #25D366;
+    background-color: rgba(255, 122, 89, 0.15) !important;
+    border: 2px solid #ff7a59;
     border-radius: 4px;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.3);
 }
 
 body.whatsapp-message-selection-mode .message-out.message-selected::before,
@@ -1275,7 +1275,7 @@ body.whatsapp-message-selection-mode .message-in.message-selected::before {
     position: absolute;
     top: 8px;
     right: 8px;
-    background: #25D366;
+    background: #ff7a59;
     color: white;
     width: 20px;
     height: 20px;
@@ -1289,16 +1289,16 @@ body.whatsapp-message-selection-mode .message-in.message-selected::before {
 }
 
 body.whatsapp-message-selection-mode [data-id].message-container-selected {
-    background-color: rgba(37, 211, 102, 0.1);
+    background-color: rgba(255, 122, 89, 0.1);
 }
 
 /* Row-level selection highlight (we now anchor selection on the stable [data-id]
    message row rather than WhatsApp's rotating bubble classes). */
 body.whatsapp-message-selection-mode [data-id].message-selected {
     position: relative;
-    background-color: rgba(37, 211, 102, 0.15) !important;
+    background-color: rgba(255, 122, 89, 0.15) !important;
     border-radius: 6px;
-    box-shadow: inset 0 0 0 2px #25D366;
+    box-shadow: inset 0 0 0 2px #ff7a59;
 }
 
 body.whatsapp-message-selection-mode [data-id].message-selected::after {
@@ -1306,7 +1306,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     position: absolute;
     top: 8px;
     right: 8px;
-    background: #25D366;
+    background: #ff7a59;
     color: #fff;
     width: 20px;
     height: 20px;
@@ -1327,7 +1327,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     left: 0;
     right: 0;
     background: #ffffff;
-    border-top: 2px solid #25D366;
+    border-top: 2px solid #ff7a59;
     box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15);
     z-index: 9999999;
     padding: 12px 16px;
@@ -1372,12 +1372,12 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 .selection-btn-done {
-    background: #25D366;
+    background: #ff7a59;
     color: #ffffff;
 }
 
 .selection-btn-done:hover:not(:disabled) {
-    background: #20ba5a;
+    background: #ed6445;
 }
 
 .selection-btn-done:disabled {
@@ -1480,7 +1480,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 
 #hubspot-sidebar .actions-link {
     font-size: 13px;
-    color: #25d366;
+    color: #ff7a59;
     text-decoration: none;
     font-weight: 500;
 }
@@ -1508,7 +1508,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 #hubspot-sidebar .info-row:hover {
-    border-bottom: 1px solid #25d366;
+    border-bottom: 1px solid #ff7a59;
 }
 
 #hubspot-sidebar .info-label-text {
@@ -1644,7 +1644,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     align-items: center;
     gap: 8px;
     padding: 10px 20px;
-    background: #25d366;
+    background: #ff7a59;
     color: #ffffff;
     border: none;
     border-radius: 6px;
@@ -1655,9 +1655,9 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 #hubspot-sidebar .notes-create-btn:hover {
-    background: #20ba5a;
+    background: #ed6445;
     transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 2px 8px rgba(255, 122, 89, 0.3);
 }
 
 #hubspot-sidebar .notes-create-btn:active {
@@ -1712,7 +1712,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 #hubspot-sidebar .note-chevron {
-    color: #25d366;
+    color: #ff7a59;
     transition: transform 0.2s;
     flex-shrink: 0;
 }
@@ -1869,7 +1869,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     align-items: center;
     gap: 8px;
     padding: 10px 20px;
-    background: #25d366;
+    background: #ff7a59;
     color: #ffffff;
     border: none;
     border-radius: 6px;
@@ -1880,9 +1880,9 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 #hubspot-sidebar .tickets-create-btn:hover {
-    background: #20ba5a;
+    background: #ed6445;
     transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 2px 8px rgba(255, 122, 89, 0.3);
 }
 
 #hubspot-sidebar .tickets-create-btn:active {
@@ -2082,7 +2082,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     align-items: center;
     gap: 8px;
     padding: 10px 20px;
-    background: #25d366;
+    background: #ff7a59;
     color: #ffffff;
     border: none;
     border-radius: 6px;
@@ -2093,9 +2093,9 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 #hubspot-sidebar .tasks-create-btn:hover {
-    background: #20ba5a;
+    background: #ed6445;
     transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 2px 8px rgba(255, 122, 89, 0.3);
 }
 
 #hubspot-sidebar .tasks-create-btn:active {
@@ -2169,7 +2169,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 #hubspot-sidebar .task-chevron {
-    color: #25d366;
+    color: #ff7a59;
     transition: transform 0.2s;
     flex-shrink: 0;
 }
@@ -2292,8 +2292,8 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 
 #hubspot-sidebar .form-group input:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 3px rgba(255, 122, 89, 0.1);
     background: var(--sidebar-content-bg, #ffffff);
 }
 
@@ -2319,8 +2319,8 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 
 #hubspot-sidebar .form-group select:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 3px rgba(255, 122, 89, 0.1);
 }
 
 #hubspot-sidebar .form-group select option {
@@ -2348,7 +2348,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 #hubspot-sidebar .create-btn {
     width: 100%;
     padding: 14px 20px;
-    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    background: linear-gradient(135deg, #ff7a59 0%, #e85d3f 100%);
     color: white;
     border: none;
     border-radius: 10px;
@@ -2360,14 +2360,14 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     align-items: center;
     justify-content: center;
     gap: 8px;
-    box-shadow: 0 4px 12px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 4px 12px rgba(255, 122, 89, 0.3);
     letter-spacing: 0.3px;
 }
 
 #hubspot-sidebar .create-btn:hover:not(:disabled) {
-    background: linear-gradient(135deg, #128c7e 0%, #25d366 100%);
+    background: linear-gradient(135deg, #e85d3f 0%, #ff7a59 100%);
     transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(37, 211, 102, 0.4);
+    box-shadow: 0 6px 16px rgba(255, 122, 89, 0.4);
 }
 
 #hubspot-sidebar .create-btn:disabled {
@@ -2427,14 +2427,14 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     margin: 0 auto 18px;
 }
 #hubspot-sidebar .create-success .cs-circle {
-    stroke: #25d366;
+    stroke: #ff7a59;
     stroke-width: 3;
     stroke-dasharray: 151;
     stroke-dashoffset: 151;
     animation: whatsync-cs-circle 0.5s cubic-bezier(0.65, 0, 0.45, 1) forwards;
 }
 #hubspot-sidebar .create-success .cs-check {
-    stroke: #25d366;
+    stroke: #ff7a59;
     stroke-width: 4;
     stroke-linecap: round;
     stroke-linejoin: round;
@@ -2461,8 +2461,8 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     color: var(--sidebar-text-secondary, #667781);
 }
 #hubspot-sidebar .create-success-loading .btn-spinner {
-    border-color: rgba(37, 211, 102, 0.3);
-    border-top-color: #25d366;
+    border-color: rgba(255, 122, 89, 0.3);
+    border-top-color: #ff7a59;
 }
 @keyframes whatsync-cs-circle { to { stroke-dashoffset: 0; } }
 @keyframes whatsync-cs-check { to { stroke-dashoffset: 0; } }
@@ -2574,7 +2574,7 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     align-items: center;
     gap: 8px;
     padding: 10px 20px;
-    background: #25d366;
+    background: #ff7a59;
     color: #ffffff;
     border: none;
     border-radius: 6px;
@@ -2585,9 +2585,9 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 }
 
 #hubspot-sidebar .deals-create-btn:hover {
-    background: #20ba5a;
+    background: #ed6445;
     transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+    box-shadow: 0 2px 8px rgba(255, 122, 89, 0.3);
 }
 
 #hubspot-sidebar .deals-create-btn:active {
@@ -2687,19 +2687,19 @@ body.whatsapp-theme-light .ws-msg-log-btn {
 
 .ws-msg-log-btn:hover {
     opacity: 1;
-    border-color: #25D366;
-    color: #25D366;
+    border-color: #ff7a59;
+    color: #ff7a59;
 }
 
 .ws-msg-log-btn.ws-msg-log-btn-on {
     opacity: 1;
-    background: #25D366;
-    border-color: #25D366;
+    background: #ff7a59;
+    border-color: #ff7a59;
     color: #ffffff;
 }
 
 .ws-msg-row-selected {
-    background: rgba(37, 211, 102, 0.08);
+    background: rgba(255, 122, 89, 0.08);
     border-radius: 8px;
 }
 
@@ -2715,7 +2715,7 @@ body.whatsapp-theme-light .ws-msg-log-btn {
     padding: 8px 10px 8px 16px;
     border-radius: 999px;
     background: rgba(17, 27, 33, 0.96);
-    border: 1px solid rgba(37, 211, 102, 0.5);
+    border: 1px solid rgba(255, 122, 89, 0.5);
     color: #e9edef;
     font-size: 13px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
@@ -2730,7 +2730,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 }
 
 #ws-inline-log-toolbar .ws-inline-log-go {
-    background: #25D366;
+    background: #ff7a59;
     color: #ffffff;
     border: none;
     border-radius: 999px;
@@ -2939,7 +2939,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 
 .note-activity-date:focus {
     outline: none;
-    border-color: #25d366;
+    border-color: #ff7a59;
 }
 
 .note-textarea-container {
@@ -2961,7 +2961,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 }
 
 .note-textarea:focus {
-    border-color: #25d366;
+    border-color: #ff7a59;
 }
 
 .note-textarea::placeholder {
@@ -2984,7 +2984,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 }
 
 #note-editor:focus {
-    border-color: #25d366;
+    border-color: #ff7a59;
 }
 
 #note-editor:empty:before {
@@ -3263,7 +3263,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 }
 
 .ticket-header {
-    background: linear-gradient(135deg, #128c7e 0%, #25d366 100%);
+    background: linear-gradient(135deg, #e85d3f 0%, #ff7a59 100%);
     color: #ffffff;
     padding: 16px 20px;
     display: flex;
@@ -3403,8 +3403,8 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 .ticket-select:focus,
 .ticket-textarea:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.1);
     background: #ffffff !important;
     background-color: #ffffff !important;
     color: #1a1a1a !important;
@@ -3424,7 +3424,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 }
 
 .ticket-select:hover {
-    border-color: #25d366;
+    border-color: #ff7a59;
     background: #ffffff !important;
     background-color: #ffffff !important;
     color: #1a1a1a !important;
@@ -3615,12 +3615,12 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 }
 
 .ticket-btn-primary {
-    background: #25d366;
+    background: #ff7a59;
     color: #ffffff;
 }
 
 .ticket-btn-primary:hover {
-    background: #20ba5a;
+    background: #ed6445;
 }
 
 .ticket-btn-secondary {
@@ -3684,8 +3684,8 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 
 .ticket-search-input-full:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.1);
 }
 
 .ticket-list-header {
@@ -3729,7 +3729,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
 
 .ticket-sort-select:focus {
     outline: none;
-    border-color: #25d366;
+    border-color: #ff7a59;
     background: #ffffff !important;
     background-color: #ffffff !important;
     color: #1a1a1a !important;
@@ -3777,7 +3777,7 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
     width: 32px;
     height: 32px;
     border: 3px solid #e0e0e0;
-    border-top-color: #25d366;
+    border-top-color: #ff7a59;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     margin-bottom: 12px;
@@ -3929,7 +3929,7 @@ input[name="companySearch"] {
 }
 
 .deal-header {
-    background: linear-gradient(135deg, #128c7e 0%, #25d366 100%);
+    background: linear-gradient(135deg, #e85d3f 0%, #ff7a59 100%);
     color: #ffffff;
     padding: 16px 20px;
     display: flex;
@@ -4071,8 +4071,8 @@ input[name="companySearch"] {
 .deal-select:focus,
 .deal-textarea:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.1);
     background: #ffffff !important;
     background-color: #ffffff !important;
     color: #1a1a1a !important;
@@ -4096,7 +4096,7 @@ input[name="companySearch"] {
 }
 
 .deal-select:hover {
-    border-color: #25d366;
+    border-color: #ff7a59;
     background: #ffffff !important;
     background-color: #ffffff !important;
     color: #1a1a1a !important;
@@ -4278,12 +4278,12 @@ input[name="companySearch"] {
 }
 
 .deal-btn-primary {
-    background: #25d366;
+    background: #ff7a59;
     color: #ffffff;
 }
 
 .deal-btn-primary:hover {
-    background: #20ba5a;
+    background: #ed6445;
 }
 
 .deal-btn-secondary {
@@ -4347,8 +4347,8 @@ input[name="companySearch"] {
 
 .deal-search-input-full:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.1);
 }
 
 .deal-list-header {
@@ -4390,7 +4390,7 @@ input[name="companySearch"] {
     width: 32px;
     height: 32px;
     border: 3px solid #e0e0e0;
-    border-top-color: #25d366;
+    border-top-color: #ff7a59;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     margin-bottom: 12px;
@@ -4469,7 +4469,7 @@ input[name="companySearch"] {
     width: 18px;
     height: 18px;
     cursor: pointer;
-    accent-color: #25d366;
+    accent-color: #ff7a59;
 }
 
 .ticket-item-label {
@@ -4618,8 +4618,8 @@ input[name="companySearch"] {
 
 .task-name-input:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.1);
 }
 
 .task-activity-row {
@@ -4793,7 +4793,7 @@ input[name="companySearch"] {
     width: 18px;
     height: 18px;
     cursor: pointer;
-    accent-color: #25d366;
+    accent-color: #ff7a59;
 }
 
 .task-classification-row {
@@ -4833,8 +4833,8 @@ input[name="companySearch"] {
 
 .task-select:focus {
     outline: none;
-    border-color: #25d366;
-    box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.1);
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.1);
 }
 
 .task-radio-group {
@@ -4856,7 +4856,7 @@ input[name="companySearch"] {
     width: 16px;
     height: 16px;
     cursor: pointer;
-    accent-color: #25d366;
+    accent-color: #ff7a59;
 }
 
 .task-label {
@@ -4882,7 +4882,7 @@ input[name="companySearch"] {
 }
 
 .task-notes-editor:focus {
-    border-color: #25d366;
+    border-color: #ff7a59;
 }
 
 .task-notes-editor:empty:before {
@@ -5013,7 +5013,7 @@ input[name="companySearch"] {
 
 .task-create-btn {
     padding: 10px 20px;
-    background: #25d366;
+    background: #ff7a59;
     color: #ffffff;
     border: none;
     border-radius: 4px;
@@ -5024,7 +5024,7 @@ input[name="companySearch"] {
 }
 
 .task-create-btn:hover:not(:disabled) {
-    background: #20ba5a;
+    background: #ed6445;
 }
 
 .task-create-btn:disabled {
@@ -5058,3 +5058,86 @@ input[name="companySearch"] {
 .whatsync-toast-error {
   background: #b91c1c;
 }
+
+/* WhatSync 1.5 — warm coral, quiet navy, compact working surfaces. */
+#hubspot-sidebar {
+  --sidebar-bg: #fff;
+  --sidebar-content-bg: #f7f8fa;
+  --sidebar-hover-bg: #fff0e8;
+  --sidebar-text: #213343;
+  --sidebar-text-secondary: #526779;
+  --sidebar-border: #dce3e9;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  box-shadow: -8px 0 32px #21334312;
+}
+body.whatsapp-theme-dark #hubspot-sidebar {
+  --sidebar-bg: #1e2e3e;
+  --sidebar-content-bg: #172635;
+  --sidebar-hover-bg: #293d50;
+  --sidebar-text: #f0f4f8;
+  --sidebar-text-secondary: #aabaca;
+  --sidebar-border: #35495b;
+}
+#hubspot-sidebar .sidebar-header {
+  background: linear-gradient(115deg,#ff7a59,#ffad85);
+  padding: 18px 20px;
+  min-height: 80px;
+  color: #213343;
+  box-shadow:none;
+}
+#hubspot-sidebar .sidebar-header h3 { color:#213343; font-size:21px;letter-spacing:-.6px;margin:0; }
+#hubspot-sidebar .ws-brand { display:flex;align-items:center;gap:10px;flex:1; }
+#hubspot-sidebar .ws-brand span { font-size:8px;letter-spacing:1.3px;font-weight:700;display:block;margin-top:3px; }
+#hubspot-sidebar .sidebar-close, #hubspot-sidebar .ws-refresh-contact { color:#213343;background:#ffffff45;border:0;border-radius:9px;width:32px;height:32px;cursor:pointer; }
+#hubspot-sidebar .ws-refresh-contact { font-size:24px;margin-right:6px; }
+#hubspot-sidebar .sidebar-content { background:var(--sidebar-content-bg);padding:0; }
+#hubspot-sidebar .contact-header { padding:24px 20px 20px;background:var(--sidebar-bg);border-bottom:1px solid var(--sidebar-border); }
+#hubspot-sidebar .contact-name-section h3 {font-size:21px;letter-spacing:-.5px;line-height:1.3;}
+#hubspot-sidebar .contact-avatar {background:#fff0e8;color:#9c351d;border-radius:16px;box-shadow:none;}
+#hubspot-sidebar .action-buttons {gap:8px;}
+#hubspot-sidebar .action-btn {border:1px solid var(--sidebar-border);background:var(--sidebar-content-bg);color:var(--sidebar-text);border-radius:12px;}
+#hubspot-sidebar .action-btn:hover {background:var(--sidebar-hover-bg);border-color:#ff7a59;transform:none;}
+#hubspot-sidebar .no-contact-found {text-align:left;padding:24px 20px;color:var(--sidebar-text);}
+#hubspot-sidebar .no-contact-found h4 {font-size:20px;letter-spacing:-.4px;color:var(--sidebar-text);}
+#hubspot-sidebar .no-contact-found p {font-size:13px;line-height:1.6;color:var(--sidebar-text-secondary);}
+#hubspot-sidebar .create-contact-section {border-top:1px solid var(--sidebar-border);margin-top:20px;padding-top:20px;}
+#hubspot-sidebar .create-contact-section h5 {font-size:16px;color:var(--sidebar-text);margin-bottom:18px;}
+#hubspot-sidebar .form-group {margin-bottom:16px;}
+#hubspot-sidebar .form-group label {font-size:12px;font-weight:650;color:var(--sidebar-text);margin-bottom:7px;}
+#hubspot-sidebar .form-group input, #hubspot-sidebar .form-group select {background:var(--sidebar-bg);border:1px solid var(--sidebar-border);border-radius:9px;min-height:42px;color:var(--sidebar-text);font-size:14px;padding:10px 12px;box-shadow:none;}
+#hubspot-sidebar .form-group input:focus, #hubspot-sidebar .form-group select:focus {border-color:#ff7a59;outline:3px solid #ff7a5926;}
+#hubspot-sidebar .create-btn {background:linear-gradient(110deg,#ff7a59,#ffad85);color:#213343;border-radius:10px;font-weight:700;box-shadow:none;min-height:44px;font-size:14px;}
+#hubspot-sidebar .create-btn:hover:not(:disabled) {background:#ff9775;transform:none;box-shadow:none;}
+#hubspot-sidebar .create-btn:disabled {background:var(--sidebar-border);color:var(--sidebar-text-secondary);}
+#hubspot-sidebar .form-message.error {text-align:left;background:#fff0ee;color:#9f2920;border:1px solid #f4bbb4;overflow-wrap:anywhere;}
+#hubspot-sidebar .ws-suggestions {margin:16px 0;padding:14px;border:1px solid var(--sidebar-border);border-radius:12px;background:var(--sidebar-bg);}
+#hubspot-sidebar .contact-details > .ws-suggestions {margin:16px 20px;}
+#hubspot-sidebar .ws-suggestion-heading {display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;}
+#hubspot-sidebar .ws-suggestions button, #hubspot-sidebar .ws-retry-contact {border:1px solid var(--sidebar-border);border-radius:7px;background:var(--sidebar-hover-bg);color:var(--sidebar-text);padding:7px 10px;cursor:pointer;font-size:12px;white-space:nowrap;}
+#hubspot-sidebar .ws-hint {font-size:12px;line-height:1.5;color:var(--sidebar-text-secondary);margin:8px 0;}
+#hubspot-sidebar .ws-eyebrow {display:block;color:var(--sidebar-text-secondary);font-size:10px;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;}
+#hubspot-sidebar .ws-suggestion-row {display:flex;gap:12px;align-items:flex-start;justify-content:space-between;border-top:1px solid var(--sidebar-border);padding:12px 0;font-size:13px;}
+#hubspot-sidebar .ws-suggestion-row strong {overflow-wrap:anywhere;}
+#hubspot-sidebar .ws-suggestion-row summary {font-size:11px;color:var(--sidebar-text-secondary);cursor:pointer;margin-top:6px;}
+#hubspot-sidebar .ws-suggestion-row blockquote {margin:8px 0;padding-left:10px;border-left:2px solid #ff7a59;line-height:1.5;overflow-wrap:anywhere;}
+#hubspot-sidebar .ws-contact-skeleton {padding:26px 20px;color:var(--sidebar-text);}
+#hubspot-sidebar .ws-contact-skeleton h4 {font-size:20px;letter-spacing:-.4px;margin:8px 0;}
+#hubspot-sidebar .ws-contact-skeleton p {font-size:12px;color:var(--sidebar-text-secondary);}
+#hubspot-sidebar .ws-contact-skeleton i {display:block;height:52px;border-radius:10px;background:var(--sidebar-border);margin-top:18px;animation:ws-pulse 1.4s ease-in-out infinite;}
+#hubspot-sidebar .ws-contact-skeleton i:last-child {width:65%;}
+#hubspot-sidebar button:focus-visible, #hubspot-sidebar a:focus-visible {outline:3px solid #ff7a59;outline-offset:3px;}
+@keyframes ws-pulse {50% {opacity:.45;}}
+/* Dialogs sit outside the sidebar; retain a shared, readable editing surface. */
+.note-modal-content,.ticket-modal-content,.task-modal-content,.deal-modal-content {border-radius:16px!important;box-shadow:0 24px 90px #14253344!important;}
+.note-modal-header,.ticket-modal-header,.task-modal-header,.deal-modal-header {background:#213343!important;color:#fff!important;}
+.note-editor:focus {outline:2px solid #ff7a59!important;outline-offset:2px;}
+@media(prefers-reduced-motion:reduce) {
+  #hubspot-sidebar *, .note-modal-content *, .ticket-modal-content *, .task-modal-content * {animation:none!important;transition:none!important;scroll-behavior:auto!important;}
+}
+
+#hubspot-sidebar .no-contact-found { align-items: stretch; }
+#hubspot-sidebar .sidebar-header {box-sizing:border-box;min-height:76px;}
+#hubspot-sidebar .create-contact-form {gap:16px;}
+#hubspot-sidebar .form-group {margin-bottom:0;gap:6px;}
+#hubspot-sidebar .form-group label {margin-bottom:0;}
+#hubspot-sidebar .ws-save-warning {padding:14px 20px;margin:0;background:#fff0dc;color:#70431d;font-size:13px;border-bottom:1px solid #d5a775;}

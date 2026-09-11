@@ -87,6 +87,8 @@ smoke() {
     'save is auth-gated (HTTP 401 without user session)'
 
   # Public-by-design endpoints must still answer correctly.
+  check_post billing '{"action":"getPlans"}' 200 'salesEnabled' \
+    'verified billing catalog contract is deployed'
   check_post save-activity-config '{"action":"get"}' 200 'tableName' \
     'config read returns the activity table config'
   check_post external-auth '{"action":"__smoke__"}' 200 'Invalid action' \

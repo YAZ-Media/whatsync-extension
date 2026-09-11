@@ -1241,7 +1241,7 @@ function dispatchEscapeKey() {
  * skipped, so we never attribute a random participant's number to the chat.
  */
 async function extractPhoneFromContactPanel() {
-  const contactName = getCurrentContactName()?.trim();
+  const contactName = getCurrentChatHeaderKey();
 
   if (contactName && contactPanelPhoneCache.has(contactName)) {
     return contactPanelPhoneCache.get(contactName) || null;
@@ -1271,6 +1271,7 @@ async function extractPhoneFromContactPanel() {
   let resolved = null;
   for (let i = 0; i < 14; i++) {
     await new Promise((r) => setTimeout(r, 70));
+    if (contactName !== getCurrentChatHeaderKey()) return null;
     phones = collectContactPanelPhones();
     if (phones.length >= 3) { resolved = null; break; }      // group — don't guess
     if (phones.length >= 1) { resolved = phones[0]; break; } // contact number
@@ -1431,7 +1432,9 @@ async function setupDealPipelineForm(modal) {
         objectType: 'deals',
         property: 'dealtype',
       });
-      const options = (resp?.options || []).filter((o) => o && o.value && o.hidden !== true);
+      if (!resp?.success) throw new Error(resp?.error || 'Options unavailable');
+    if (!select.isConnected) return;
+    const options = (resp?.options || []).filter((o) => o && o.value && o.hidden !== true);
       if (options.length) {
         typeSelect.innerHTML = '<option value="">Select deal type</option>' + options
           .map((o) => `<option value="${escapeHtml(String(o.value))}">${escapeHtml(o.label || String(o.value))}</option>`)
@@ -1644,7 +1647,7 @@ function renderTemplatesInDropdown(templates) {
     `;
     
     // Add click handler for template
-    templateOption.addEventListener('click', (e) => {
+    templateOption.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       
@@ -1659,7 +1662,29 @@ function renderTemplatesInDropdown(templates) {
       console.log('[Templates] Dropdown closed');
       
       // Get template content
-      const templateContent = template.content || '';
+      const selectedChat = getCurrentChatHeaderKey();
+      const props = currentContactData?.properties || {};
+      let ownerName = '';
+      if ((template.content || '').includes('{{owner}}') && props.hubspot_owner_id) {
+        try {
+          const owners = await fetchHubSpotOwners();
+          const owner = owners.find(o => String(o.id) === String(props.hubspot_owner_id));
+          if (owner) ownerName = [owner.firstName, owner.lastName].filter(Boolean).join(' ') || owner.email || '';
+        } catch { /* unavailable owner must be reported as missing */ }
+      }
+      if (getCurrentChatHeaderKey() !== selectedChat) return;
+      const messages = getActiveChatPanel()?.querySelectorAll('[data-pre-plain-text]');
+      const meta = messages?.length ? messages[messages.length - 1].getAttribute('data-pre-plain-text') : '';
+      const rendered = globalThis.WhatSyncIntelligence.renderTemplate(template.content, {
+        first_name: props.firstname, last_name: props.lastname, company: props.company,
+        email: props.email, phone: props.phone || currentPhoneNumber, owner: ownerName,
+        last_message_date: meta?.match(/\[([^\]]+)\]/)?.[1] || '',
+      });
+      if (rendered.missing.length) {
+        showWhatsyncToast(`Fill these contact details before inserting the template: ${rendered.missing.join(', ')}`, true);
+        return;
+      }
+      const templateContent = rendered.text;
       
       if (!templateContent) {
         console.warn('[Templates] ⚠️ Template has no content');
@@ -2237,7 +2262,7 @@ function isOutgoingMessageRow(row) {
   if (id.startsWith('true_')) return true;
   if (id.startsWith('false_')) return false;
   // Fallback: WhatsApp marks outgoing bubbles with a "message-out" class.
-  return !!(row?.querySelector?.('.message-out') || row?.classList?.contains('message-out'));
+  return !!(row?.closest?.('.message-out') || row?.querySelector?.('.message-out') || row?.classList?.contains('message-out'));
 }
 
 // Function to enable message selection mode
@@ -2423,6 +2448,8 @@ function finishMessageSelection() {
 // span.selectable-text.copyable-text; we fall back progressively so this keeps working
 // even as WhatsApp tweaks its markup.
 function extractMessageText(messageElement) {
+  messageElement = messageElement.cloneNode(true);
+  messageElement.querySelectorAll('blockquote, [data-testid*="quoted"], [aria-label="Quoted message"], [data-testid*="preview"], .ws-inline-log-btn, button').forEach(el => el.remove());
   const textElement =
     messageElement.querySelector('span.selectable-text.copyable-text') ||
     messageElement.querySelector('span.selectable-text') ||
@@ -2432,8 +2459,8 @@ function extractMessageText(messageElement) {
     return (textElement.textContent || textElement.innerText || '').trim();
   }
 
-  // Fallback: get all text content
-  return (messageElement.textContent || messageElement.innerText || '').trim();
+  // Do not accidentally log quoted content, link previews, or message controls.
+  return '';
 }
 
 // Function to extract message timestamp. WhatsApp stores precise meta in the
@@ -5527,7 +5554,7 @@ function setupTicketAssociationLinks(ticketsSection, contactId) {
         
         // Update the link text to show success
         link.textContent = 'Associated';
-        link.style.color = '#25d366';
+        link.style.color = '#ff7a59';
         link.style.cursor = 'default';
         
         // Refresh the tickets section to update the count
@@ -9074,7 +9101,14 @@ async function populateCreateFormSelect(selectId, property, placeholder) {
       .map((o) => `<option value="${escapeHtml(String(o.value))}">${escapeHtml(o.label || String(o.value))}</option>`)
       .join('');
   } catch (e) {
-    select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`;
+    if (!select.isConnected) return;
+    select.innerHTML = '<option value="">Options unavailable — retry below</option>';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'ws-scan-again';
+    retry.textContent = 'Retry ' + placeholder.replace(/^Select /, '');
+    retry.onclick = () => { retry.remove(); populateCreateFormSelect(selectId, property, placeholder); };
+    select.after(retry);
   }
 }
 
@@ -9082,76 +9116,61 @@ async function populateCreateFormSelect(selectId, property, placeholder) {
 // from contact suggestions. Populated (async) by formatCreateContactForm.
 let cachedUserEmail = null;
 
-// Scan the open WhatsApp conversation for contact details people commonly share
-// in-chat, to pre-fill the create-contact form. Best-effort suggestions only —
-// every value is editable before the user submits. Robust to WhatsApp DOM class
-// churn: reads mailto:/http links directly and the conversation's raw text,
-// rather than relying on specific bubble/text-span class names.
+// Show evidence before a suggestion becomes CRM data. No whole-chat guessing.
 function extractContactInfoFromChat() {
-  const result = { email: null, jobTitle: null, company: null, firstName: null };
-  try {
-    const main = document.querySelector('#main');
-    if (!main) return result;
+  return WhatSyncIntelligence.suggest(
+    WhatSyncIntelligence.readMessages(document.querySelector('#main')), cachedUserEmail || ''
+  );
+}
 
-    const ownEmail = (cachedUserEmail || '').toLowerCase() || null;
-    const cleanEmail = (e) => e.toLowerCase().replace(/[.,;:)\]>]+$/, '');
-    const fullText = main.textContent || '';
-
-    // ---- Email: mailto: links first (WhatsApp auto-links them), then raw text.
-    // Last non-own match wins (most recent in DOM order).
-    let email = null;
-    main.querySelectorAll('a[href^="mailto:" i]').forEach((a) => {
-      const e = cleanEmail((a.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0]);
-      if (e && (!ownEmail || e !== ownEmail)) email = e;
+function setupContactSuggestions(form, contact = null) {
+  const host = form.querySelector('.ws-suggestions');
+  if (!host) return;
+  const chatKey = getCurrentChatHeaderKey();
+  const fields = { email: 'Email', firstName: 'First name', lastName: 'Last name', company: 'Company', jobTitle: 'Job title' };
+  const props = { email: 'email', firstName: 'firstname', lastName: 'lastname', company: 'company', jobTitle: 'jobtitle' };
+  const render = () => {
+    if (chatKey !== getCurrentChatHeaderKey() || !form.isConnected) return;
+    const suggestions = extractContactInfoFromChat().filter(s => contact
+      ? !contact.properties?.[props[s.field]]
+      : !form.querySelector(`#${s.field}`)?.value.trim());
+    host.innerHTML = `<div class="ws-suggestion-heading"><strong>Details from this conversation</strong><button type="button" class="ws-scan-again">Scan again</button></div>
+      <p class="ws-hint">${suggestions.length ? 'Review the source, then use a suggestion. Nothing is saved automatically.' : 'No clear details found in loaded incoming messages. Scroll to a self-introduction or email, then scan again.'}</p>
+      ${suggestions.map((s, i) => `<div class="ws-suggestion-row"><div><span class="ws-eyebrow">${fields[s.field]}</span><strong>${escapeHtml(s.value)}</strong><details><summary>View source message</summary><blockquote>${escapeHtml(s.source)}</blockquote></details></div><button type="button" data-suggestion="${i}">${contact ? 'Save' : 'Use'}</button></div>`).join('')}`;
+    host.querySelector('.ws-scan-again').onclick = render;
+    host.querySelectorAll('[data-suggestion]').forEach(button => {
+      button.onclick = async () => {
+        if (chatKey !== getCurrentChatHeaderKey()) return;
+        const suggestion = suggestions[Number(button.dataset.suggestion)];
+        if (!contact) {
+          const input = form.querySelector(`#${suggestion.field}`);
+          if (input && !input.value.trim()) {
+            input.value = suggestion.value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          render();
+          return;
+        }
+        button.disabled = true;
+        button.textContent = 'Saving…';
+        try {
+          const response = await sendExtensionMessage({ action: 'updateContact', contactId: contact.id, properties: { [props[suggestion.field]]: suggestion.value } });
+          if (!response?.success) throw new Error(response?.error || 'HubSpot could not save this detail.');
+          if (chatKey !== getCurrentChatHeaderKey()) return;
+          await updateSidebarContent();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Retry';
+          const errorText = document.createElement('p');
+          errorText.className = 'form-message error';
+          errorText.setAttribute('role', 'alert');
+          errorText.textContent = error.message;
+          button.parentElement.appendChild(errorText);
+        }
+      };
     });
-    if (!email) {
-      const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-      const matches = fullText.match(EMAIL_RE) || [];
-      for (const raw of matches) {
-        const e = cleanEmail(raw);
-        if (!ownEmail || e !== ownEmail) email = e; // last wins
-      }
-    }
-    result.email = email;
-
-    // ---- Name + company from a self-introduction, e.g.
-    // "This is Kayal from Amplus Mortgage Consultants" / "I'm Sara at Globex".
-    const intro = fullText.match(
-      /\b(?:this is|i['’`]?m|i am|my name is|here is|it['’`]?s)\s+([A-Z][a-zA-Z]+)(?:\s+(?:from|at|with|of)\s+([A-Z][A-Za-z0-9&.\-' ]{1,40}?))?(?=[.,!?\n]|\s+(?:and|here|to|for)\b|$)/i
-    );
-    if (intro) {
-      result.firstName = intro[1];
-      if (intro[2]) {
-        result.company = intro[2]
-          .replace(/\s+(consultants?|company|llc|inc|ltd|co|group|agency|solutions?)\.?$/i, '')
-          .trim() || intro[2].trim();
-      }
-    }
-
-    // ---- Company fallback: first non-social website link's domain.
-    if (!result.company) {
-      const links = Array.from(main.querySelectorAll('a[href^="http" i]'))
-        .map((a) => a.getAttribute('href') || '');
-      const site = links.find((h) =>
-        !/whatsapp|wa\.me|facebook|fb\.com|instagram|twitter|x\.com|linkedin|youtu|t\.me|tiktok|maps\.|goo\.gl/i.test(h));
-      const m = site && site.match(/^https?:\/\/(?:www\.)?([^\/?#]+)/i);
-      if (m && typeof companyNameFromEmail === 'function') {
-        result.company = companyNameFromEmail(`x@${m[1]}`); // reuse domain->name logic
-      }
-    }
-
-    // ---- Job title.
-    const JOB_RE = /\b(CEO|CTO|CFO|COO|CMO|Founder|Co-?Founder|Owner|Managing Director|Director|Head of [A-Za-z ]{2,30}|VP of [A-Za-z ]{2,30}|President|Partner|Marketing Manager|Sales Manager|Account Manager|Project Manager|Manager)\b/i;
-    const jm = fullText.match(JOB_RE);
-    if (jm) {
-      result.jobTitle = jm[0].split(/\s+(?:at|@|,|\||-|from)\s+/i)[0].replace(/\s+/g, ' ').trim();
-    }
-
-    console.log('[Content] Chat prefill scan:', result);
-  } catch (e) {
-    console.warn('[Content] extractContactInfoFromChat failed:', e?.message);
-  }
-  return result;
+  };
+  render();
 }
 
 function setupCreateContactForm(phoneNumber) {
@@ -9177,38 +9196,29 @@ function setupCreateContactForm(phoneNumber) {
   }
 
   const settingsPromise = getSyncSettings();
-  settingsPromise.then((syncSettings) => {
-    const mode = syncSettings?.contact_owner_assignment || 'round_robin';
-    if (ownerHint) {
-      ownerHint.textContent = CONTACT_OWNER_ASSIGNMENT_HINTS[mode] || CONTACT_OWNER_ASSIGNMENT_HINTS.round_robin;
-    }
-    if (ownerGroup && mode === 'none') {
-      ownerGroup.classList.add('contact-owner--auto-none');
-    }
-  });
-
-  // Fetch and populate owners dropdown. The first option describes what the
-  // org's assignment mode will actually do, instead of a vague
-  // 'automatic assignment'.
   if (ownerSelect) {
-    Promise.all([fetchHubSpotOwners(), settingsPromise]).then(([owners, syncSettings]) => {
-      const mode = syncSettings?.contact_owner_assignment || 'round_robin';
-      const autoLabel = CONTACT_OWNER_AUTO_LABELS[mode] || CONTACT_OWNER_AUTO_LABELS.round_robin;
-      ownerSelect.innerHTML = `<option value="">${escapeHtml(autoLabel)}</option>`;
-
-      if (owners && owners.length > 0) {
-        owners.forEach(owner => {
-          const option = document.createElement('option');
-          option.value = owner.id;
-          option.textContent = owner.email || owner.firstName + ' ' + owner.lastName || owner.id;
-          ownerSelect.appendChild(option);
-        });
+    Promise.all([fetchHubSpotOwners(), settingsPromise, getExtensionSession()]).then(([owners, settings, session]) => {
+      if (!form.isConnected) return;
+      const mode = settings?.contact_owner_assignment;
+      const email = (session?.user?.email || session?.session?.user?.email || '').toLowerCase();
+      const activeOwners = (owners || []).filter(o => !o.archived);
+      const match = activeOwners.find(o => o.email?.toLowerCase() === email);
+      const name = o => [o.firstName, o.lastName].filter(Boolean).join(' ') || o.email || String(o.id);
+      let label = CONTACT_OWNER_AUTO_LABELS[mode] || 'Use workspace assignment';
+      let hint = CONTACT_OWNER_ASSIGNMENT_HINTS[mode] || 'Assignment is resolved when the contact is saved.';
+      if (mode === 'creator') {
+        label = match ? `Account match — ${name(match)}` : 'Unassigned — no matching HubSpot owner';
+        hint = match ? `Your sign-in email matches ${name(match)} in HubSpot. Choose someone else to override.` : 'Your sign-in email does not match an active HubSpot owner. Choose an owner below or save unassigned.';
       }
-    }).catch(error => {
-      console.error('[Content] Error loading owners:', error);
-      if (ownerSelect) {
-        ownerSelect.innerHTML = '<option value="">Could not load owners</option>';
+      ownerSelect.innerHTML = `<option value="">${escapeHtml(label)}</option>`;
+      if (mode === 'creator' && match) ownerSelect.options[0].value = String(match.id);
+      for (const owner of activeOwners) {
+        ownerSelect.add(new Option(name(owner), String(owner.id)));
       }
+      if (ownerHint) ownerHint.textContent = hint;
+    }).catch(() => {
+      if (ownerSelect) ownerSelect.innerHTML = '<option value="">Use workspace assignment</option>';
+      if (ownerHint) ownerHint.textContent = 'Owner list unavailable. Workspace assignment will be checked when saving.';
     });
   }
 
@@ -9228,59 +9238,15 @@ function setupCreateContactForm(phoneNumber) {
   }).catch(() => { /* selects keep their placeholder */ });
   populateCreateFormSelect('leadStatus', 'hs_lead_status', 'Select Lead Status');
 
-  // Auto-fill Company from the email domain (HubSpot create-form behavior):
-  // business domains -> company name; free-email domains (gmail, etc.) skipped.
-  // Only fills when Company is empty so it never overwrites the user's input.
-  const emailInput = document.getElementById('email');
-  const companyInput = document.getElementById('company');
-  if (emailInput && companyInput) {
-    const autofillCompany = () => {
-      const derived = companyNameFromEmail(emailInput.value);
-      if (derived && !companyInput.value.trim()) {
-        companyInput.value = derived;
-        companyInput.dataset.autofilledFromEmail = 'true';
-      }
-    };
-    emailInput.addEventListener('blur', autofillCompany);
-    emailInput.addEventListener('change', autofillCompany);
-    // If the user edits Company themselves, stop auto-managing it.
-    companyInput.addEventListener('input', () => {
-      delete companyInput.dataset.autofilledFromEmail;
-    });
-
-    // Pre-fill from the conversation: most chats already contain the person's
-    // email, name, company, and sometimes a job title. These are editable
-    // suggestions — only fill fields the user left blank.
-    const scanned = extractContactInfoFromChat();
-
-    // Name (useful for unsaved contacts where the header is just a number).
-    const firstNameInput = document.getElementById('firstName');
-    if (firstNameInput && scanned.firstName && !firstNameInput.value.trim()) {
-      firstNameInput.value = scanned.firstName;
-    }
-
-    // Company from the intro/website takes precedence over the email-domain
-    // guess (e.g. "Amplus Mortgage" reads better than "Amplusmortgage").
-    if (scanned.company && !companyInput.value.trim()) {
-      companyInput.value = scanned.company;
-      companyInput.dataset.autofilledFromEmail = 'true';
-    }
-
-    if (scanned.email && !emailInput.value.trim()) {
-      emailInput.value = scanned.email;
-      emailInput.dataset.autofilledFromChat = 'true';
-      autofillCompany(); // fills Company from the domain only if still blank
-    }
-
-    const jobInput = document.getElementById('jobTitle');
-    if (jobInput && scanned.jobTitle && !jobInput.value.trim()) {
-      jobInput.value = scanned.jobTitle;
-    }
-  }
+  // Company names must come from an explicit statement, never a guessed domain.
+  setupContactSuggestions(form);
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     
+    if (createBtn.disabled || !form.reportValidity()) return;
+    const submittedChat = getCurrentChatHeaderKey();
+    form.setAttribute('aria-busy', 'true');
     // Disable form
     createBtn.disabled = true;
     createBtn.querySelector('.btn-text').style.display = 'none';
@@ -9308,8 +9274,12 @@ function setupCreateContactForm(phoneNumber) {
       properties: {
         // Send names explicitly so a multi-word first/last name is never mangled
         // by the contact_name split. These take precedence server-side.
-        firstname: firstName || undefined,
-        lastname: lastName || undefined,
+        firstname: firstName,
+        lastname: lastName,
+        email: form.querySelector('#email').value.trim(),
+        phone: hubspotPhoneFormat || undefined,
+        company: form.querySelector('#company').value.trim() || undefined,
+        jobtitle: form.querySelector('#jobTitle').value.trim() || undefined,
         hubspot_owner_id: (() => {
           const manual = document.getElementById('contactOwner')?.value?.trim();
           return manual || undefined;
@@ -9320,7 +9290,9 @@ function setupCreateContactForm(phoneNumber) {
     };
     
     try {
-      await createHubSpotContact(contactData);
+      const createdContact = await createHubSpotContact(contactData);
+      if (!createdContact?.id) throw new Error('HubSpot did not confirm a contact record.');
+      if (submittedChat !== getCurrentChatHeaderKey() || !form.isConnected) return;
 
       // Success: swap the form for a clean confirmation card, then open the
       // freshly-created contact's record in the sidebar.
@@ -9342,17 +9314,23 @@ function setupCreateContactForm(phoneNumber) {
           </div>`;
       }
 
-      // Reload sidebar content to show the new contact after a short beat.
-      setTimeout(() => {
-        updateSidebarContent();
-      }, 1600);
+      // Render the returned record directly; HubSpot search indexing can lag a create.
+      await updateSidebarContent({ contact: createdContact, phone: hubspotPhoneFormat, chatKey: submittedChat });
+      if (createdContact.whatsyncWarning && getCurrentChatHeaderKey() === submittedChat) {
+        const notice = document.createElement('p');
+        notice.className = 'ws-save-warning'; notice.setAttribute('role', 'status');
+        notice.textContent = createdContact.whatsyncWarning;
+        document.querySelector('#hubspot-sidebar .sidebar-content')?.prepend(notice);
+      }
 
     } catch (error) {
       // Show error message
       messageDiv.className = 'form-message error';
-      messageDiv.textContent = `❌ Error: ${error.message || 'Failed to create contact'}`;
+      messageDiv.setAttribute('role', 'alert');
+      messageDiv.textContent = error.message || 'HubSpot could not save this contact. Your details are still here.';
       messageDiv.style.display = 'block';
     } finally {
+      form.removeAttribute('aria-busy');
       // Re-enable form
       createBtn.disabled = false;
       createBtn.querySelector('.btn-text').style.display = 'inline';
@@ -9476,15 +9454,12 @@ async function checkHubSpotContact(phoneNumber) {
         }
       } else if (response.error) {
         console.error('[Content] ❌ HubSpot API Error:', response.error);
-        return null;
+        throw new Error(response.error);
       }
     }
-    
-    console.log('[Content] No response or invalid response format');
-    return null;
+    throw new Error('No response from HubSpot. Please retry.');
   } catch (error) {
-    console.error('[Content] Error checking HubSpot:', error);
-    return null;
+    throw error;
   }
 }
 
@@ -9532,6 +9507,7 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
       <div class="create-contact-section">
         <h5>Create New Contact</h5>
         <form id="createContactForm" class="create-contact-form">
+          <section class="ws-suggestions" aria-label="Contact suggestions"></section>
           <div class="form-group">
             <label for="email">Email *</label>
             <input type="email" id="email" name="email" required>
@@ -9557,7 +9533,7 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
             <input type="text" id="jobTitle" name="jobTitle">
           </div>
           <div class="form-group" id="contactOwnerGroup">
-            <label for="contactOwner">Contact Owner <span class="optional-label">(optional)</span></label>
+            <label for="contactOwner">Contact owner</label>
             <p class="form-hint" id="contactOwnerHint"></p>
             <select id="contactOwner" name="contactOwner">
               <option value="">Loading owners...</option>
@@ -9627,13 +9603,13 @@ async function getSyncSettings() {
 // What the default option in the Owner dropdown means, per the org's
 // assignment mode configured in the dashboard (Integrations page).
 const CONTACT_OWNER_AUTO_LABELS = {
-  round_robin: 'Automatic — next teammate (round robin)',
-  creator: 'Automatic — you',
+  round_robin: 'Automatic — next HubSpot owner',
+  creator: 'Match your account email',
   none: 'No owner',
 };
 const CONTACT_OWNER_ASSIGNMENT_HINTS = {
-  round_robin: 'Default from your dashboard settings: owners rotate across your team. Pick a person to override.',
-  creator: 'Default from your dashboard settings: you become the owner. Pick a person to override.',
+  round_robin: 'Uses your assignment setting to rotate through HubSpot owners. Pick a person to override.',
+  creator: 'Assigned only when your account email matches an active HubSpot owner.',
   none: 'No owner is set by default. Pick one below if you want.',
 };
 
@@ -9726,7 +9702,9 @@ function isSidebarFieldEnabled(key) {
   return sidebarPrefsCache[key] !== false;
 }
 
+let sidebarCatalogCache = null;
 async function fetchSidebarFieldsFromBackend(userId) {
+  if (sidebarCatalogCache?.userId === userId && Date.now() - sidebarCatalogCache.at < 15000) return sidebarCatalogCache.value;
   if (!userId || extensionContextInvalidated) {
     return { contactFields: [], actionFields: [] };
   }
@@ -9768,7 +9746,9 @@ async function fetchSidebarFieldsFromBackend(userId) {
       .filter((f) => SIDEBAR_LOCKED_FIELDS.includes(f.hubspot_property) || isSidebarFieldEnabled(f.hubspot_property))
       .map((f) => ({ ...f, field_type: 'contact_info', enabled: true }));
 
-    return { contactFields, actionFields: [] };
+    const value = { contactFields, actionFields: [] };
+    sidebarCatalogCache = { userId, at: Date.now(), value };
+    return value;
   } catch {
     return { contactFields: [], actionFields: [] };
   }
@@ -9858,15 +9838,15 @@ function formatDateValue(dateValue) {
 /**
  * Generate dynamic about section HTML based on enabled fields and privacy settings
  */
-async function renderAboutSection(contact, userId) {
+async function renderAboutSection(contact, userId, privacyOverride = null) {
   try {
-    const [sidebarData, privacy] = await Promise.all([getEnabledSidebarFields(userId), getPrivacySettings()]);
+    const [sidebarData, privacy] = await Promise.all([getEnabledSidebarFields(userId), privacyOverride || getPrivacySettings()]);
     let contactFields = sidebarData.contactFields || [];
     const props = contact.properties || {};
     const aboutContactId = contact.id || contact.hs_object_id || props.hs_object_id || '';
 
     // Filter CRM fields by privacy.allowed_properties when set
-    if (Array.isArray(privacy.allowed_properties) && privacy.allowed_properties.length > 0) {
+    if (Array.isArray(privacy.allowed_properties)) {
       const allowedSet = new Set(privacy.allowed_properties.map(k => String(k).toLowerCase()));
       contactFields = contactFields.filter(f => allowedSet.has(String(f.hubspot_property || f.field_key || '').toLowerCase()));
     }
@@ -9947,7 +9927,7 @@ async function renderAboutSection(contact, userId) {
       (f) => (f.hubspot_property || f.field_key) === 'hubspot_owner_id'
     );
     let ownerRowHtml = '';
-    if (!hasOwnerField && isSidebarFieldEnabled('hubspot_owner_id')) {
+    if (!hasOwnerField && isSidebarFieldEnabled('hubspot_owner_id') && (!Array.isArray(privacy.allowed_properties) || privacy.allowed_properties.includes('hubspot_owner_id'))) {
       const ownerId = getContactPropertyValue(props, 'hubspot_owner_id') || '';
       ownerRowHtml = `
         <div class="info-divider"></div>
@@ -10026,7 +10006,7 @@ async function refreshAboutSection() {
  * Render default about section (fallback when no enabled fields). Respects privacy (mask_phone, allowed_properties).
  */
 function renderDefaultAboutSection(props, privacy = DEFAULT_PRIVACY) {
-  const allowed = Array.isArray(privacy?.allowed_properties) && privacy.allowed_properties.length > 0
+  const allowed = Array.isArray(privacy?.allowed_properties)
     ? new Set(privacy.allowed_properties.map(k => String(k).toLowerCase()))
     : null;
   const show = (key) => !allowed || allowed.has(String(key).toLowerCase());
@@ -10113,15 +10093,16 @@ window.addEventListener('beforeunload', cleanupSidebarFieldsSync);
 // and this listener picks it up here.
 try {
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace !== 'local' || !changes['whatsync.sidebarFieldsUpdated']) return;
+    if (namespace !== 'local' || !(changes['whatsync.sidebarFieldsUpdated'] || changes['whatsync.privacySettings'])) return;
     (async () => {
+      sidebarCatalogCache = null;
       sidebarPrefsCache = null; // invalidate so next fetch goes to the network
       lastSidebarFieldsHash = null;
       try {
         const { contactFields } = await getEnabledSidebarFields(await getExtensionUserId());
         lastSidebarFieldsHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
       } catch { /* ignore */ }
-      refreshAboutSection();
+      updateSidebarContent();
     })();
   });
 } catch { /* extension context unavailable */ }
@@ -10260,6 +10241,9 @@ async function formatContactDetails(contacts, phoneNumber) {
     }
   }
   
+  const headerPrivacy = await getPrivacySettings();
+  const headerAllows = key => isSidebarFieldEnabled(key) && (!Array.isArray(headerPrivacy.allowed_properties) || headerPrivacy.allowed_properties.includes(key));
+  const visibleName = headerAllows('firstname_lastname') ? fullName : 'Contact';
   // Escape CRM-sourced values before interpolating them into sidebar HTML — a
   // contact name/email containing quotes or angle brackets must never break
   // (or script) the markup.
@@ -10273,19 +10257,19 @@ async function formatContactDetails(contacts, phoneNumber) {
       <div class="contact-header">
         <div class="contact-header-row-1">
           <div class="contact-avatar">
-            ${avatarInitial}
+            ${headerAllows('firstname_lastname') ? avatarInitial : '•'}
           </div>
           <div class="contact-name-section">
-            <h3>${fullName}</h3>
+            <h3>${escapeHtml(visibleName)}</h3>
             ${hubSpotOpenLink('contact', hubspotContactId, 'Open contact in HubSpot')}
           </div>
         </div>
-        ${jobTitle !== '--' ? `
+        ${headerAllows('jobtitle') && jobTitle !== '--' ? `
         <div class="contact-job-section">
           <span class="job-label">${jobTitleSafe}</span>
         </div>` : ''}
         <div class="contact-email-header">
-          ${email !== '--' ? `
+          ${headerAllows('email') && email !== '--' ? `
             <a href="mailto:${email}" class="email-link">${email}</a>
             <button class="copy-email-btn" title="Copy email" data-email="${email}">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -10315,7 +10299,7 @@ async function formatContactDetails(contacts, phoneNumber) {
             ${!isSidebarFieldEnabled('action_log_whatsapp') ? '' : `
             <button class="action-btn action-btn-whatsapp" id="log-whatsapp-message-btn" title="Log a WhatsApp message">
               <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <path fill="#25D366" d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.945C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 0 1 8.413 3.488 11.824 11.824 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 0 0 1.51 5.26l-.999 3.648 3.738-.981v-.026zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.521.149-.174.198-.298.298-.497.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+                <path fill="#ff7a59" d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.945C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 0 1 8.413 3.488 11.824 11.824 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 0 0 1.51 5.26l-.999 3.648 3.738-.981v-.026zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.521.149-.174.198-.298.298-.497.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
               </svg>
               <span>Log</span>
             </button>`}
@@ -10353,9 +10337,9 @@ async function formatContactDetails(contacts, phoneNumber) {
                   <div class="more-actions-option-icon">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <!-- WhatsApp icon -->
-                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" fill="#25D366"/>
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" fill="#ff7a59"/>
                       <!-- Plus sign badge -->
-                      <circle cx="17.5" cy="6.5" r="5" fill="#25D366"/>
+                      <circle cx="17.5" cy="6.5" r="5" fill="#ff7a59"/>
                       <line x1="17.5" y1="4" x2="17.5" y2="9" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
                       <line x1="15" y1="6.5" x2="20" y2="6.5" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
                     </svg>
@@ -10380,7 +10364,8 @@ async function formatContactDetails(contacts, phoneNumber) {
           </div>
         </div>
       </div>
-      ${await renderAboutSection(contact, userId)}
+      <section class="ws-suggestions" aria-label="Missing contact details"></section>
+      ${await renderAboutSection(contact, userId, headerPrivacy)}
       ${!isSidebarFieldEnabled('section_activity') ? '' : `
       <div class="activities-section" data-contact-id="${hubspotContactId}">
         <div class="activities-header">
@@ -10590,7 +10575,11 @@ function getCurrentChatHeaderKey() {
     header.querySelector('span[dir="auto"][title]') ||
     header.querySelector('span[dir="auto"]') ||
     header.querySelector('[role="button"] span');
-  return (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
+  const title = (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
+  const active = document.querySelector('#pane-side [aria-selected="true"]');
+  const stableId = active?.getAttribute('data-id') || active?.querySelector('[data-id]')?.getAttribute('data-id') || '';
+  const avatar = header.querySelector('img')?.getAttribute('src') || '';
+  return title ? `${title}|${stableId}|${avatar}` : '';
 }
 
 // Resolve the shared WhatSync state: is the extension signed in, and is HubSpot
@@ -10731,7 +10720,7 @@ function renderConnectHubSpotState(sidebarContent) {
 }
 
 // Function to update sidebar content based on maindiv
-async function updateSidebarContent() {
+async function updateSidebarContent(known = null) {
   const sidebar = document.getElementById("hubspot-sidebar");
   if (!sidebar) return;
 
@@ -10740,23 +10729,19 @@ async function updateSidebarContent() {
   const sidebarContent = sidebar.querySelector(".sidebar-content");
   if (!sidebarContent) return;
 
-  // Single-source-of-truth gate: only show CRM data when signed in AND connected.
-  const state = await getWhatsyncState();
-  if (!state.loggedIn) {
-    renderSignInState(sidebarContent);
-    return;
-  }
-  if (!state.hubspotConnected) {
-    renderConnectHubSpotState(sidebarContent);
-    return;
-  }
-
-  // Record which chat this render is for (synchronously, before any async work)
-  // so concurrent retriggers for the same chat are deduped instead of racing.
-  lastRenderedChatKey = getCurrentChatHeaderKey();
-
+  const renderChatKey = getCurrentChatHeaderKey();
+  if (known?.chatKey && known.chatKey !== renderChatKey) return;
   const updateToken = ++sidebarContentUpdateToken;
-  
+  lastRenderedChatKey = renderChatKey;
+  currentContactData = null;
+  currentPhoneNumber = null;
+  const isCurrent = () => updateToken === sidebarContentUpdateToken && renderChatKey === getCurrentChatHeaderKey();
+  sidebarContent.innerHTML = `<div class="ws-contact-skeleton" role="status"><span class="ws-eyebrow">HUBSPOT WORKSPACE</span><h4>${escapeHtml(getCurrentContactName() || 'Contact')}</h4><p>Loading this conversation’s CRM record…</p><i></i><i></i><i></i></div>`;
+  const state = await getWhatsyncState();
+  if (!isCurrent()) return;
+  if (!state.loggedIn) { renderSignInState(sidebarContent); return; }
+  if (!state.hubspotConnected) { renderConnectHubSpotState(sidebarContent); return; }
+
   const maindiv = document.querySelector("div#main");
   
   if (!maindiv) {
@@ -10769,28 +10754,22 @@ async function updateSidebarContent() {
       </div>
     `;
   } else {
-    // Show loading state
-    sidebarContent.innerHTML = `
-      <div class="loading-state">
-        <div class="loading-spinner"></div>
-        <p>Checking HubSpot CRM...</p>
-      </div>
-    `;
-    
     // Main div exists - extract phone and check HubSpot
     // Phone extraction happens when sidebar shows
     console.log('[Sidebar] Sidebar is showing - extracting phone number...');
-    extractPhoneFromChat().then(async extractedPhone => {
-      if (updateToken !== sidebarContentUpdateToken) return;
+    return (known?.phone ? Promise.resolve(known.phone) : extractPhoneFromChat()).then(async extractedPhone => {
+      if (!isCurrent()) return;
 
       if (extractedPhone) {
         console.log('[Sidebar] ✅ Extracted Phone:', extractedPhone);
-        const contacts = await checkHubSpotContact(extractedPhone);
-        if (updateToken !== sidebarContentUpdateToken) return;
+        const contacts = known?.contact ? [known.contact] : await checkHubSpotContact(extractedPhone);
+        if (!isCurrent()) return;
 
         if (contacts && contacts.length > 0) {
           console.log('Matching contact found in HubSpot:', contacts);
-          sidebarContent.innerHTML = await formatContactDetails(contacts, extractedPhone);
+          const html = await formatContactDetails(contacts, extractedPhone);
+          if (!isCurrent()) return;
+          sidebarContent.innerHTML = html;
           // Setup copy email functionality
           setupCopyEmailHandler();
           // Setup email handler
@@ -10811,6 +10790,7 @@ async function updateSidebarContent() {
           setupAboutCollapsible();
           setupEditableContactFields();
           setupOwnerNameResolution();
+          setupContactSuggestions(sidebarContent, contacts[0]);
           // Recent activity timeline
           setupActivitiesSection();
           // Setup notes section
@@ -10827,6 +10807,7 @@ async function updateSidebarContent() {
           runSelectorHealthCheckOnce();
           // Load notes count immediately (without expanding) - use setTimeout to ensure DOM is ready
           setTimeout(() => {
+            if (!isCurrent()) return;
             const notesSection = document.querySelector('.notes-section');
             if (notesSection) {
               const contactIdAttr = notesSection.getAttribute('data-contact-id');
@@ -10860,9 +10841,10 @@ async function updateSidebarContent() {
             }
           }, 100);
         } else {
-          if (updateToken !== sidebarContentUpdateToken) return;
+          if (!isCurrent()) return;
 
           const syncSettings = await getSyncSettings();
+          if (!isCurrent()) return;
           if (syncSettings?.auto_sync_contacts) {
             try {
               const contactName = getCurrentContactName() || '';
@@ -10877,9 +10859,11 @@ async function updateSidebarContent() {
                 properties: {},
               });
               const syncedContacts = await checkHubSpotContact(extractedPhone);
-              if (updateToken !== sidebarContentUpdateToken) return;
+              if (!isCurrent()) return;
               if (syncedContacts && syncedContacts.length > 0) {
-                sidebarContent.innerHTML = await formatContactDetails(syncedContacts, extractedPhone);
+                const html = await formatContactDetails(syncedContacts, extractedPhone);
+          if (!isCurrent()) return;
+          sidebarContent.innerHTML = html;
                 setupCopyEmailHandler();
                 setupEmailHandler();
                 setupMeetingScheduler();
@@ -10907,24 +10891,30 @@ async function updateSidebarContent() {
             }
           }
 
-          sidebarContent.innerHTML = await formatContactDetails(null, extractedPhone);
+          const html = await formatContactDetails(null, extractedPhone);
+          if (!isCurrent()) return;
+          sidebarContent.innerHTML = html;
           setupCreateContactForm(extractedPhone);
         }
       } else {
-        if (updateToken !== sidebarContentUpdateToken) return;
-        sidebarContent.innerHTML = await formatCreateContactForm(null, { manualPhoneEntry: true });
+        if (!isCurrent()) return;
+        const html = await formatCreateContactForm(null, { manualPhoneEntry: true });
+          if (!isCurrent()) return;
+          sidebarContent.innerHTML = html;
         setupCreateContactForm('');
       }
     }).catch(error => {
-      if (updateToken !== sidebarContentUpdateToken) return;
+      if (!isCurrent()) return;
       console.error('Error updating sidebar content:', error);
       sidebarContent.innerHTML = `
         <div class="no-contact-found">
           <div class="no-contact-icon">⚠️</div>
-          <h4>Error</h4>
-          <p>Failed to load contact information.</p>
+          <h4>Couldn’t load this contact</h4>
+          <p>${escapeHtml(error.message || "HubSpot is unavailable. Please retry.")}</p>
+          <button type="button" class="ws-retry-contact">Try again</button>
         </div>
       `;
+      sidebarContent.querySelector('.ws-retry-contact').onclick = () => updateSidebarContent();
     });
   }
 }
@@ -10944,7 +10934,8 @@ function injectSidebar() {
   sidebar.id = "hubspot-sidebar";
   sidebar.innerHTML = `
     <div class="sidebar-header">
-      <h3>WhatSync</h3>
+<div class="ws-brand"><img src="${chrome.runtime.getURL('icons/mark.svg')}" alt="" width="30" height="30"><div><h3>WhatSync</h3><span>YOUR CONVERSATIONS, CONNECTED</span></div></div>
+      <button class="ws-refresh-contact" type="button" aria-label="Refresh contact" title="Refresh contact">↻</button>
       <button class="sidebar-close" id="sidebarClose" aria-label="Close sidebar">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -10961,6 +10952,7 @@ function injectSidebar() {
   `;
   
   document.body.appendChild(sidebar);
+  sidebar.querySelector('.ws-refresh-contact')?.addEventListener('click', () => updateSidebarContent());
   console.log('Sidebar injected successfully');
   
   // Update content based on maindiv
@@ -11212,6 +11204,12 @@ function registerExtensionListeners() {
         checkLoginStateAndInjectNavbar();
         sendResponse({ success: true });
       } else if (message.action === 'userLoggedOut') {
+        sidebarContentUpdateToken++;
+        cachedUserEmail = null;
+        sidebarCatalogCache = null;
+        sidebarPrefsCache = null;
+        currentContactData = null;
+        contactPanelPhoneCache.clear();
         // Keep the navbar; refresh the sidebar to its sign-in state.
         checkLoginStateAndInjectNavbar();
         sendResponse({ success: true });
@@ -11221,7 +11219,11 @@ function registerExtensionListeners() {
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
       // Any change to login OR HubSpot connection should re-evaluate the sidebar state.
-      if (namespace === 'local' && (changes.userLoggedIn || changes.hubspotConnected)) {
+      if (namespace === 'local' && (changes.userLoggedIn || changes.userId || changes.hubspotConnected)) {
+        sidebarContentUpdateToken++;
+        sidebarCatalogCache = null;
+        sidebarPrefsCache = null;
+        cachedUserEmail = null;
         checkLoginStateAndInjectNavbar();
       }
     });
@@ -11416,13 +11418,12 @@ function setupMainChatObserver() {
 
 // Function to retrigger the sidebar only if it's already showing
 function retriggerSidebar() {
-  // Clear any existing timeout
-  if (sidebarRetriggerTimeout) {
-    clearTimeout(sidebarRetriggerTimeout);
-  }
-  
+  const nextChatKey = getCurrentChatHeaderKey();
+  if (nextChatKey && nextChatKey === lastRenderedChatKey) return;
+  if (sidebarRetriggerTimeout) return;
   // Debounce the sidebar update to prevent rapid triggers
   sidebarRetriggerTimeout = setTimeout(() => {
+    sidebarRetriggerTimeout = null;
     const sidebar = document.getElementById("hubspot-sidebar");
     
     // Check if sidebar exists and is currently showing/open
@@ -11453,7 +11454,7 @@ function retriggerSidebar() {
     const maindiv = document.querySelector("div#main");
     if (maindiv) widthSetting(); // Adjust width if maindiv exists
     console.log('[Chat List Observer] ✅ Sidebar content updated');
-  }, 300); // 300ms debounce delay
+  }, 60); // Coalesce header mutations without delaying until chat loading settles.
 }
 
 // Initialize when DOM is ready

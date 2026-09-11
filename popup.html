@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WhatsApp Web Extension</title>
+  <title>WhatSync · Your CRM, in the conversation</title>
   <style>
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
     }
-    
+
     body {
       width: 380px;
       max-height: 600px;
@@ -19,31 +19,31 @@
       margin: 0;
       padding: 0;
       border-radius: 12px;
-      overflow: hidden;
+      overflow-y: auto;
     }
-    
+
     .container {
       padding: 20px 24px;
       background-color: #ffffff;
       width: 100%;
     }
-    
+
     .header {
       margin-bottom: 20px;
     }
-    
+
     .header h1 {
       font-size: 22px;
       font-weight: 600;
       color: #1a1a1a;
       margin: 0;
     }
-    
+
     .form-group {
       margin-bottom: 16px;
       position: relative;
     }
-    
+
     .form-group label {
       display: block;
       font-size: 13px;
@@ -51,13 +51,13 @@
       color: #1a1a1a;
       margin-bottom: 6px;
     }
-    
+
     .input-wrapper {
       position: relative;
       display: flex;
       align-items: center;
     }
-    
+
     .form-group input {
       width: 100%;
       padding: 10px 40px 10px 12px;
@@ -69,16 +69,16 @@
       outline: none;
       transition: all 0.3s ease;
     }
-    
+
     .form-group input::placeholder {
       color: #999999;
     }
-    
+
     .form-group input:focus {
-      border-color: #25D366;
+      border-color: #ff7a59;
       background-color: #ffffff;
     }
-    
+
     .input-icon {
       position: absolute;
       right: 12px;
@@ -88,7 +88,7 @@
       opacity: 0.5;
       color: #1a1a1a;
     }
-    
+
     .password-toggle {
       position: absolute;
       right: 12px;
@@ -109,34 +109,34 @@
       width: 18px;
       height: 18px;
     }
-    
+
     .password-toggle:hover {
       opacity: 0.8;
     }
-    
+
     .link-text {
       text-align: center;
       margin: 16px 0;
       font-size: 13px;
       color: #1a1a1a;
     }
-    
+
     .link-text a {
-      color: #25D366;
+      color: #ff7a59;
       text-decoration: none;
       font-weight: 500;
       transition: color 0.2s;
     }
-    
+
     .link-text a:hover {
-      color: #20BA5A;
+      color: #ed6445;
       text-decoration: underline;
     }
-    
+
     .submit-btn {
       width: 100%;
       padding: 12px;
-      background-color: #25D366;
+      background-color: #ff7a59;
       color: #ffffff;
       border: none;
       border-radius: 8px;
@@ -145,18 +145,18 @@
       cursor: pointer;
       transition: background-color 0.3s ease;
     }
-    
+
     .submit-btn:hover {
-      background-color: #20BA5A;
+      background-color: #ed6445;
     }
-    
+
     .submit-btn:active {
       transform: scale(0.98);
     }
-    
+
     .success-message {
       display: none;
-      background: linear-gradient(135deg, #25D366 0%, #20BA5A 100%);
+      background: linear-gradient(135deg, #ff7a59 0%, #ed6445 100%);
       color: #ffffff;
       padding: 20px;
       border-radius: 8px;
@@ -164,11 +164,11 @@
       margin-bottom: 20px;
       animation: slideDown 0.3s ease-out;
     }
-    
+
     .success-message.show {
       display: block;
     }
-    
+
     .success-message .success-icon {
       width: 50px;
       height: 50px;
@@ -180,14 +180,14 @@
       justify-content: center;
       font-size: 24px;
     }
-    
+
     .success-message h2 {
       font-size: 18px;
       font-weight: 600;
       margin: 0 0 8px 0;
       color: #ffffff;
     }
-    
+
     .success-message p {
       font-size: 14px;
       margin: 0;
@@ -209,7 +209,7 @@
     .inline-error-message.show {
       display: block;
     }
-    
+
     @keyframes slideDown {
       from {
         opacity: 0;
@@ -220,26 +220,26 @@
         transform: translateY(0);
       }
     }
-    
+
     .logged-in-section {
       display: none;
       text-align: center;
       padding: 0;
     }
-    
+
     .logged-in-section.show {
       display: block;
       animation: slideDown 0.3s ease-out;
     }
-    
+
     .user-info {
-      background: linear-gradient(135deg, #25D366 0%, #20BA5A 100%);
+      background: linear-gradient(135deg, #ff7a59 0%, #ed6445 100%);
       color: #ffffff;
       padding: 24px 20px;
       border-radius: 10px;
       margin-bottom: 16px;
     }
-    
+
     .user-avatar {
       width: 60px;
       height: 60px;
@@ -252,26 +252,26 @@
       font-size: 24px;
       font-weight: 600;
     }
-    
+
     .user-info h2 {
       font-size: 20px;
       font-weight: 600;
       margin: 0 0 8px 0;
       color: #ffffff;
     }
-    
+
     .user-info p {
       font-size: 14px;
       margin: 0;
       opacity: 0.9;
     }
-    
+
     .logout-btn {
       width: 100%;
       padding: 12px;
       background-color: #ffffff;
-      color: #25D366;
-      border: 2px solid #25D366;
+      color: #ff7a59;
+      border: 2px solid #ff7a59;
       border-radius: 10px;
       font-size: 15px;
       font-weight: 600;
@@ -279,17 +279,17 @@
       transition: all 0.3s ease;
       margin-top: 4px;
     }
-    
+
     .logout-btn:hover {
       background-color: #f0fdf4;
-      border-color: #20BA5A;
-      color: #20BA5A;
+      border-color: #ed6445;
+      color: #ed6445;
     }
-    
+
     .logout-btn:active {
       transform: scale(0.98);
     }
-    
+
     .integration-status {
       margin-bottom: 16px;
       padding: 14px 16px;
@@ -301,15 +301,15 @@
       font-weight: 500;
       text-align: left;
     }
-    
+
     .integration-status.connected {
-      background-color: #dcfce7;
+      background-color: #fff0e8;
       color: #166534;
       border: 1px solid #bbf7d0;
       flex-direction: row;
       align-items: center;
     }
-    
+
     .integration-status.connected .status-badge {
       flex: 1;
       align-items: center;
@@ -317,24 +317,24 @@
       font-weight: 600;
       font-size: 15px;
     }
-    
+
     .integration-status.connected .status-dot {
       width: 20px;
       height: 20px;
-      background-color: #25D366;
+      background-color: #ff7a59;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 12px;
       line-height: 1;
     }
-    
+
     .integration-status.connected .status-dot::after {
       content: '✓';
       color: #fff;
       font-weight: bold;
     }
-    
+
     /* HubSpot account details (shown when connected) */
     .hubspot-account-details {
       display: none;
@@ -345,11 +345,11 @@
       margin-bottom: 16px;
       text-align: left;
     }
-    
+
     .hubspot-account-details.visible {
       display: block;
     }
-    
+
     .hubspot-account-details__title {
       font-size: 12px;
       font-weight: 700;
@@ -358,26 +358,26 @@
       letter-spacing: 0.02em;
       margin-bottom: 10px;
     }
-    
+
     .hubspot-account-details__row {
       font-size: 13px;
       color: #374151;
       margin-bottom: 6px;
     }
-    
+
     .hubspot-account-details__row:last-of-type {
       margin-bottom: 12px;
     }
-    
+
     .hubspot-account-details__actions {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 12px;
       padding-top: 12px;
-      border-top: 1px solid #dcfce7;
+      border-top: 1px solid #fff0e8;
     }
-    
+
     .hubspot-account-details__btn {
       padding: 8px 12px;
       border-radius: 8px;
@@ -393,81 +393,81 @@
       gap: 6px;
       transition: background 0.2s, color 0.2s;
     }
-    
+
     .hubspot-account-details__btn:hover {
-      background: #dcfce7;
+      background: #fff0e8;
       color: #14532d;
     }
-    
+
     .hubspot-account-details__btn--disconnect {
       color: #dc2626;
       border-color: #fecaca;
     }
-    
+
     .hubspot-account-details__btn--disconnect:hover {
       background: #fef2f2;
       color: #b91c1c;
     }
-    
+
     .integration-status.disconnected {
       background-color: #f0fdf4;
       color: #166534;
       border: 1px solid #bbf7d0;
     }
-    
+
     .integration-status.error {
       background-color: #fef2f2;
       color: #991b1b;
       border: 1px solid #fecaca;
     }
-    
+
     .integration-status.loading {
       background-color: #f0fdf4;
       color: #166534;
       border: 1px solid #bbf7d0;
     }
-    
+
     .status-badge {
       display: inline-flex;
       align-items: center;
       gap: 6px;
       min-width: 0;
     }
-    
+
     .integration-status.not_connected .status-badge {
       flex: 1;
       min-width: 0;
     }
-    
+
     .status-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
     }
-    
+
     .status-dot.connected {
-      background-color: #25D366;
+      background-color: #ff7a59;
     }
-    
+
     .status-dot.disconnected {
-      background-color: #25D366;
+      background-color: #ff7a59;
       opacity: 0.6;
     }
-    
+
     .status-dot.not_connected {
-      background-color: #25D366;
+      background-color: #ff7a59;
       opacity: 0.5;
     }
-    
+
     .status-dot.error {
       background-color: #dc2626;
     }
-    
+
     .status-dot.loading {
-      background-color: #25D366;
+      background-color: #ff7a59;
       opacity: 0.7;
     }
-    
+
     .integration-status.not_connected {
       background-color: #f0fdf4;
       color: #1a1a1a;
@@ -476,20 +476,20 @@
       align-items: stretch;
       gap: 12px;
     }
-    
+
     .integration-status.not_connected .status-badge {
       flex: none;
     }
-    
+
     .integration-status.not_connected .status-dot {
       display: none;
     }
-    
+
     .integration-status.not_connected #statusText {
       font-size: 14px;
       font-weight: 500;
     }
-    
+
     .integration-notice {
       font-size: 13px;
       color: #4b5563;
@@ -497,22 +497,22 @@
       margin: 0;
       font-weight: 400;
     }
-    
+
     .integration-status .integration-connect-btn {
       width: auto;
       min-width: 130px;
       flex-shrink: 0;
     }
-    
+
     .integration-status.not_connected .integration-connect-btn {
       width: 100%;
       align-self: stretch;
     }
-    
+
     .integration-connect-btn {
       width: 100%;
       padding: 10px 18px;
-      background-color: #25D366;
+      background-color: #ff7a59;
       color: #ffffff;
       border: none;
       border-radius: 10px;
@@ -527,11 +527,11 @@
       text-align: center;
       white-space: nowrap;
     }
-    
+
     .integration-connect-btn:hover {
-      background-color: #20BA5A;
+      background-color: #ed6445;
     }
-    
+
     .integration-connect-btn:active {
       transform: scale(0.98);
     }
@@ -553,9 +553,24 @@
     #loginSection.initial-hide {
       display: none !important;
     }
+
+    body { color:#213343; background:#fff8f4; overflow-y:auto; }
+    .container { background:linear-gradient(160deg,#fff8f4 0%,#fff 65%); padding:24px; }
+    .header { padding-bottom:18px; border-bottom:1px solid #f1ded5; }
+    .header h1 { letter-spacing:-.7px; color:#213343; }
+    .form-group input { border-width:1px; border-color:#cdd6df; min-height:44px; }
+    button { min-height:40px; }
+    button:focus-visible,a:focus-visible { outline:3px solid #d64b2f; outline-offset:3px; }
+    @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important;transition:none!important; } }
+    .submit-btn { background:#b94025; color:#fff; }
+    .submit-btn:hover { background:#9c351d; }
+    #toggleMode { color:#b94025; }
   </style>
 </head>
 <body>
+  <header class="ws-popup-brand" style="display:flex;align-items:center;gap:10px;padding:16px 24px;background:linear-gradient(115deg,#ff7a59,#ffad85);color:#213343;font-size:20px;font-weight:700">
+    <img src="icons/icon32.png" width="32" height="32" alt="">WhatSync
+  </header>
   <div class="container">
     <!-- Shown until we know login state; then hidden and either login or logged-in is shown -->
     <div id="popupLoading">
@@ -567,7 +582,7 @@
       <h2 id="successTitle">Successfully Logged In!</h2>
       <p id="successText">Welcome back!</p>
     </div>
-    
+
     <!-- Logged In Section -->
     <div class="logged-in-section" id="loggedInSection">
       <div class="user-info">
@@ -575,7 +590,7 @@
         <h2 id="userName">User</h2>
         <p id="userEmail"></p>
       </div>
-      
+
       <!-- Integration Status -->
       <div class="integration-status" id="integrationStatus" style="display: none;">
         <span class="status-badge">
@@ -587,7 +602,7 @@
           Connect HubSpot
         </a>
       </div>
-      
+
       <!-- HubSpot account details (when connected) -->
       <div class="hubspot-account-details" id="hubspotAccountDetails">
         <div class="hubspot-account-details__title">HubSpot Account</div>
@@ -599,16 +614,16 @@
           <a href="https://whatsync.io/dashboard/integrations" target="_blank" class="hubspot-account-details__btn hubspot-account-details__btn--disconnect" id="hubspotDisconnectBtn">Disconnect</a>
         </div>
       </div>
-      
+
       <button type="button" class="logout-btn" id="logoutBtn">Log Out</button>
     </div>
-    
+
     <!-- Login/Signup Form (hidden until we know user is not logged in) -->
     <div id="loginSection" class="initial-hide">
       <div class="header">
         <h1 id="pageTitle">Log In.</h1>
       </div>
-      
+
       <form id="loginForm">
       <div class="inline-error-message" id="inlineErrorMessage" role="alert" aria-live="polite"></div>
       <div class="form-group" id="emailLoginGroup">
@@ -621,7 +636,7 @@
           </svg>
         </div>
       </div>
-      
+
       <div class="form-group signup-field" id="firstNameGroup" style="display: none;">
         <label for="firstName">First Name</label>
         <div class="input-wrapper">
@@ -632,7 +647,7 @@
           </svg>
         </div>
       </div>
-      
+
       <div class="form-group signup-field" id="lastNameGroup" style="display: none;">
         <label for="lastName">Last Name</label>
         <div class="input-wrapper">
@@ -643,7 +658,7 @@
           </svg>
         </div>
       </div>
-      
+
       <div class="form-group signup-field" id="emailGroup" style="display: none;">
         <label for="email">Email</label>
         <div class="input-wrapper">
@@ -654,7 +669,7 @@
           </svg>
         </div>
       </div>
-      
+
       <div class="form-group">
         <label for="password">Password</label>
         <div class="input-wrapper">
@@ -667,11 +682,11 @@
           </button>
         </div>
       </div>
-      
+
       <div class="link-text">
         <span id="switchText">Don't have an account? </span><a href="#" id="switchLink">Sign Up</a>
       </div>
-      
+
       <button type="submit" class="submit-btn" id="submitBtn">Log In</button>
       </form>
     </div>

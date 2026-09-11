@@ -179,8 +179,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  /** Same auth path as the Harmony dashboard (external-auth edge function). */
-  async function signInViaExternalAuth(email, password) {
+  /** Website and extension share the server-validated account setup path. */
+  async function externalAuthRequest(action, payload) {
     const edgeUrl = `${EDGE_FUNCTIONS_CONFIG.url}/functions/v1/external-auth`;
     const response = await fetch(edgeUrl, {
       method: 'POST',
@@ -189,12 +189,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         apikey: EDGE_FUNCTIONS_CONFIG.anonKey,
         Authorization: `Bearer ${EDGE_FUNCTIONS_CONFIG.anonKey}`,
       },
-      body: JSON.stringify({ action: 'signIn', email, password }),
+      body: JSON.stringify({ action, ...payload }),
     });
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.error || `Login request failed (${response.status})`);
+      throw new Error(data.error || `Account request failed (${response.status})`);
     }
     return data;
   }
@@ -442,7 +442,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         let authResult;
         try {
-          authResult = await signInViaExternalAuth(email, password);
+          authResult = await externalAuthRequest('signIn', {email, password});
         } catch (authError) {
           console.error('Login via external-auth failed:', authError);
           showInlineError(formatLoginError(authError.message));
@@ -546,22 +546,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
         
-        // Sign up with Supabase Auth
-        const { data: authData, error: authError } = await supabaseClient.auth.signUp({
-          email: email,
-          password: password,
-          options: {
-            data: {
-              first_name: firstName,
-              last_name: lastName
-            },
-            emailRedirectTo: SUPABASE_CONFIG.redirectUrl || window.location.origin
-          }
+        // The server assigns the new workspace owner; browser clients cannot
+        // write protected role/organization fields directly.
+        const authData = await externalAuthRequest('signUp', {
+          email, password, firstName, lastName,
+          emailRedirectTo: SUPABASE_CONFIG.redirectUrl || 'https://whatsync.io/auth/callback',
         });
-        
+        const authError = authData.error ? {message: String(authData.error)} : null;
+
         if (authError) {
           // Check if user already exists
-          if (authError.message.includes('already registered') || authError.message.includes('already exists')) {
+          if (authError.message.includes('already registered') || authError.message.includes('already exists') || authError.message === 'EMAIL_ALREADY_REGISTERED') {
             showInlineError('This email is already registered. Please log in instead.');
             // Switch to login mode
             isLoginMode = true;
@@ -589,41 +584,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
         
-        // Create user profile in user_profiles table
-        if (authData.user) {
-          const { error: profileError } = await supabaseClient
-            .from('user_profiles')
-            .insert({
-              user_id: authData.user.id,
-              first_name: firstName,
-              last_name: lastName,
-              email: email
-            });
-          
-          if (profileError) {
-            console.error('Error creating profile:', profileError);
-            // Check if profile already exists (user might have signed up before)
-            if (profileError.code === '23505' || profileError.message.includes('duplicate')) {
-              showSuccessMessage('Account Created!', 'Your account already exists. You can now login.');
-            } else {
-              // User is created but profile failed - try to get existing profile
-              const { data: existingProfile } = await supabaseClient
-                .from('user_profiles')
-                .select('*')
-                .eq('user_id', authData.user.id)
-                .single();
-              
-              if (existingProfile) {
-                showSuccessMessage('Account Created Successfully!', 'Welcome, ' + firstName + '!');
-              } else {
-                showSuccessMessage('Account Created!', 'However, there was an issue saving your profile. You can still login and your profile will be created automatically.');
-              }
-            }
-          } else {
-            showSuccessMessage('Account Created Successfully!', 'Welcome, ' + firstName + '!');
-          }
-        }
-        
+        if (!authData.user?.id) throw new Error('Account setup did not return a user. Please retry.');
+        showSuccessMessage('Account created', authData.requiresConfirmation
+          ? 'Check your email to confirm your account, then log in.'
+          : 'Your workspace is ready. Log in to continue.');
+
         // Switch to login mode (form will be hidden by success message, then reset when it disappears)
         isLoginMode = true;
         

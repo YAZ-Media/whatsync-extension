@@ -10,7 +10,7 @@
 
 ## Deployment status — 11 September 2026
 
-- Complete: live WhatSync schema/permissions inspected; existing function source downloaded; billing and profile-privilege migrations rehearsed then applied with migration records; tested checkout reservation migration applied; HubSpot and billing deployed to ogsvchujqpayuckxuwdf; sales explicitly closed.
+- Complete: live WhatSync schema/permissions inspected; existing function source downloaded; billing and profile-privilege migrations rehearsed then applied with migration records; tested checkout reservation migration applied; HubSpot, billing and external-auth deployed to ogsvchujqpayuckxuwdf; sales explicitly closed.
 - Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns salesEnabled=false. Stripe webhook is not configured.
 - Remaining: merchant/offer/terms decisions, payment acceptance, authenticated CRM and tenant tests, website publication, extension store rollout, and recoverable backups. No physical backups were listed by the project.
 - The database's historical schema existed with an empty migration journal. Only the three reviewed September migrations are recorded. **Do not run blanket db push until historical migrations are reconciled.** The commands below describe future releases and must not be used to replay the old baseline on this database.
@@ -30,7 +30,7 @@ In a second terminal from the main folder:
 
 ```sh
 node --test tests/*.test.cjs
-deno test --allow-env supabase/tests/billing.test.ts
+deno test --allow-env supabase/tests/*.test.ts
 cd website
 npx tsc --noEmit
 npx playwright test

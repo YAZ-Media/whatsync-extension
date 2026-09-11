@@ -41,9 +41,11 @@ bundle('backend-source.zip',root,['supabase/functions','supabase/migrations','su
 for src in ['LAUNCH_READINESS.md','DEPLOYMENT.md','DESIGN_SYSTEM.md','STORE_LISTING.md','release/LAUNCH_RUNBOOK.md']:
  shutil.copy2(root/src,output/Path(src).name)
 evidence=output/'evidence';evidence.mkdir(exist_ok=True)
-for src,dest in [(website/'test-results/results.json','browser-tests.json'),(Path('/tmp/whatsync-final-audit.json'),'dependency-audit.json'),(Path('/tmp/whatsync-production-probe.json'),'production-readonly-probe.json'),(Path('/tmp/whatsync-node-tests.txt'),'node-tests.txt'),(Path('/tmp/whatsync-billing-tests.txt'),'billing-tests.txt'),(Path('/tmp/whatsync-postgres-tests.txt'),'postgres-tests.txt')]:
+for src,dest in [(website/'test-results/results.json','browser-tests.json'),(Path('/tmp/whatsync-final-audit.json'),'dependency-audit.json'),(Path('/tmp/whatsync-production-probe.json'),'production-readonly-probe.json'),(Path('/tmp/whatsync-node-tests.txt'),'node-tests.txt'),(Path('/tmp/whatsync-billing-tests.txt'),'billing-tests.txt'),(Path('/tmp/whatsync-postgres-tests.txt'),'postgres-tests.txt'),(Path('/tmp/whatsync-compiled-tests.json'),'compiled-site-tests.json')]:
  if src.exists():shutil.copy2(src,evidence/dest)
 for p in (website/'test-results').glob('*.png'):shutil.copy2(p,evidence/p.name)
 checks={str(p.relative_to(output)):hashlib.sha256(p.read_bytes()).hexdigest() for p in output.rglob('*') if p.is_file() and p.name!='release-manifest.json'}
-(output/'release-manifest.json').write_text(json.dumps({'version':version,'status':'CANDIDATE_NOT_APPROVED_FOR_PAID_LAUNCH','backend':project,'sha256':checks},indent=2)+'\n')
+(output/'release-manifest.json').write_text(json.dumps({'version':version,'status':'CANDIDATE_NOT_APPROVED_FOR_PAID_LAUNCH','backend':project,'sourceCommits':{'extension':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'website':subprocess.check_output(['git','rev-parse','HEAD'],cwd=website,text=True).strip()},'sha256':checks},indent=2)+'\n')
+shutil.make_archive(str(root/'dist'/f'whatsync-{version}-candidate'), 'zip', output)
 print(output)
+print(str(output)+'.zip')

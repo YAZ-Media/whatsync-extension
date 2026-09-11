@@ -126,12 +126,20 @@ export async function handleBilling(req: Request): Promise<Response> {
       }
       const subscriptions = await stripe.subscriptions.list({customer:customerId,status:'all',limit:100});
       if (subscriptions.data.some(s => !['canceled','incomplete_expired'].includes(s.status))) return json({error:'This workspace already has a subscription. Use Manage billing to change it.'},409);
+      const attempt = must(await ext.rpc('reserve_billing_checkout', {p_account_id:accountId,p_plan_name:data.planName})).data;
+      if (!attempt?.attempt_id || !attempt.expires_at) throw new Error('Unable to reserve checkout. Please retry.');
+      if (attempt.plan_name !== data.planName) return json({error:`A ${attempt.plan_name} checkout is already reserved for this workspace. Resume that plan, or choose another after ${new Date(attempt.expires_at * 1000).toISOString()}.`},409);
+      // Persisted ID and expiry are identical across tabs and time boundaries.
+      // Stripe expires the old session before the database issues another ID.
+      // If an initial provider call was never made and retry occurs with less
+      // than Stripe's minimum 30-minute lifetime, it fails visibly until expiry.
       const session = await stripe.checkout.sessions.create({
         mode:'subscription',customer:customerId,client_reference_id:accountId,
+        expires_at:attempt.expires_at,
         line_items:[{price:priceId(data.planName),quantity:1}],
         success_url:`${origin()}/dashboard/billing?checkout=returned`,cancel_url:`${origin()}/dashboard/billing?checkout=canceled`,
         subscription_data:{metadata:{account_id:accountId}},allow_promotion_codes:true,
-      }, {idempotencyKey:`checkout-${accountId}-${Math.floor(Date.now()/1800000)}`});
+      }, {idempotencyKey:`checkout-${attempt.attempt_id}`});
       return json({url:session.url});
     }
     return json({error:'Unknown billing action'},400);
@@ -140,4 +148,3 @@ export async function handleBilling(req: Request): Promise<Response> {
     return json({error:error instanceof Error ? error.message : 'Billing is temporarily unavailable.'},500);
   }
 }
-

@@ -165,15 +165,30 @@ export async function handleBilling(req: Request): Promise<Response> {
       if (!operator) return json({ error: 'Operator access required.' }, 403);
       const page = Math.max(0, Math.min(Number(data.page) || 0, 10000));
       const filter = ['active','trialing','past_due','canceled','unpaid','incomplete','incomplete_expired','paused'].includes(data.status) ? data.status : null;
-      let query = ext.from('billing_subscriptions').select('account_id,plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at,livemode,billing_customers(billing_email)', { count: 'exact' }).order('updated_at',{ascending:false}).order('account_id');
+      let query = ext.from('billing_subscriptions').select('account_id,plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at,livemode', { count: 'exact' }).order('updated_at',{ascending:false}).order('account_id');
       if (filter) query = query.eq('status', filter);
       const rows = must(await query.range(page * 50, page * 50 + 49));
-      return json({ subscribers: rows.data?.map(row => ({...row, billing_email: (row.billing_customers as unknown as {billing_email?:string})?.billing_email || null})), total: rows.count, page });
+      const accountIds = [...new Set((rows.data || []).map(row => row.account_id))];
+      const customers = accountIds.length
+        ? must(await ext.from('billing_customers').select('account_id,billing_email,livemode').in('account_id', accountIds)).data || []
+        : [];
+      const billingEmail = new Map(customers.map(customer => [
+        `${customer.account_id}:${customer.livemode === false ? 'test' : 'live'}`,
+        customer.billing_email,
+      ]));
+      return json({
+        subscribers: rows.data?.map(row => ({
+          ...row,
+          billing_email: billingEmail.get(`${row.account_id}:${row.livemode === false ? 'test' : 'live'}`) || null,
+        })),
+        total: rows.count,
+        page,
+      });
     }
     if (!['Owner','Admin','Billing','Read-only'].includes(profile.role)) return json({ error: 'Billing access required.' },403);
     const runtime = runtimeForEmail(profile.email);
-    const customer = must(await ext.from('billing_customers').select('stripe_customer_id,livemode').eq('account_id', accountId).maybeSingle()).data;
-    const runtimeCustomer = customer && (runtime.livemode ? customer.livemode !== false : customer.livemode === false) ? customer : null;
+    const runtimeCustomer = must(await ext.from('billing_customers').select('stripe_customer_id,livemode')
+      .eq('account_id', accountId).eq('livemode', runtime.livemode).maybeSingle()).data;
     if (action === 'getBillingData') {
       const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).eq('livemode',runtime.livemode).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
       return json({ subscription, hasCustomer: !!runtimeCustomer, salesEnabled: checkoutEnabled, internalAccess: operator, testMode: !runtime.livemode });
@@ -245,7 +260,7 @@ export async function handleBilling(req: Request): Promise<Response> {
       if (!customerId) {
         const created = await stripe.customers.create({email:profile.email,metadata:tags}, {idempotencyKey:`whatsync-customer-${accountId}-${runtime.livemode?'live':'test'}`});
         customerId = created.id;
-        must(await ext.from('billing_customers').upsert({account_id:accountId,stripe_customer_id:customerId,billing_email:profile.email,livemode:runtime.livemode},{onConflict:'account_id'}));
+        must(await ext.from('billing_customers').upsert({account_id:accountId,stripe_customer_id:customerId,billing_email:profile.email,livemode:runtime.livemode},{onConflict:'account_id,livemode'}));
       } else {
         await stripe.customers.update(customerId, { metadata: tags });
       }

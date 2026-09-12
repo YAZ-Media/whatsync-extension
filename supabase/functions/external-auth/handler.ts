@@ -7,6 +7,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function safeAppRedirect(value: unknown, fallbackPath: string): string {
+  const fallback = `https://whatsync.io${fallbackPath}`;
+  if (!value) return fallback;
+
+  try {
+    const requested = new URL(String(value));
+    const productionHost = requested.protocol === "https:" &&
+      ["whatsync.io", "www.whatsync.io"].includes(requested.hostname);
+    const localHost = requested.protocol === "http:" &&
+      ["localhost", "127.0.0.1"].includes(requested.hostname);
+    if ((productionHost || localHost) && !requested.username && !requested.password) {
+      return requested.toString();
+    }
+  } catch {
+    // Fall through to the production URL for malformed or untrusted input.
+  }
+
+  return fallback;
+}
+
 export async function handleExternalAuth(req: Request): Promise<Response> {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -42,15 +62,7 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
         );
       }
 
-      let confirmationUrl = "https://whatsync.io/auth/callback";
-      try {
-        const requested = new URL(String(emailRedirectTo || confirmationUrl));
-        const allowedProduction = requested.protocol === "https:" && ["whatsync.io", "www.whatsync.io"].includes(requested.hostname);
-        const allowedLocal = requested.protocol === "http:" && ["localhost", "127.0.0.1"].includes(requested.hostname);
-        if (allowedProduction || allowedLocal) confirmationUrl = requested.toString();
-      } catch {
-        // Use the production callback for malformed or untrusted redirect input.
-      }
+      const confirmationUrl = safeAppRedirect(emailRedirectTo, "/auth/callback");
 
       const { error } = await externalSupabase.auth.resend({
         type: "signup",
@@ -132,20 +144,6 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
         invitedBy = invite.invitedBy;
       }
 
-      // Check if email already exists
-      const { data: existingUser } = await externalSupabase
-        .from("user_profiles")
-        .select("email")
-        .eq("email", email)
-        .maybeSingle();
-
-      if (existingUser) {
-        return new Response(
-          JSON.stringify({ error: "EMAIL_ALREADY_REGISTERED" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
       // Re-check at acceptance time. Several valid links may be opened at once,
       // so checking only when an invitation is sent cannot enforce plan quantity.
       if (inviteToken && profileOrg && invitedBy && consumesPaidSeat(profileRole, 'Active')) {
@@ -163,7 +161,7 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
         email,
         password,
         options: {
-          emailRedirectTo: emailRedirectTo || redirectTo || undefined,
+          emailRedirectTo: safeAppRedirect(emailRedirectTo || redirectTo, "/auth/callback"),
           data: {
             first_name: firstName,
             last_name: lastName,
@@ -175,12 +173,22 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
       if (error) {
         if (error.message.includes("already registered")) {
           return new Response(
-            JSON.stringify({ error: "EMAIL_ALREADY_REGISTERED" }),
+            JSON.stringify({ success: true, requiresConfirmation: true }),
             { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
         return new Response(
           JSON.stringify({ error: error.message }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Supabase deliberately returns an obfuscated user for an already
+      // registered address. Keep our response equally generic and do not try
+      // to create a profile for that placeholder identity.
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        return new Response(
+          JSON.stringify({ success: true, requiresConfirmation: true }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -225,7 +233,32 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
     }
 
     if (action === "signOut") {
-      // For sign out, we just confirm it's done - the client handles the session
+      const token = (req.headers.get("Authorization") || "")
+        .replace(/^Bearer\s+/i, "")
+        .trim();
+      if (!token) {
+        return new Response(
+          JSON.stringify({ error: "Missing authorization" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { data: authData, error: authError } = await externalSupabase.auth.getUser(token);
+      if (authError || !authData.user) {
+        return new Response(
+          JSON.stringify({ error: "Invalid or expired session" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { error: signOutError } = await externalSupabase.auth.admin.signOut(token, "global");
+      if (signOutError) {
+        return new Response(
+          JSON.stringify({ error: "Unable to revoke session" }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       return new Response(
         JSON.stringify({ success: true }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -285,10 +318,10 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
     }
 
     if (action === "resetPassword") {
-      const finalRedirect =
-        redirectTo ||
-        req.headers.get("x-redirect-to") ||
-        `${req.headers.get("origin") || "https://whatsync.io"}/reset-password`;
+      const finalRedirect = safeAppRedirect(
+        redirectTo || req.headers.get("x-redirect-to"),
+        "/reset-password"
+      );
 
       const { error } = await externalSupabase.auth.resetPasswordForEmail(email, {
         redirectTo: finalRedirect,

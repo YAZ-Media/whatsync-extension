@@ -169,13 +169,10 @@ async function exportWorkspaceData(userId: string) {
 
   const safeSelect = async (
     table: string,
-    select: string,
-    filter?: (q: ReturnType<typeof ext.from>) => ReturnType<typeof ext.from>
+    select: string
   ) => {
     try {
-      let q = ext.from(table).select(select).eq("user_id", userId);
-      if (filter) q = filter(q);
-      const res = await q;
+      const res = await ext.from(table).select(select).eq("user_id", userId);
       if (res.error) {
         console.warn(`export: ${table}`, res.error.message);
         return [];
@@ -196,11 +193,18 @@ async function exportWorkspaceData(userId: string) {
       safeSelect("message_templates", "*"),
       safeSelect("automations", "*"),
       safeSelect("hubspot_sidebar_fields", "*"),
-      safeSelect(
-        "hubspot_contact_logs",
-        "id,activity_type,title,description,hubspot_object_type,created_at,updated_at",
-        (q) => q.order("created_at", { ascending: false }).limit(5000) as typeof q
-      ),
+      ext.from("hubspot_contact_logs")
+        .select("id,activity_type,title,description,hubspot_object_type,created_at,updated_at")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(5000)
+        .then((res) => {
+          if (res.error) {
+            console.warn("export: hubspot_contact_logs", res.error.message);
+            return [];
+          }
+          return res.data || [];
+        }),
       fetchUserProfile(userId),
       ext.from("hubspot_connections").select("portal_id,status,created_at,updated_at,token_expires_at").eq("user_id", userId).maybeSingle(),
     ]);
@@ -249,7 +253,12 @@ async function runWeeklyDigestForUser(userId: string) {
   const email = profile?.email?.trim();
   if (!email) return { sent: false, reason: "no_email" };
 
-  const workspaceName = settings.workspace_name || profile?.first_name || "your workspace";
+  const workspaceName = String(settings.workspace_name || profile?.first_name || "your workspace")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
   const sendResult = await sendResendEmail({
     to: email,
     subject: `WhatSync weekly digest – ${activityCount} activities`,
@@ -283,7 +292,7 @@ Deno.serve(async (req) => {
 
     const { action, data: requestData } = await req.json();
     let data = requestData || {};
-    console.log(`Settings action: ${action}`, JSON.stringify(data));
+    console.log(`Settings action: ${String(action || "unknown")}`);
 
     if (data?.userId) {
       const auth = await authenticateRequest(req, String(data.userId));

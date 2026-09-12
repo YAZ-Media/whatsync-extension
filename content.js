@@ -1,3 +1,7 @@
+// Production logs omit customer and CRM payloads unless a developer deliberately opts in.
+const WHATSYNC_DEBUG = false;
+function whatsyncDebug(...args) { if (WHATSYNC_DEBUG) console.log(...args); }
+
 // Content script that runs only on web.whatsapp.com
 
 // ==================== Extension runtime guards ====================
@@ -635,7 +639,7 @@ function extractPhoneFromChatListByName() {
 
     const phone = extractPhoneFromElementAttributes(row);
     if (phone) {
-      console.log('[Phone Extraction] ✅ Found phone from chat list row by name:', phone);
+      whatsyncDebug('[Phone Extraction] ✅ Found phone from chat list row by name:', phone);
       return phone;
     }
   }
@@ -675,14 +679,14 @@ function getCurrentContactPhone() {
       if (header) {
         const fromHeaderJid = extractPhoneFromDataIdOnElement(header);
         if (fromHeaderJid) {
-          console.log('[Phone Extraction] ✅ Found phone from header data-id:', fromHeaderJid);
+          whatsyncDebug('[Phone Extraction] ✅ Found phone from header data-id:', fromHeaderJid);
           return fromHeaderJid;
         }
       }
 
       const fromHeader = extractPhoneFromConversationHeader(maindiv);
       if (fromHeader) {
-        console.log('[Phone Extraction] ✅ Found phone from conversation header:', fromHeader);
+        whatsyncDebug('[Phone Extraction] ✅ Found phone from conversation header:', fromHeader);
         return fromHeader;
       }
     }
@@ -691,7 +695,7 @@ function getCurrentContactPhone() {
     if (maindiv) {
       const fromComposer = extractPhoneFromMessageComposer(maindiv);
       if (fromComposer) {
-        console.log('[Phone Extraction] ✅ Found phone from message composer:', fromComposer);
+        whatsyncDebug('[Phone Extraction] ✅ Found phone from message composer:', fromComposer);
         return fromComposer;
       }
     }
@@ -699,14 +703,14 @@ function getCurrentContactPhone() {
     // 3. URL query param
     const urlPhone = new URLSearchParams(window.location.search).get('phone');
     if (urlPhone && looksLikePhoneNumber(urlPhone)) {
-      console.log('[Phone Extraction] ✅ Found phone from URL:', urlPhone);
+      whatsyncDebug('[Phone Extraction] ✅ Found phone from URL:', urlPhone);
       return urlPhone;
     }
 
     // 4. Selected chat list row (data-id JID for unsaved contacts, or visible phone)
     const fromSelectedRow = extractPhoneFromSelectedChatListRow();
     if (fromSelectedRow) {
-      console.log('[Phone Extraction] ✅ Found phone from selected chat list row:', fromSelectedRow);
+      whatsyncDebug('[Phone Extraction] ✅ Found phone from selected chat list row:', fromSelectedRow);
       return fromSelectedRow;
     }
 
@@ -714,7 +718,7 @@ function getCurrentContactPhone() {
     if (maindiv) {
       const fromDataId = extractPhoneFromDataIdInPanel(maindiv);
       if (fromDataId) {
-        console.log('[Phone Extraction] ✅ Found phone from data-id in main panel:', fromDataId);
+        whatsyncDebug('[Phone Extraction] ✅ Found phone from data-id in main panel:', fromDataId);
         return fromDataId;
       }
     }
@@ -726,7 +730,7 @@ function getCurrentContactPhone() {
     if (messagePanel) {
       const fromMessages = extractPhoneFromDataIdInPanel(messagePanel);
       if (fromMessages) {
-        console.log('[Phone Extraction] ✅ Found phone from message panel data-id:', fromMessages);
+        whatsyncDebug('[Phone Extraction] ✅ Found phone from message panel data-id:', fromMessages);
         return fromMessages;
       }
     }
@@ -740,11 +744,11 @@ function getCurrentContactPhone() {
     // 8. Contact drawer only if user already opened it (never auto-click — breaks layout)
     const fromDrawer = extractPhoneFromOpenContactDrawer();
     if (fromDrawer) {
-      console.log('[Phone Extraction] ✅ Found phone from open contact drawer:', fromDrawer);
+      whatsyncDebug('[Phone Extraction] ✅ Found phone from open contact drawer:', fromDrawer);
       return fromDrawer;
     }
 
-    console.log('[Phone Extraction] ❌ No phone number found using any method');
+    whatsyncDebug('[Phone Extraction] ❌ No phone number found using any method');
     return null;
   } catch (error) {
     console.error('[Phone Extraction] ❌ Error getting contact phone:', error);
@@ -1024,7 +1028,7 @@ function applyThemeToNavbarAndSidebar(theme) {
   document.body.classList.remove('whatsapp-theme-light', 'whatsapp-theme-dark');
   document.body.classList.add(`whatsapp-theme-${theme}`);
   
-  console.log(`[Theme] Applied ${theme} theme to navbar and sidebar`);
+  whatsyncDebug(`[Theme] Applied ${theme} theme to navbar and sidebar`);
 }
 
 /**
@@ -1099,7 +1103,7 @@ function initializeThemeDetection() {
     }
   }, 5000);
   
-  console.log('[Theme] Theme detection initialized');
+  whatsyncDebug('[Theme] Theme detection initialized');
 }
 
 // ==================== End Theme Detection ====================
@@ -1288,11 +1292,11 @@ async function extractPhoneFromContactPanel() {
 }
 
 async function extractPhoneFromChat() {
-  console.log('[Phone Extraction] Starting phone extraction from chat...');
+  whatsyncDebug('[Phone Extraction] Starting phone extraction from chat...');
 
   let phone = getCurrentContactPhone();
   if (phone) {
-    console.log('[Phone Extraction] ✅ Extracted phone (direct)');
+    whatsyncDebug('[Phone Extraction] ✅ Extracted phone (direct)');
     return phone;
   }
 
@@ -1302,7 +1306,7 @@ async function extractPhoneFromChat() {
   const span = header?.children[1]?.querySelector('span[dir="auto"]');
   const content = span?.textContent?.trim();
   if (content && looksLikePhoneNumber(content)) {
-    console.log('[Phone Extraction] ✅ Extracted phone (header span)');
+    whatsyncDebug('[Phone Extraction] ✅ Extracted phone (header span)');
     return content;
   }
 
@@ -1311,11 +1315,11 @@ async function extractPhoneFromChat() {
   // which modern WhatsApp no longer exposes via data-id.
   const fromPanel = await extractPhoneFromContactPanel();
   if (fromPanel) {
-    console.log('[Phone Extraction] ✅ Extracted phone (contact panel)');
+    whatsyncDebug('[Phone Extraction] ✅ Extracted phone (contact panel)');
     return fromPanel;
   }
 
-  console.log('[Phone Extraction] ❌ No phone number found');
+  whatsyncDebug('[Phone Extraction] ❌ No phone number found');
   return null;
 }
 
@@ -1340,7 +1344,7 @@ function widthSetting() {
 
 // Function to create HubSpot contact via background script
 async function createHubSpotContact(contactData) {
-  console.log('[Content] Sending create contact request:', contactData);
+  whatsyncDebug('[Content] Sending create contact request:', contactData);
   
   try {
     const response = await sendExtensionMessage({
@@ -1348,11 +1352,11 @@ async function createHubSpotContact(contactData) {
       contactData: contactData
     });
     
-    console.log('[Content] Received response from background:', response);
+    whatsyncDebug('[Content] Received response from background:', response);
     
     if (response) {
       if (response.success) {
-        console.log('[Content] ✅ HubSpot Contact Created:', response.data);
+        whatsyncDebug('[Content] ✅ HubSpot Contact Created:', response.data);
         
         // Trigger automation after successful contact creation
         if (response.data && response.data.id) {
@@ -1500,7 +1504,7 @@ async function setupDealPipelineForm(modal) {
 // Function to fetch HubSpot owners
 async function fetchHubSpotOwners() {
   try {
-    console.log('[Content] Fetching HubSpot owners...');
+    whatsyncDebug('[Content] Fetching HubSpot owners...');
     
     const response = await sendExtensionMessage({
       action: 'getHubSpotOwners'
@@ -1524,11 +1528,11 @@ async function fetchHubSpotOwners() {
  * @returns {Promise<{templates: Array}>} Object containing templates array
  */
 async function fetchUserTemplates() {
-  console.log('[Templates] ===== STARTING TEMPLATE FETCH =====');
+  whatsyncDebug('[Templates] ===== STARTING TEMPLATE FETCH =====');
   
   try {
     // Get userId from chrome.storage.local
-    console.log('[Templates] Checking chrome.storage.local for external_auth_session...');
+    whatsyncDebug('[Templates] Checking chrome.storage.local for external_auth_session...');
     const storageResult = await extensionStorageGet('external_auth_session');
     const session = storageResult.external_auth_session;
     
@@ -1537,7 +1541,7 @@ async function fetchUserTemplates() {
       return { templates: [] };
     }
     
-    console.log('[Templates] ✅ Session found in chrome.storage.local');
+    whatsyncDebug('[Templates] ✅ Session found in chrome.storage.local');
     const userId = session?.user?.id;
     
     if (!userId) {
@@ -1545,22 +1549,22 @@ async function fetchUserTemplates() {
       return { templates: [] };
     }
     
-    console.log('[Templates] ✅ UserId extracted:', userId);
-    console.log('[Templates] Preparing API request...');
-    console.log('[Templates] URL:', HUBSPOT_EDGE_FUNCTION_URL);
+    whatsyncDebug('[Templates] ✅ UserId extracted:', userId);
+    whatsyncDebug('[Templates] Preparing API request...');
+    whatsyncDebug('[Templates] URL:', HUBSPOT_EDGE_FUNCTION_URL);
     
     const requestBody = {
       action: 'getTemplates',
       data: { userId }
     };
-    console.log('[Templates] Request body:', JSON.stringify(requestBody, null, 2));
+    whatsyncDebug('[Templates] Request body:', JSON.stringify(requestBody, null, 2));
     
     // Call edge function to get templates
-    console.log('[Templates] Sending POST request to edge function...');
+    whatsyncDebug('[Templates] Sending POST request to edge function...');
     const { ok, status, json: apiResult } = await callHubSpotEdgeFromContent('getTemplates', { userId });
 
-    console.log('[Templates] Response received');
-    console.log('[Templates] Status:', status);
+    whatsyncDebug('[Templates] Response received');
+    whatsyncDebug('[Templates] Status:', status);
 
     if (!ok) {
       console.error('[Templates] ❌ Failed to fetch templates');
@@ -1568,16 +1572,16 @@ async function fetchUserTemplates() {
       return { templates: [] };
     }
 
-    console.log('[Templates] ✅ Response parsed successfully');
-    console.log('[Templates] Response data:', apiResult);
+    whatsyncDebug('[Templates] ✅ Response parsed successfully');
+    whatsyncDebug('[Templates] Response data:', apiResult);
     
     const templates = apiResult.templates || [];
-    console.log('[Templates] Number of templates found:', templates.length);
+    whatsyncDebug('[Templates] Number of templates found:', templates.length);
     
     if (templates.length > 0) {
-      console.log('[Templates] Template names:', templates.map(t => t.name || 'Untitled'));
+      whatsyncDebug('[Templates] Template names:', templates.map(t => t.name || 'Untitled'));
       templates.forEach((template, index) => {
-        console.log(`[Templates] Template ${index + 1}:`, {
+        whatsyncDebug(`[Templates] Template ${index + 1}:`, {
           id: template.id,
           name: template.name,
           category: template.category,
@@ -1586,10 +1590,10 @@ async function fetchUserTemplates() {
         });
       });
     } else {
-      console.log('[Templates] No templates found for this user');
+      whatsyncDebug('[Templates] No templates found for this user');
     }
     
-    console.log('[Templates] ===== TEMPLATE FETCH COMPLETED =====');
+    whatsyncDebug('[Templates] ===== TEMPLATE FETCH COMPLETED =====');
     return apiResult; // { templates: [...] }
   } catch (error) {
     console.error('[Templates] ===== TEMPLATE FETCH ERROR =====');
@@ -1606,8 +1610,8 @@ async function fetchUserTemplates() {
  * @param {Array} templates - Array of template objects with { id, name, content, category, variables }
  */
 function renderTemplatesInDropdown(templates) {
-  console.log('[Templates] ===== RENDERING TEMPLATES IN DROPDOWN =====');
-  console.log('[Templates] Number of templates to render:', templates.length);
+  whatsyncDebug('[Templates] ===== RENDERING TEMPLATES IN DROPDOWN =====');
+  whatsyncDebug('[Templates] Number of templates to render:', templates.length);
   
   const dropdown = document.getElementById('more-actions-dropdown');
   if (!dropdown) {
@@ -1615,20 +1619,20 @@ function renderTemplatesInDropdown(templates) {
     return;
   }
   
-  console.log('[Templates] ✅ Dropdown element found');
+  whatsyncDebug('[Templates] ✅ Dropdown element found');
   
   // Remove existing template items (keep "Log a WhatsApp message")
   const existingTemplateItems = dropdown.querySelectorAll('.template-option');
   const removedCount = existingTemplateItems.length;
   if (removedCount > 0) {
-    console.log(`[Templates] Removing ${removedCount} existing template items`);
+    whatsyncDebug(`[Templates] Removing ${removedCount} existing template items`);
   }
   existingTemplateItems.forEach(item => item.remove());
   
     // Add template items
-  console.log('[Templates] Creating template items...');
+  whatsyncDebug('[Templates] Creating template items...');
   templates.forEach((template, index) => {
-    console.log(`[Templates] Creating template item ${index + 1}/${templates.length}:`, template.name || 'Untitled');
+    whatsyncDebug(`[Templates] Creating template item ${index + 1}/${templates.length}:`, template.name || 'Untitled');
     const templateOption = document.createElement('div');
     templateOption.className = 'more-actions-option template-option';
     templateOption.dataset.templateId = template.id;
@@ -1651,15 +1655,15 @@ function renderTemplatesInDropdown(templates) {
       e.preventDefault();
       e.stopPropagation();
       
-      console.log('[Templates] ===== TEMPLATE SELECTED =====');
-      console.log('[Templates] Template ID:', template.id);
-      console.log('[Templates] Template Name:', template.name);
-      console.log('[Templates] Template Content:', template.content);
-      console.log('[Templates] Template Data:', template);
+      whatsyncDebug('[Templates] ===== TEMPLATE SELECTED =====');
+      whatsyncDebug('[Templates] Template ID:', template.id);
+      whatsyncDebug('[Templates] Template Name:', template.name);
+      whatsyncDebug('[Templates] Template Content:', template.content);
+      whatsyncDebug('[Templates] Template Data:', template);
       
       // Close the dropdown
       dropdown.style.display = 'none';
-      console.log('[Templates] Dropdown closed');
+      whatsyncDebug('[Templates] Dropdown closed');
       
       // Get template content
       const selectedChat = getCurrentChatHeaderKey();
@@ -1709,19 +1713,19 @@ function renderTemplatesInDropdown(templates) {
     if (lastActionField && lastActionField.parentNode) {
       // Insert after the last action field
       lastActionField.parentNode.insertBefore(templateOption, lastActionField.nextSibling);
-      console.log(`[Templates] ✅ Template "${template.name}" inserted after last action field`);
+      whatsyncDebug(`[Templates] ✅ Template "${template.name}" inserted after last action field`);
     } else if (logWhatsAppOption && logWhatsAppOption.parentNode) {
       // Fallback: insert after "Log a WhatsApp message" if no action fields
       logWhatsAppOption.parentNode.insertBefore(templateOption, logWhatsAppOption.nextSibling);
-      console.log(`[Templates] ✅ Template "${template.name}" inserted after "Log a WhatsApp message"`);
+      whatsyncDebug(`[Templates] ✅ Template "${template.name}" inserted after "Log a WhatsApp message"`);
     } else {
       dropdown.appendChild(templateOption);
-      console.log(`[Templates] ✅ Template "${template.name}" appended to dropdown`);
+      whatsyncDebug(`[Templates] ✅ Template "${template.name}" appended to dropdown`);
     }
   });
   
-  console.log(`[Templates] ✅ Successfully rendered ${templates.length} template(s) in dropdown`);
-  console.log('[Templates] ===== RENDERING COMPLETED =====');
+  whatsyncDebug(`[Templates] ✅ Successfully rendered ${templates.length} template(s) in dropdown`);
+  whatsyncDebug('[Templates] ===== RENDERING COMPLETED =====');
 }
 
 /**
@@ -1729,8 +1733,8 @@ function renderTemplatesInDropdown(templates) {
  * @param {Array} actionFields - Array of action field objects
  */
 function renderActionFieldsInDropdown(actionFields) {
-  console.log('[Action Fields] ===== RENDERING ACTION FIELDS IN DROPDOWN =====');
-  console.log('[Action Fields] Number of action fields to render:', actionFields.length);
+  whatsyncDebug('[Action Fields] ===== RENDERING ACTION FIELDS IN DROPDOWN =====');
+  whatsyncDebug('[Action Fields] Number of action fields to render:', actionFields.length);
   
   const dropdown = document.getElementById('more-actions-dropdown');
   if (!dropdown) {
@@ -1738,15 +1742,15 @@ function renderActionFieldsInDropdown(actionFields) {
     return;
   }
   
-  console.log('[Action Fields] ✅ Dropdown element found');
+  whatsyncDebug('[Action Fields] ✅ Dropdown element found');
   
   // Get reference to "Log a WhatsApp message" option
   const logWhatsAppOption = document.getElementById('log-whatsapp-message-option');
   
   // Add action field items
-  console.log('[Action Fields] Creating action field items...');
+  whatsyncDebug('[Action Fields] Creating action field items...');
   actionFields.forEach((actionField, index) => {
-    console.log(`[Action Fields] Creating action field item ${index + 1}/${actionFields.length}:`, actionField.field_label || actionField.column_name || 'Untitled');
+    whatsyncDebug(`[Action Fields] Creating action field item ${index + 1}/${actionFields.length}:`, actionField.field_label || actionField.column_name || 'Untitled');
     
     const actionOption = document.createElement('div');
     actionOption.className = 'more-actions-option action-field-option';
@@ -1772,15 +1776,15 @@ function renderActionFieldsInDropdown(actionFields) {
       e.preventDefault();
       e.stopPropagation();
       
-      console.log('[Action Fields] ===== ACTION FIELD SELECTED =====');
-      console.log('[Action Fields] Action Field ID:', actionField.id);
-      console.log('[Action Fields] Field Label:', actionField.field_label);
-      console.log('[Action Fields] HubSpot Property:', actionField.hubspot_property);
-      console.log('[Action Fields] Full Action Field Data:', actionField);
+      whatsyncDebug('[Action Fields] ===== ACTION FIELD SELECTED =====');
+      whatsyncDebug('[Action Fields] Action Field ID:', actionField.id);
+      whatsyncDebug('[Action Fields] Field Label:', actionField.field_label);
+      whatsyncDebug('[Action Fields] HubSpot Property:', actionField.hubspot_property);
+      whatsyncDebug('[Action Fields] Full Action Field Data:', actionField);
       
       // Close the dropdown
       dropdown.style.display = 'none';
-      console.log('[Action Fields] Dropdown closed');
+      whatsyncDebug('[Action Fields] Dropdown closed');
       
       // Get contact information from sidebar
       const sidebar = document.getElementById('hubspot-sidebar');
@@ -1789,25 +1793,25 @@ function renderActionFieldsInDropdown(actionFields) {
       const contactName = contactNameElement?.textContent?.trim() || 'Contact';
       const contactEmail = sidebar?.querySelector('.email-value')?.textContent?.trim() || '';
       
-      console.log('[Action Fields] Contact info:', { contactName, contactEmail, contactId });
+      whatsyncDebug('[Action Fields] Contact info:', { contactName, contactEmail, contactId });
       
       // Handle specific action fields
       const fieldLabel = (actionField.field_label || actionField.column_name || '').toLowerCase();
       
       if (fieldLabel.includes('create ticket') || fieldLabel.includes('ticket')) {
-        console.log('[Action Fields] Opening Create Ticket modal...');
+        whatsyncDebug('[Action Fields] Opening Create Ticket modal...');
         showTicketModal(contactName, contactEmail, contactId);
       } else if (fieldLabel.includes('create deal') || fieldLabel.includes('deal')) {
-        console.log('[Action Fields] Opening Create Deal modal...');
+        whatsyncDebug('[Action Fields] Opening Create Deal modal...');
         showDealModal(contactName, contactEmail, contactId);
       } else if (fieldLabel.includes('create task') || fieldLabel.includes('task')) {
-        console.log('[Action Fields] Opening Create Task modal...');
+        whatsyncDebug('[Action Fields] Opening Create Task modal...');
         showTaskModal(contactName, contactEmail, contactId);
       } else if (fieldLabel.includes('add note') || fieldLabel.includes('note')) {
-        console.log('[Action Fields] Opening Add Note modal...');
+        whatsyncDebug('[Action Fields] Opening Add Note modal...');
         showNoteModal(contactName, contactEmail, contactId);
       } else {
-        console.log('[Action Fields] Action field clicked:', displayLabel);
+        whatsyncDebug('[Action Fields] Action field clicked:', displayLabel);
         // Handle other action fields here if needed
       }
     });
@@ -1815,15 +1819,15 @@ function renderActionFieldsInDropdown(actionFields) {
     // Insert after "Log a WhatsApp message" option
     if (logWhatsAppOption && logWhatsAppOption.parentNode) {
       logWhatsAppOption.parentNode.insertBefore(actionOption, logWhatsAppOption.nextSibling);
-      console.log(`[Action Fields] ✅ Action field "${displayLabel}" inserted after "Log a WhatsApp message"`);
+      whatsyncDebug(`[Action Fields] ✅ Action field "${displayLabel}" inserted after "Log a WhatsApp message"`);
     } else {
       dropdown.appendChild(actionOption);
-      console.log(`[Action Fields] ✅ Action field "${displayLabel}" appended to dropdown`);
+      whatsyncDebug(`[Action Fields] ✅ Action field "${displayLabel}" appended to dropdown`);
     }
   });
   
-  console.log(`[Action Fields] ✅ Successfully rendered ${actionFields.length} action field(s) in dropdown`);
-  console.log('[Action Fields] ===== RENDERING COMPLETED =====');
+  whatsyncDebug(`[Action Fields] ✅ Successfully rendered ${actionFields.length} action field(s) in dropdown`);
+  whatsyncDebug('[Action Fields] ===== RENDERING COMPLETED =====');
 }
 
 /**
@@ -1831,8 +1835,8 @@ function renderActionFieldsInDropdown(actionFields) {
  * @param {string} content - The template content to insert
  */
 function insertTemplateContentIntoWhatsAppInput(content) {
-  console.log('[Templates] ===== INSERTING TEMPLATE CONTENT =====');
-  console.log('[Templates] Content to insert:', content);
+  whatsyncDebug('[Templates] ===== INSERTING TEMPLATE CONTENT =====');
+  whatsyncDebug('[Templates] Content to insert:', content);
   
   try {
     // Find the parent div#main
@@ -1843,7 +1847,7 @@ function insertTemplateContentIntoWhatsAppInput(content) {
       return false;
     }
     
-    console.log('[Templates] ✅ Found div#main');
+    whatsyncDebug('[Templates] ✅ Found div#main');
     
     // Find the message input div inside div#main with multiple fallback selectors
     let messageInput = null;
@@ -1860,16 +1864,16 @@ function insertTemplateContentIntoWhatsAppInput(content) {
     for (const selector of selectors) {
       messageInput = mainDiv.querySelector(selector);
       if (messageInput) {
-        console.log('[Templates] ✅ Found message input div using selector:', selector);
+        whatsyncDebug('[Templates] ✅ Found message input div using selector:', selector);
         break;
       }
     }
     
     // If still not found, try searching all contenteditable divs in main
     if (!messageInput) {
-      console.log('[Templates] Trying fallback: searching all contenteditable divs in main...');
+      whatsyncDebug('[Templates] Trying fallback: searching all contenteditable divs in main...');
       const allContentEditable = mainDiv.querySelectorAll('div[contenteditable="true"][role="textbox"]');
-      console.log('[Templates] Found', allContentEditable.length, 'contenteditable textboxes in main');
+      whatsyncDebug('[Templates] Found', allContentEditable.length, 'contenteditable textboxes in main');
       
       if (allContentEditable.length > 0) {
         // Try to find the one that's likely the message input
@@ -1880,18 +1884,18 @@ function insertTemplateContentIntoWhatsAppInput(content) {
         ) || allContentEditable[allContentEditable.length - 1];
         
         if (messageInput) {
-          console.log('[Templates] ✅ Found message input div using fallback method');
+          whatsyncDebug('[Templates] ✅ Found message input div using fallback method');
         }
       }
     }
     
     // If still not found in main, try searching the entire document
     if (!messageInput) {
-      console.log('[Templates] Trying fallback: searching entire document...');
+      whatsyncDebug('[Templates] Trying fallback: searching entire document...');
       for (const selector of selectors) {
         messageInput = document.querySelector(selector);
         if (messageInput) {
-          console.log('[Templates] ✅ Found message input div in document using selector:', selector);
+          whatsyncDebug('[Templates] ✅ Found message input div in document using selector:', selector);
           break;
         }
       }
@@ -1911,7 +1915,7 @@ function insertTemplateContentIntoWhatsAppInput(content) {
       document.execCommand('selectAll', false, null);
       const inserted = document.execCommand('insertText', false, content);
       if (inserted && (messageInput.textContent || '').includes(content.slice(0, 20))) {
-        console.log('[Templates] ✅ Template inserted via execCommand');
+        whatsyncDebug('[Templates] ✅ Template inserted via execCommand');
         return true;
       }
     } catch (e) {
@@ -1928,17 +1932,17 @@ function insertTemplateContentIntoWhatsAppInput(content) {
       return false;
     }
     
-    console.log('[Templates] ✅ Found p tag');
+    whatsyncDebug('[Templates] ✅ Found p tag');
     
     // Update p tag attributes and style
     pTag.setAttribute('dir', 'ltr');
     pTag.style.cssText = 'text-indent: 0px; margin-top: 0px; margin-bottom: 0px;';
-    console.log('[Templates] ✅ Updated p tag attributes and style');
+    whatsyncDebug('[Templates] ✅ Updated p tag attributes and style');
     
     // Clear the p tag completely first (removes <br> and any other content)
-    console.log('[Templates] Clearing p tag content...');
+    whatsyncDebug('[Templates] Clearing p tag content...');
     const originalInnerHTML = pTag.innerHTML;
-    console.log('[Templates] Original p tag innerHTML:', originalInnerHTML);
+    whatsyncDebug('[Templates] Original p tag innerHTML:', originalInnerHTML);
     pTag.innerHTML = '';
     
     // Create the span element
@@ -1950,15 +1954,15 @@ function insertTemplateContentIntoWhatsAppInput(content) {
     
     // Append the span to the p tag
     pTag.appendChild(spanTag);
-    console.log('[Templates] ✅ Replaced <br> tag with span containing template content');
-    console.log('[Templates] ✅ Template content inserted into span');
+    whatsyncDebug('[Templates] ✅ Replaced <br> tag with span containing template content');
+    whatsyncDebug('[Templates] ✅ Template content inserted into span');
     
     // Verify the change immediately
     const verifySpan = pTag.querySelector('span._aupe.copyable-text.xkrh14z');
     if (verifySpan) {
-      console.log('[Templates] ✅ Verified: span exists in p tag');
-      console.log('[Templates] Span content:', verifySpan.innerHTML);
-      console.log('[Templates] Current p tag innerHTML:', pTag.innerHTML);
+      whatsyncDebug('[Templates] ✅ Verified: span exists in p tag');
+      whatsyncDebug('[Templates] Span content:', verifySpan.innerHTML);
+      whatsyncDebug('[Templates] Current p tag innerHTML:', pTag.innerHTML);
     } else {
       console.error('[Templates] ❌ Verification failed: span not found in p tag');
       console.error('[Templates] Current p tag innerHTML:', pTag.innerHTML);
@@ -1988,7 +1992,7 @@ function insertTemplateContentIntoWhatsAppInput(content) {
       // Verify again after events
       const finalVerify = pTag.querySelector('span._aupe.copyable-text.xkrh14z');
       if (finalVerify) {
-        console.log('[Templates] ✅ Final verification: span still exists after events');
+        whatsyncDebug('[Templates] ✅ Final verification: span still exists after events');
       } else {
         console.error('[Templates] ❌ Final verification failed: span was removed');
         // Try to re-insert if it was removed
@@ -1998,12 +2002,12 @@ function insertTemplateContentIntoWhatsAppInput(content) {
         newSpan.setAttribute('data-lexical-text', 'true');
         newSpan.textContent = content;
         pTag.appendChild(newSpan);
-        console.log('[Templates] ✅ Re-inserted span after removal');
+        whatsyncDebug('[Templates] ✅ Re-inserted span after removal');
       }
     }, 10);
     
-    console.log('[Templates] ✅ Template content successfully inserted');
-    console.log('[Templates] ===== INSERTION COMPLETED =====');
+    whatsyncDebug('[Templates] ✅ Template content successfully inserted');
+    whatsyncDebug('[Templates] ===== INSERTION COMPLETED =====');
     return true;
   } catch (error) {
     console.error('[Templates] ❌ Error inserting template content:', error);
@@ -2030,10 +2034,10 @@ function setupMoreActionsDropdown() {
     
     if (!isVisible) {
       // Dropdown is opening - fetch action fields and templates
-      console.log('[More Actions] ===== DROPDOWN OPENED =====');
-      console.log('[More Actions] More button clicked, opening dropdown...');
+      whatsyncDebug('[More Actions] ===== DROPDOWN OPENED =====');
+      whatsyncDebug('[More Actions] More button clicked, opening dropdown...');
       dropdown.style.display = 'block';
-      console.log('[More Actions] ✅ Dropdown displayed');
+      whatsyncDebug('[More Actions] ✅ Dropdown displayed');
       
       // Get userId
       const storageResult = await extensionStorageGet('external_auth_session');
@@ -2046,7 +2050,7 @@ function setupMoreActionsDropdown() {
       }
       
       // Show loading state
-      console.log('[More Actions] Showing loading indicator...');
+      whatsyncDebug('[More Actions] Showing loading indicator...');
       let loadingEl = dropdown.querySelector('.actions-loading');
       if (!loadingEl) {
         const loading = document.createElement('div');
@@ -2057,7 +2061,7 @@ function setupMoreActionsDropdown() {
           logWhatsAppOption.parentNode.insertBefore(loading, logWhatsAppOption.nextSibling);
         }
         loadingEl = loading;
-        console.log('[More Actions] ✅ Loading indicator added');
+        whatsyncDebug('[More Actions] ✅ Loading indicator added');
       }
       
       // Remove existing action field items (keep "Log a WhatsApp message")
@@ -2073,28 +2077,28 @@ function setupMoreActionsDropdown() {
 
       // Templates are gated by the "Send Template" sidebar toggle (default on).
       if (isSidebarFieldEnabled('send_template')) {
-        console.log('[More Actions] "Send Template" enabled, fetching templates...');
+        whatsyncDebug('[More Actions] "Send Template" enabled, fetching templates...');
         const { templates } = await fetchUserTemplates();
         if (templates && templates.length > 0) {
           renderTemplatesInDropdown(templates);
         } else {
-          console.log('[More Actions] No templates available to render');
+          whatsyncDebug('[More Actions] No templates available to render');
         }
       } else {
-        console.log('[More Actions] "Send Template" disabled, skipping templates');
+        whatsyncDebug('[More Actions] "Send Template" disabled, skipping templates');
       }
       
       // Remove loading indicator
       if (loadingEl) {
         loadingEl.remove();
-        console.log('[More Actions] Loading indicator removed');
+        whatsyncDebug('[More Actions] Loading indicator removed');
       }
       
-      console.log('[More Actions] ===== DROPDOWN SETUP COMPLETED =====');
+      whatsyncDebug('[More Actions] ===== DROPDOWN SETUP COMPLETED =====');
     } else {
-      console.log('[More Actions] Dropdown closing...');
+      whatsyncDebug('[More Actions] Dropdown closing...');
       dropdown.style.display = 'none';
-      console.log('[More Actions] ✅ Dropdown closed');
+      whatsyncDebug('[More Actions] ✅ Dropdown closed');
     }
   });
   
@@ -2156,11 +2160,11 @@ async function refreshActionFieldsDropdown() {
   
   // Only refresh if dropdown is currently open
   if (dropdown.style.display === 'none') {
-    console.log('[Action Fields Realtime] Dropdown is closed, skipping refresh');
+    whatsyncDebug('[Action Fields Realtime] Dropdown is closed, skipping refresh');
     return;
   }
   
-  console.log('[Action Fields Realtime] 🔄 Refreshing dropdown with updated action fields...');
+  whatsyncDebug('[Action Fields Realtime] 🔄 Refreshing dropdown with updated action fields...');
   
   // Get userId
   const storageResult = await extensionStorageGet('external_auth_session');
@@ -2182,7 +2186,7 @@ async function refreshActionFieldsDropdown() {
   
   // Fetch fresh enabled action fields
   const enabledActions = await getEnabledActionFields(userId);
-  console.log('[Action Fields Realtime] Fetched', enabledActions.length, 'enabled action fields');
+  whatsyncDebug('[Action Fields Realtime] Fetched', enabledActions.length, 'enabled action fields');
   
   // Check if "Send Template" action field exists (enabled)
   const sendTemplateAction = enabledActions.find(
@@ -2218,23 +2222,23 @@ async function refreshActionFieldsDropdown() {
   
   // Render action fields (excluding "Send Template")
   if (actionFieldsToRender && actionFieldsToRender.length > 0) {
-    console.log('[Action Fields Realtime] Rendering updated action fields...');
+    whatsyncDebug('[Action Fields Realtime] Rendering updated action fields...');
     renderActionFieldsInDropdown(actionFieldsToRender);
   }
   
   // Always fetch and render templates if "Send Template" action field is enabled
   if (sendTemplateAction) {
-    console.log('[Action Fields Realtime] "Send Template" action field found, fetching templates...');
+    whatsyncDebug('[Action Fields Realtime] "Send Template" action field found, fetching templates...');
     const { templates } = await fetchUserTemplates();
-    console.log('[Action Fields Realtime] Template fetch completed, received:', templates?.length || 0, 'template(s)');
+    whatsyncDebug('[Action Fields Realtime] Template fetch completed, received:', templates?.length || 0, 'template(s)');
     
     if (templates && templates.length > 0) {
-      console.log('[Action Fields Realtime] Rendering templates...');
+      whatsyncDebug('[Action Fields Realtime] Rendering templates...');
       renderTemplatesInDropdown(templates);
     }
   }
   
-  console.log('[Action Fields Realtime] ✅ Dropdown refreshed successfully');
+  whatsyncDebug('[Action Fields Realtime] ✅ Dropdown refreshed successfully');
 }
 
 // Global variable to track message selection mode
@@ -2398,7 +2402,7 @@ function finishMessageSelection() {
       const isOutgoing = isOutgoingMessageRow(row);
       const timestamp = extractMessageTimestamp(row);
 
-      console.log('[Message Selection] Message found:', {
+      whatsyncDebug('[Message Selection] Message found:', {
         id: messageId,
         isOutgoing: isOutgoing,
         text: messageText.substring(0, 50),
@@ -2429,12 +2433,10 @@ function finishMessageSelection() {
   const contactName = contactNameElement?.textContent?.trim() || 'Contact';
   const contactEmail = sidebar?.querySelector('.email-value')?.textContent?.trim() || '';
   
-  console.log('[Message Selection] Contact name found:', contactName);
+  whatsyncDebug('[Message Selection] Contact name found:', contactName);
   
   // Format messages for note (pass contact name)
   const formattedMessages = formatSelectedMessages(selectedMessageData, contactName);
-  
-  console.log('[Message Selection] Formatted messages:', formattedMessages);
   
   // Disable selection mode
   disableMessageSelectionMode();
@@ -2823,8 +2825,8 @@ ensureInlineMessageLogButtons();
 function formatSelectedMessages(messages, contactName = 'Contact') {
   if (messages.length === 0) return '';
   
-  console.log('[formatSelectedMessages] Contact name:', contactName);
-  console.log('[formatSelectedMessages] Messages count:', messages.length);
+  whatsyncDebug('[formatSelectedMessages] Contact name:', contactName);
+  whatsyncDebug('[formatSelectedMessages] Messages count:', messages.length);
   
   let formatted = 'WhatsApp Messages:\n\n';
 
@@ -3184,7 +3186,7 @@ function showNoteModal(contactName, contactEmail, contactId, preFilledContent = 
   setupTodoDropdown();
   
   // Setup todo time dropdown functionality
-  console.log('[Note Modal] About to setup todo time dropdown...');
+  whatsyncDebug('[Note Modal] About to setup todo time dropdown...');
   setTimeout(() => {
     setupTodoTimeDropdown();
   }, 100); // Small delay to ensure DOM is ready
@@ -3296,9 +3298,9 @@ function setupTodoTimeDropdown() {
   const todoTime = document.getElementById('note-todo-time');
   const dropdown = document.getElementById('note-todo-time-dropdown');
   
-  console.log('[Note Modal] Setting up todo time dropdown');
-  console.log('[Note Modal] todoTime element:', todoTime);
-  console.log('[Note Modal] dropdown element:', dropdown);
+  whatsyncDebug('[Note Modal] Setting up todo time dropdown');
+  whatsyncDebug('[Note Modal] todoTime element:', todoTime);
+  whatsyncDebug('[Note Modal] dropdown element:', dropdown);
   
   if (!todoTime) {
     console.error('[Note Modal] ❌ todoTime element not found!');
@@ -3310,11 +3312,11 @@ function setupTodoTimeDropdown() {
     return;
   }
   
-  console.log('[Note Modal] ✅ Both elements found, setting up handlers');
+  whatsyncDebug('[Note Modal] ✅ Both elements found, setting up handlers');
   
   // Position dropdown relative to todoTime (above the element)
   function positionDropdown() {
-    console.log('[Note Modal] Positioning dropdown');
+    whatsyncDebug('[Note Modal] Positioning dropdown');
     dropdown.style.left = '0';
     dropdown.style.bottom = 'calc(100% + 4px)';
     dropdown.style.top = 'auto';
@@ -3322,13 +3324,13 @@ function setupTodoTimeDropdown() {
   
   // Toggle dropdown on click (links are now outside label, so no checkbox interference)
   todoTime.addEventListener('click', (e) => {
-    console.log('[Note Modal] todoTime clicked!', e.target);
+    whatsyncDebug('[Note Modal] todoTime clicked!', e.target);
     e.preventDefault();
     e.stopPropagation();
     const isOpen = dropdown.style.display === 'block';
-    console.log('[Note Modal] Dropdown is currently:', isOpen ? 'open' : 'closed');
+    whatsyncDebug('[Note Modal] Dropdown is currently:', isOpen ? 'open' : 'closed');
     dropdown.style.display = isOpen ? 'none' : 'block';
-    console.log('[Note Modal] Dropdown display set to:', dropdown.style.display);
+    whatsyncDebug('[Note Modal] Dropdown display set to:', dropdown.style.display);
     if (!isOpen) {
       positionDropdown();
     }
@@ -3344,9 +3346,9 @@ function setupTodoTimeDropdown() {
       return e.target.closest(`.${className}`) || e.target.classList.contains(className);
     });
     
-    console.log('[Note Modal] Document click detected, clicked inside todoTime/dropdown:', clickedInside, e.target);
+    whatsyncDebug('[Note Modal] Document click detected, clicked inside todoTime/dropdown:', clickedInside, e.target);
     if (!clickedInside && !clickedOnSectionHeader) {
-      console.log('[Note Modal] Closing dropdown (clicked outside)');
+      whatsyncDebug('[Note Modal] Closing dropdown (clicked outside)');
       dropdown.style.display = 'none';
     }
   });
@@ -3374,7 +3376,7 @@ function setupTodoTimeDropdown() {
   
   // Handle dropdown item selection
   const dropdownItems = dropdown.querySelectorAll('.note-todo-dropdown-item');
-  console.log('[Note Modal] Found', dropdownItems.length, 'dropdown items in time dropdown');
+  whatsyncDebug('[Note Modal] Found', dropdownItems.length, 'dropdown items in time dropdown');
   dropdownItems.forEach(item => {
     item.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -3391,7 +3393,7 @@ function setupTodoTimeDropdown() {
       
       if (selectedValue === 'Custom Date') {
         // Show date picker
-        console.log('[Note Modal] Custom Date selected, creating date picker...');
+        whatsyncDebug('[Note Modal] Custom Date selected, creating date picker...');
         dropdown.style.display = 'none';
         
         // Get position relative to viewport
@@ -3422,29 +3424,29 @@ function setupTodoTimeDropdown() {
         const todayStr = today.toISOString().split('T')[0];
         datePicker.min = todayStr;
         
-        console.log('[Note Modal] Date picker element created:', datePicker);
-        console.log('[Note Modal] Position:', { left: todoTimeRect.left, top: todoTimeRect.top - 40 });
+        whatsyncDebug('[Note Modal] Date picker element created:', datePicker);
+        whatsyncDebug('[Note Modal] Position:', { left: todoTimeRect.left, top: todoTimeRect.top - 40 });
         
         // Append to body to avoid positioning issues
         document.body.appendChild(datePicker);
         
         // Try to show the picker
         setTimeout(() => {
-          console.log('[Note Modal] Attempting to show date picker...');
+          whatsyncDebug('[Note Modal] Attempting to show date picker...');
           if (datePicker.showPicker) {
             try {
               datePicker.showPicker();
-              console.log('[Note Modal] showPicker() called');
+              whatsyncDebug('[Note Modal] showPicker() called');
             } catch (err) {
               console.error('[Note Modal] showPicker() error:', err);
               // Fallback to click
               datePicker.click();
-              console.log('[Note Modal] Fallback: click() called');
+              whatsyncDebug('[Note Modal] Fallback: click() called');
             }
           } else {
             // Fallback for browsers that don't support showPicker
             datePicker.click();
-            console.log('[Note Modal] showPicker() not supported, using click()');
+            whatsyncDebug('[Note Modal] showPicker() not supported, using click()');
           }
         }, 50);
         
@@ -3477,7 +3479,7 @@ function setupTodoTimeDropdown() {
                 todoTime.insertBefore(textNode, todoTime.firstChild);
               }
             }
-            console.log('[Note Modal] Updated text to:', newText);
+            whatsyncDebug('[Note Modal] Updated text to:', newText);
           }
           
           // Clean up
@@ -3573,12 +3575,12 @@ function setupNoteToolbar(preFilledContent = '') {
   
   // Set pre-filled content if provided (after appending to DOM)
   if (preFilledContent && preFilledContent.trim()) {
-    console.log('[Note Modal] Setting pre-filled content:', preFilledContent.substring(0, 100));
+    whatsyncDebug('[Note Modal] Setting pre-filled content:', preFilledContent.substring(0, 100));
     // Set content immediately
     editorDiv.textContent = preFilledContent;
     // Force a reflow to ensure content is visible
     editorDiv.offsetHeight;
-    console.log('[Note Modal] Content set, editorDiv textContent length:', editorDiv.textContent.length);
+    whatsyncDebug('[Note Modal] Content set, editorDiv textContent length:', editorDiv.textContent.length);
   }
   
   // Store selection state
@@ -3917,9 +3919,9 @@ function setupNoteToolbar(preFilledContent = '') {
       const noteContent = editorDiv.innerHTML;
       const noteText = editorDiv.innerText || editorDiv.textContent;
       
-      console.log('[Content] Creating note from Log WhatsApp Message popup');
-      console.log('[Content] Note text length:', noteText?.length || 0);
-      console.log('[Content] Note content preview:', noteText ? noteText.substring(0, 100) : 'empty');
+      whatsyncDebug('[Content] Creating note from Log WhatsApp Message popup');
+      whatsyncDebug('[Content] Note text length:', noteText?.length || 0);
+      whatsyncDebug('[Content] Note content preview:', noteText ? noteText.substring(0, 100) : 'empty');
       
       // Validate note content
       if (!noteText || !noteText.trim()) {
@@ -3949,11 +3951,11 @@ function setupNoteToolbar(preFilledContent = '') {
       const contactIdInput = document.getElementById('note-contact-id');
       const contactId = contactIdInput ? contactIdInput.value : '';
       
-      console.log('[Content] ===== CREATE NOTE BUTTON CLICKED =====');
-      console.log('[Content] Note text length:', noteText?.length || 0);
-      console.log('[Content] Note HTML length:', noteContent?.length || 0);
-      console.log('[Content] Contact ID input element:', contactIdInput);
-      console.log('[Content] HubSpot Contact ID:', contactId);
+      whatsyncDebug('[Content] ===== CREATE NOTE BUTTON CLICKED =====');
+      whatsyncDebug('[Content] Note text length:', noteText?.length || 0);
+      whatsyncDebug('[Content] Note HTML length:', noteContent?.length || 0);
+      whatsyncDebug('[Content] Contact ID input element:', contactIdInput);
+      whatsyncDebug('[Content] HubSpot Contact ID:', contactId);
       
       if (!contactId) {
         console.error('[Content] ❌ Contact ID not found');
@@ -3966,8 +3968,8 @@ function setupNoteToolbar(preFilledContent = '') {
       const noteModal = document.getElementById('note-modal');
       const followUpType = noteModal?.dataset.followUpType || 'To-do';
       const followUpDate = noteModal?.dataset.followUpDate || null;
-      console.log('[Content] Create todo checkbox checked:', createTodo, followUpType, followUpDate);
-      console.log('[Content] Full note data:', {
+      whatsyncDebug('[Content] Create todo checkbox checked:', createTodo, followUpType, followUpDate);
+      whatsyncDebug('[Content] Full note data:', {
         contactId: contactId,
         noteText: noteText?.substring(0, 100) + (noteText?.length > 100 ? '...' : ''),
         noteTextLength: noteText?.length,
@@ -3979,7 +3981,7 @@ function setupNoteToolbar(preFilledContent = '') {
       createBtn.disabled = true;
       const originalText = createBtn.textContent;
       createBtn.textContent = 'Creating...';
-      console.log('[Content] Button disabled, starting note creation...');
+      whatsyncDebug('[Content] Button disabled, starting note creation...');
       
       // WhatsApp-log mode saves as a native WhatsApp communication (server
       // falls back to a note if the portal refuses); plain mode stays a note.
@@ -3995,15 +3997,15 @@ function setupNoteToolbar(preFilledContent = '') {
                 : 'WhatsApp message logged in HubSpot')
               : (createTodo ? 'Note created + follow-up task scheduled' : 'Note created in HubSpot')
           );
-          console.log('[Content] ✅ Note created successfully!');
-          console.log('[Content] Create note result:', result);
+          whatsyncDebug('[Content] ✅ Note created successfully!');
+          whatsyncDebug('[Content] Create note result:', result);
           
           // Close modal on success
           const modal = document.getElementById('note-modal');
           if (modal) {
-            console.log('[Content] Closing modal...');
+            whatsyncDebug('[Content] Closing modal...');
             modal.remove();
-            console.log('[Content] Modal closed');
+            whatsyncDebug('[Content] Modal closed');
           } else {
             console.warn('[Content] Modal not found for removal');
           }
@@ -4052,10 +4054,10 @@ function setupNoteToolbar(preFilledContent = '') {
           // Re-enable button on error
           createBtn.disabled = false;
           createBtn.textContent = originalText;
-          console.log('[Content] Button re-enabled after error');
+          whatsyncDebug('[Content] Button re-enabled after error');
         })
         .finally(() => {
-          console.log('[Content] =========================================');
+          whatsyncDebug('[Content] =========================================');
         });
     }, true); // Use capture phase to ensure it runs first
   }
@@ -4565,7 +4567,7 @@ function setupNotesEmptyCreateButton(notesSection) {
   notesEmpty.innerHTML = `
     <div class="notes-empty-content">
       <p class="notes-empty-text">No notes found for this contact.</p>
-      <button class="notes-create-btn" id="notes-empty-create-btn" data-contact-id="${contactId}" data-name="${contactName}" data-email="${contactEmail}">
+      <button class="notes-create-btn" id="notes-empty-create-btn" data-contact-id="${escapeHtml(contactId)}" data-name="${escapeHtml(contactName)}" data-email="${escapeHtml(contactEmail)}">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
@@ -4584,8 +4586,8 @@ function setupNotesEmptyCreateButton(notesSection) {
       const contactEmail = createBtn.getAttribute('data-email') || '';
       const contactId = createBtn.getAttribute('data-contact-id') || '';
       
-      console.log('[Content] Create note button clicked from empty state');
-      console.log('[Content] Contact:', contactName, contactEmail, contactId);
+      whatsyncDebug('[Content] Create note button clicked from empty state');
+      whatsyncDebug('[Content] Contact:', contactName, contactEmail, contactId);
       
       // Open note creation modal (same as Note avatar button)
       showNoteModal(contactName, contactEmail, contactId);
@@ -4649,7 +4651,7 @@ function formatNoteItem(note) {
   
   // Debug logging to help troubleshoot (only log if we couldn't find content)
   if (noteText === 'No content') {
-    console.log('[Content] Note has no content:', {
+    whatsyncDebug('[Content] Note has no content:', {
       noteId: note.id,
       hasNoteContent: !!note.noteContent,
       hasNoteHtml: !!note.noteHtml,
@@ -4708,7 +4710,7 @@ function formatNoteItem(note) {
         </div>
       </div>
       <div class="note-item-content" style="display: none;">
-        ${noteText}
+        ${sanitizeRichHtml(noteText)}
       </div>
     </div>
   `;
@@ -4958,7 +4960,7 @@ function setupDealsSection() {
 async function refreshTasksCount(contactId, tasksSection) {
   try {
     const contactIdStr = contactId ? String(contactId) : null;
-    console.log('[Content] Fetching tasks count for contact:', contactIdStr);
+    whatsyncDebug('[Content] Fetching tasks count for contact:', contactIdStr);
     
     if (!contactIdStr) {
       console.warn('[Content] No contact ID provided for tasks count');
@@ -5004,10 +5006,10 @@ async function loadContactTasks(contactId, tasksSection) {
   try {
     const tasks = await fetchTasksFromHubSpot(contactId);
     
-    console.log('[Content] Loaded tasks:', tasks);
-    console.log('[Content] Tasks type:', typeof tasks);
-    console.log('[Content] Is array:', Array.isArray(tasks));
-    console.log('[Content] Tasks count:', Array.isArray(tasks) ? tasks.length : 'N/A');
+    whatsyncDebug('[Content] Loaded tasks:', tasks);
+    whatsyncDebug('[Content] Tasks type:', typeof tasks);
+    whatsyncDebug('[Content] Is array:', Array.isArray(tasks));
+    whatsyncDebug('[Content] Tasks count:', Array.isArray(tasks) ? tasks.length : 'N/A');
     
     // Ensure tasks is an array
     if (!Array.isArray(tasks)) {
@@ -5042,7 +5044,7 @@ async function loadContactTasks(contactId, tasksSection) {
       return !taskContactId || String(taskContactId) === contactIdStr;
     });
     
-    console.log('[Content] Filtered tasks for contact:', filteredTasks.length, 'out of', tasks.length);
+    whatsyncDebug('[Content] Filtered tasks for contact:', filteredTasks.length, 'out of', tasks.length);
     
     if (filteredTasks.length === 0) {
       tasksLoading.style.display = 'none';
@@ -5074,7 +5076,7 @@ async function loadContactTasks(contactId, tasksSection) {
       return getDate(b) - getDate(a); // Most recent first
     });
     
-    console.log('[Content] Sorted tasks:', sortedTasks);
+    whatsyncDebug('[Content] Sorted tasks:', sortedTasks);
     
     // Render tasks directly without month grouping
     let tasksHTML = '';
@@ -5160,7 +5162,7 @@ function groupTasksByMonth(tasks) {
 
 // Function to format a single task item
 function formatTaskItem(task) {
-  console.log('[Content] Formatting task:', task);
+  whatsyncDebug('[Content] Formatting task:', task);
   
   // Handle different date field names from HubSpot
   // Use created date for display (like notes)
@@ -5231,7 +5233,7 @@ function formatTaskItem(task) {
 // Function to fetch tasks from HubSpot
 async function fetchTasksFromHubSpot(contactId) {
   try {
-    console.log('[Content] Fetching tasks for contact:', contactId);
+    whatsyncDebug('[Content] Fetching tasks for contact:', contactId);
     
     const response = await sendExtensionMessage({
       action: 'getHubSpotTasks',
@@ -5239,9 +5241,9 @@ async function fetchTasksFromHubSpot(contactId) {
     });
     
     if (response && response.success) {
-      console.log('[Content] ✅ Tasks fetched successfully');
-      console.log('[Content] Response data type:', typeof response.data);
-      console.log('[Content] Response data:', response.data);
+      whatsyncDebug('[Content] ✅ Tasks fetched successfully');
+      whatsyncDebug('[Content] Response data type:', typeof response.data);
+      whatsyncDebug('[Content] Response data:', response.data);
       
       // Ensure we return an array
       let tasks = response.data || [];
@@ -5263,8 +5265,8 @@ async function fetchTasksFromHubSpot(contactId) {
         }
       }
       
-      console.log('[Content] Final tasks array:', tasks);
-      console.log('[Content] Tasks array length:', tasks.length);
+      whatsyncDebug('[Content] Final tasks array:', tasks);
+      whatsyncDebug('[Content] Tasks array length:', tasks.length);
       
       return Array.isArray(tasks) ? tasks : [];
     } else {
@@ -5281,7 +5283,7 @@ async function fetchTasksFromHubSpot(contactId) {
 async function refreshTicketsCount(contactId, ticketsSection) {
   try {
     const contactIdStr = contactId ? String(contactId) : null;
-    console.log('[Content] Fetching tickets count for contact:', contactIdStr);
+    whatsyncDebug('[Content] Fetching tickets count for contact:', contactIdStr);
     
     if (!contactIdStr) {
       console.warn('[Content] No contact ID provided for tickets count');
@@ -5313,7 +5315,7 @@ async function refreshTicketsCount(contactId, ticketsSection) {
 async function refreshDealsCount(contactId, dealsSection) {
   try {
     const contactIdStr = contactId ? String(contactId) : null;
-    console.log('[Content] Fetching deals count for contact:', contactIdStr);
+    whatsyncDebug('[Content] Fetching deals count for contact:', contactIdStr);
     
     if (!contactIdStr) {
       console.warn('[Content] No contact ID provided for deals count');
@@ -5349,13 +5351,13 @@ async function loadContactDeals(contactId, dealsSection) {
   const dealsCount = dealsSection.querySelector('.deals-count');
   
   try {
-    console.log('[Content] ===== LOADING CONTACT DEALS =====');
-    console.log('[Content] Contact ID:', contactId, '(type:', typeof contactId, ')');
-    console.log('[Content] Deals Section:', dealsSection);
+    whatsyncDebug('[Content] ===== LOADING CONTACT DEALS =====');
+    whatsyncDebug('[Content] Contact ID:', contactId, '(type:', typeof contactId, ')');
+    whatsyncDebug('[Content] Deals Section:', dealsSection);
     
     // Get contactId from section attribute as well (for validation)
     const sectionContactId = dealsSection.getAttribute('data-contact-id');
-    console.log('[Content] Section Contact ID:', sectionContactId);
+    whatsyncDebug('[Content] Section Contact ID:', sectionContactId);
     
     if (contactId !== sectionContactId && String(contactId) !== String(sectionContactId)) {
       console.warn('[Content] ⚠️ Contact ID mismatch! Function param:', contactId, 'vs Section attr:', sectionContactId);
@@ -5369,7 +5371,7 @@ async function loadContactDeals(contactId, dealsSection) {
     // Fetch deals from HubSpot
     const deals = await fetchDealsFromHubSpot(contactId);
     
-    console.log('[Content] Deals received:', deals.length);
+    whatsyncDebug('[Content] Deals received:', deals.length);
     
     dealsLoading.style.display = 'none';
     
@@ -5379,12 +5381,12 @@ async function loadContactDeals(contactId, dealsSection) {
     }
     
     if (deals.length === 0) {
-      console.log('[Content] No deals found, showing empty state');
+      whatsyncDebug('[Content] No deals found, showing empty state');
       dealsEmpty.style.display = 'block';
       // Setup create deal button in empty state
       setupDealsEmptyCreateButton(dealsSection);
     } else {
-      console.log('[Content] Displaying', deals.length, 'deals');
+      whatsyncDebug('[Content] Displaying', deals.length, 'deals');
       // Resolve human stage labels (not raw internal ids) before rendering.
       await ensureDealStageLabels();
       // Display deals
@@ -5496,7 +5498,7 @@ function setupTicketsEmptyCreateButton(ticketsSection) {
   ticketsEmpty.innerHTML = `
     <div class="tickets-empty-content">
       <p class="tickets-empty-text">No tickets found for this contact.</p>
-      <button class="tickets-create-btn" id="tickets-empty-create-btn" data-contact-id="${contactId}" data-name="${contactName}" data-email="${contactEmail}">
+      <button class="tickets-create-btn" id="tickets-empty-create-btn" data-contact-id="${escapeHtml(contactId)}" data-name="${escapeHtml(contactName)}" data-email="${escapeHtml(contactEmail)}">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -5547,7 +5549,7 @@ function setupTicketAssociationLinks(ticketsSection, contactId) {
       link.textContent = 'Associating...';
       
       try {
-        console.log('[Content] Associating ticket:', ticketId, 'with contact:', contactId);
+        whatsyncDebug('[Content] Associating ticket:', ticketId, 'with contact:', contactId);
         
         // Associate the ticket with the contact
         await associateTicketsWithContact(contactId, [ticketId]);
@@ -6083,7 +6085,7 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
         }
       }
       
-      console.log('Segment changed to:', segment);
+      whatsyncDebug('Segment changed to:', segment);
     });
   });
   
@@ -6131,13 +6133,13 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
       const formData = new FormData(form);
       const ticketData = Object.fromEntries(formData);
 
-      console.log('[Ticket Modal] Form submitted:', ticketData);
+      whatsyncDebug('[Ticket Modal] Form submitted:', ticketData);
 
       // Create ticket in HubSpot
       await createHubSpotTicket(ticketData, getLiveContactId());
 
       // Show success
-      console.log('[Ticket Modal] ✅ Ticket created successfully!');
+      whatsyncDebug('[Ticket Modal] ✅ Ticket created successfully!');
       showWhatsyncToast('Ticket created in HubSpot');
       refreshTicketsSidebarSection();
 
@@ -6164,12 +6166,12 @@ function showTicketModal(contactName, contactEmail, contactId, defaultSegment = 
       const formData = new FormData(form);
       const ticketData = Object.fromEntries(formData);
 
-      console.log('[Ticket Modal] Create and add another:', ticketData);
+      whatsyncDebug('[Ticket Modal] Create and add another:', ticketData);
 
       // Create ticket in HubSpot
       await createHubSpotTicket(ticketData, getLiveContactId());
 
-      console.log('[Ticket Modal] ✅ Ticket created successfully!');
+      whatsyncDebug('[Ticket Modal] ✅ Ticket created successfully!');
       showWhatsyncToast('Ticket created in HubSpot');
       refreshTicketsSidebarSection();
 
@@ -6579,7 +6581,7 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
         }
       }
 
-      console.log('[Deal Modal] Segment changed to:', segment);
+      whatsyncDebug('[Deal Modal] Segment changed to:', segment);
     });
   });
   
@@ -6632,7 +6634,7 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
       const formData = new FormData(form);
       const dealData = Object.fromEntries(formData);
 
-      console.log('[Deal Modal] Form submitted:', dealData);
+      whatsyncDebug('[Deal Modal] Form submitted:', dealData);
 
       // Respect the contact tag's live state — if the user removed the contact,
       // don't silently associate the deal with them anyway.
@@ -6642,7 +6644,7 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
       await createHubSpotDeal(dealData, liveContactId || null);
 
       // Show success
-      console.log('[Deal Modal] ✅ Deal created successfully!');
+      whatsyncDebug('[Deal Modal] ✅ Deal created successfully!');
       showWhatsyncToast('Deal created in HubSpot');
 
       // Close modal
@@ -6655,7 +6657,7 @@ function showDealModal(contactName, contactEmail, contactId, defaultSegment = 'c
     }
   });
   
-  console.log('[Deal Modal] ✅ Deal modal initialized');
+  whatsyncDebug('[Deal Modal] ✅ Deal modal initialized');
 }
 
 // Function to show task creation modal
@@ -7730,13 +7732,13 @@ function showTaskModal(contactName, contactEmail, contactId) {
         const dateValue = dateInput ? dateInput.value : null;
         const timeValue = timeInput ? timeInput.value : '08:00';
         
-        console.log('[Task Modal] Creating task:', taskData);
-        console.log('[Task Modal] Date:', dateValue, 'Time:', timeValue);
+        whatsyncDebug('[Task Modal] Creating task:', taskData);
+        whatsyncDebug('[Task Modal] Date:', dateValue, 'Time:', timeValue);
         
         // Create task in HubSpot
         await createHubSpotTask(taskData, contactId, dateValue, timeValue);
         
-        console.log('[Task Modal] ✅ Task created successfully!');
+        whatsyncDebug('[Task Modal] ✅ Task created successfully!');
         
         // Close modal
         closeModal();
@@ -7778,10 +7780,10 @@ function showTaskModal(contactName, contactEmail, contactId) {
 
 // Function to create task in HubSpot
 async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
-  console.log('[Content] ===== CREATE TASK REQUEST =====');
-  console.log('[Content] Task data:', taskData);
-  console.log('[Content] Contact ID:', contactId);
-  console.log('[Content] Date:', dateValue, 'Time:', timeValue);
+  whatsyncDebug('[Content] ===== CREATE TASK REQUEST =====');
+  whatsyncDebug('[Content] Task data:', taskData);
+  whatsyncDebug('[Content] Contact ID:', contactId);
+  whatsyncDebug('[Content] Date:', dateValue, 'Time:', timeValue);
   
   try {
     // Build task data object with flexible format support
@@ -7859,7 +7861,7 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
       taskPayload.ticketId = taskData.ticketId;
     }
     
-    console.log('[Content] Task payload:', taskPayload);
+    whatsyncDebug('[Content] Task payload:', taskPayload);
     
     // Call edge function to create task
     const response = await sendExtensionMessage({
@@ -7867,10 +7869,10 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
       data: taskPayload
     });
     
-    console.log('[Content] Task creation response:', response);
+    whatsyncDebug('[Content] Task creation response:', response);
     
     if (response && response.success) {
-      console.log('[Content] ✅ Task created successfully!');
+      whatsyncDebug('[Content] ✅ Task created successfully!');
       const newTaskId = response.data?.id || response.data?.hs_object_id;
       automations.taskCreated({ contactId, taskId: newTaskId }).catch(() => {});
       return response.data;
@@ -7892,9 +7894,9 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
 
 // Function to create ticket in HubSpot
 async function createHubSpotTicket(ticketData, contactId) {
-  console.log('[Content] ===== CREATE TICKET REQUEST =====');
-  console.log('[Content] Ticket data:', ticketData);
-  console.log('[Content] Contact ID:', contactId);
+  whatsyncDebug('[Content] ===== CREATE TICKET REQUEST =====');
+  whatsyncDebug('[Content] Ticket data:', ticketData);
+  whatsyncDebug('[Content] Contact ID:', contactId);
   
   try {
     // Map form fields to HubSpot ticket properties
@@ -7941,7 +7943,7 @@ async function createHubSpotTicket(ticketData, contactId) {
       properties.hs_ticket_source = ticketData.source;
     }
 
-    console.log('[Content] Mapped HubSpot properties:', properties);
+    whatsyncDebug('[Content] Mapped HubSpot properties:', properties);
     
     // Prepare ticket data for edge function
     // Edge function expects: { properties: { ... } }
@@ -7949,7 +7951,7 @@ async function createHubSpotTicket(ticketData, contactId) {
       properties: properties
     };
     
-    console.log('[Content] Sending ticket creation request to background...');
+    whatsyncDebug('[Content] Sending ticket creation request to background...');
 
     const response = await sendExtensionMessage({
       action: 'createHubSpotTicket',
@@ -7957,15 +7959,15 @@ async function createHubSpotTicket(ticketData, contactId) {
       contactId: contactId // Pass contactId for logging
     });
     
-    console.log('[Content] Response received from background script');
-    console.log('[Content] Response success:', response?.success);
+    whatsyncDebug('[Content] Response received from background script');
+    whatsyncDebug('[Content] Response success:', response?.success);
 
     if (!response) {
       throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
     }
 
     if (response.success) {
-      console.log('[Content] ✅ Ticket created successfully!');
+      whatsyncDebug('[Content] ✅ Ticket created successfully!');
       
       // Trigger automation after successful ticket creation
       if (response.data && (response.data.id || response.data.hs_object_id)) {
@@ -8003,9 +8005,9 @@ async function createHubSpotTicket(ticketData, contactId) {
 
 // Function to create deal in HubSpot
 async function createHubSpotDeal(dealData, contactId) {
-  console.log('[Content] ===== CREATE DEAL REQUEST =====');
-  console.log('[Content] Deal data:', dealData);
-  console.log('[Content] Contact ID:', contactId);
+  whatsyncDebug('[Content] ===== CREATE DEAL REQUEST =====');
+  whatsyncDebug('[Content] Deal data:', dealData);
+  whatsyncDebug('[Content] Contact ID:', contactId);
   
   try {
     const syncSettings = await getSyncSettings();
@@ -8091,9 +8093,9 @@ async function createHubSpotDeal(dealData, contactId) {
       properties.hubspot_owner_id = ownerId;
     }
     
-    console.log('[Content] Mapped HubSpot properties:', properties);
-    console.log('[Content] Owner ID:', ownerId);
-    console.log('[Content] Contact ID:', contactId);
+    whatsyncDebug('[Content] Mapped HubSpot properties:', properties);
+    whatsyncDebug('[Content] Owner ID:', ownerId);
+    whatsyncDebug('[Content] Contact ID:', contactId);
     
     // Prepare deal data for edge function
     // Backend expects: { action: 'createDeal', data: { contactId, ownerId, properties } }
@@ -8103,7 +8105,7 @@ async function createHubSpotDeal(dealData, contactId) {
       ownerId: ownerId || null       // For deal owner
     };
     
-    console.log('[Content] Sending deal creation request to background...');
+    whatsyncDebug('[Content] Sending deal creation request to background...');
 
     // Route through the background script so the request carries the user's
     // session (auth headers, token refresh, timeout) like every other edge call.
@@ -8121,8 +8123,8 @@ async function createHubSpotDeal(dealData, contactId) {
     }
     const result = response.data;
 
-    console.log('[Content] ✅ Deal created successfully!');
-    console.log('[Content] Deal ID:', result.id || result.hs_object_id);
+    whatsyncDebug('[Content] ✅ Deal created successfully!');
+    whatsyncDebug('[Content] Deal ID:', result.id || result.hs_object_id);
     
     const dealId = result.id || result.hs_object_id;
     automations.dealCreated({ contactId, dealId }).catch(() => {});
@@ -8133,7 +8135,7 @@ async function createHubSpotDeal(dealData, contactId) {
     // Log activity to Supabase database
     if (dealId) {
       try {
-        console.log('[Content] Logging deal creation activity to Supabase...');
+        whatsyncDebug('[Content] Logging deal creation activity to Supabase...');
         await logDealActivityToSupabase({
           dealId: dealId,
           dealName: dealData.dealName,
@@ -8144,7 +8146,7 @@ async function createHubSpotDeal(dealData, contactId) {
           dealType: dealData.dealType,
           priority: dealData.priority
         });
-        console.log('[Content] ✅ Activity logged to Supabase');
+        whatsyncDebug('[Content] ✅ Activity logged to Supabase');
       } catch (activityError) {
         console.warn('[Content] ⚠️ Failed to log activity to Supabase:', activityError);
         // Don't throw - deal was created successfully, activity logging is secondary
@@ -8221,9 +8223,9 @@ async function logDealActivityToSupabase(activityData) {
       return;
     }
     
-    console.log('[Content] Logging deal activity to hubspot_contact_logs via background script');
-    console.log('[Content] Activity data:', activityData);
-    console.log('[Content] User ID:', userId);
+    whatsyncDebug('[Content] Logging deal activity to hubspot_contact_logs via background script');
+    whatsyncDebug('[Content] Activity data:', activityData);
+    whatsyncDebug('[Content] User ID:', userId);
     
     // Extract deal ID
     const dealId = activityData.dealId ? String(activityData.dealId) : null;
@@ -8244,8 +8246,8 @@ async function logDealActivityToSupabase(activityData) {
       dealPriority: activityData.priority || null
     };
     
-    console.log('[Content] Sending log request to background script...');
-    console.log('[Content] Log data:', JSON.stringify(logData, null, 2));
+    whatsyncDebug('[Content] Sending log request to background script...');
+    whatsyncDebug('[Content] Log data:', JSON.stringify(logData, null, 2));
     
     // Send to background script to handle logging (same pattern as tickets/tasks/notes)
     const response = await sendExtensionMessage({
@@ -8254,8 +8256,8 @@ async function logDealActivityToSupabase(activityData) {
     });
     
     if (response && response.success) {
-      console.log('[Content] ✅ Deal activity logged successfully to hubspot_contact_logs');
-      console.log('[Content] Log result:', response.data);
+      whatsyncDebug('[Content] ✅ Deal activity logged successfully to hubspot_contact_logs');
+      whatsyncDebug('[Content] Log result:', response.data);
       return response.data;
     } else {
       const errorMsg = response?.error || 'Failed to log deal activity';
@@ -8322,8 +8324,8 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
         addSelectedBtn.disabled = true;
         addSelectedBtn.textContent = 'Saving...';
         
-        console.log('[Ticket Modal] Selected tickets:', Array.from(selectedTickets));
-        console.log('[Ticket Modal] Currently associated:', Array.from(currentlyAssociatedTickets));
+        whatsyncDebug('[Ticket Modal] Selected tickets:', Array.from(selectedTickets));
+        whatsyncDebug('[Ticket Modal] Currently associated:', Array.from(currentlyAssociatedTickets));
         
         // Determine which tickets to associate and disassociate
         const ticketsToAssociate = Array.from(selectedTickets).filter(
@@ -8333,8 +8335,8 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
           ticketId => !selectedTickets.has(ticketId)
         );
         
-        console.log('[Ticket Modal] Tickets to associate:', ticketsToAssociate);
-        console.log('[Ticket Modal] Tickets to disassociate:', ticketsToDisassociate);
+        whatsyncDebug('[Ticket Modal] Tickets to associate:', ticketsToAssociate);
+        whatsyncDebug('[Ticket Modal] Tickets to disassociate:', ticketsToDisassociate);
         
         // Associate new tickets
         if (ticketsToAssociate.length > 0) {
@@ -8352,7 +8354,7 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
           currentlyAssociatedTickets.add(ticketId);
         });
         
-        console.log('[Ticket Modal] Successfully updated ticket associations');
+        whatsyncDebug('[Ticket Modal] Successfully updated ticket associations');
         
         // Close modal
         if (closeModal) {
@@ -8404,12 +8406,12 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
       // Fetch all tickets and associated tickets in parallel
       // fetchTicketsFromHubSpot returns tickets associated with the contact
       // For "Add existing", we need ALL tickets (not filtered by contact)
-      console.log('[Ticket Modal] Loading all tickets for "Add existing" panel');
+      whatsyncDebug('[Ticket Modal] Loading all tickets for "Add existing" panel');
       
       let allTicketsList = [];
       try {
         allTicketsList = await fetchAllTicketsFromHubSpot(null);
-        console.log('[Ticket Modal] Fetched all tickets:', allTicketsList.length);
+        whatsyncDebug('[Ticket Modal] Fetched all tickets:', allTicketsList.length);
       } catch (error) {
         console.error('[Ticket Modal] Error fetching all tickets:', error);
         // Try alternative: use getHubSpotTickets with fetchAll flag
@@ -8421,7 +8423,7 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
           });
           if (response && response.success && response.data) {
             allTicketsList = response.data;
-            console.log('[Ticket Modal] Fetched all tickets via getHubSpotTickets:', allTicketsList.length);
+            whatsyncDebug('[Ticket Modal] Fetched all tickets via getHubSpotTickets:', allTicketsList.length);
           }
         } catch (err) {
           console.error('[Ticket Modal] Error with getHubSpotTickets fallback:', err);
@@ -8430,7 +8432,7 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
       
       // Get tickets currently associated with this contact
       const associatedTicketsList = await fetchTicketsFromHubSpot(contactId).catch(() => []);
-      console.log('[Ticket Modal] Fetched associated tickets:', associatedTicketsList.length);
+      whatsyncDebug('[Ticket Modal] Fetched associated tickets:', associatedTicketsList.length);
       
       // Track currently associated tickets
       currentlyAssociatedTickets.clear();
@@ -8543,14 +8545,15 @@ function setupAddExistingTicketForm(modal, contactId, closeModal) {
   // Function to format ticket item
   function formatTicketItem(ticket) {
     const ticketId = ticket.id || ticket.hs_object_id || '';
-    const subject = ticket.properties?.subject || ticket.subject || 'Untitled Ticket';
+    const subject = escapeHtml(ticket.properties?.subject || ticket.subject || 'Untitled Ticket');
+    const safeTicketId = escapeHtml(ticketId);
     const isChecked = selectedTickets.has(String(ticketId));
     
     return `
       <div class="ticket-item-row">
         <input type="checkbox" 
                class="ticket-item-checkbox" 
-               data-ticket-id="${ticketId}"
+               data-ticket-id="${safeTicketId}"
                ${isChecked ? 'checked' : ''}>
         <label class="ticket-item-label">${subject}</label>
       </div>
@@ -8809,7 +8812,7 @@ function setupAddExistingDealForm(modal, contactId, closeModal) {
 // Function to fetch tickets from HubSpot
 async function fetchTicketsFromHubSpot(contactId) {
   try {
-    console.log('[Content] Fetching tickets from HubSpot for contact:', contactId);
+    whatsyncDebug('[Content] Fetching tickets from HubSpot for contact:', contactId);
     
     // Call edge function to get tickets
     const response = await sendExtensionMessage({
@@ -8831,8 +8834,8 @@ async function fetchTicketsFromHubSpot(contactId) {
 // Function to fetch deals from HubSpot for a contact
 async function fetchDealsFromHubSpot(contactId) {
   try {
-    console.log('[Content] ===== FETCHING DEALS FROM HUBSPOT =====');
-    console.log('[Content] Contact ID:', contactId, '(type:', typeof contactId, ')');
+    whatsyncDebug('[Content] ===== FETCHING DEALS FROM HUBSPOT =====');
+    whatsyncDebug('[Content] Contact ID:', contactId, '(type:', typeof contactId, ')');
     
     if (!contactId) {
       console.warn('[Content] No contact ID provided for fetching deals');
@@ -8841,7 +8844,7 @@ async function fetchDealsFromHubSpot(contactId) {
     
     // Ensure contactId is a string
     const contactIdStr = String(contactId);
-    console.log('[Content] Calling background script with contactId:', contactIdStr);
+    whatsyncDebug('[Content] Calling background script with contactId:', contactIdStr);
     
     // Call edge function to get deals
     const response = await sendExtensionMessage({
@@ -8849,15 +8852,15 @@ async function fetchDealsFromHubSpot(contactId) {
       contactId: contactIdStr
     });
     
-    console.log('[Content] Deals fetch response:', response);
+    whatsyncDebug('[Content] Deals fetch response:', response);
     
     if (response && response.success && response.data) {
       const deals = response.data;
-      console.log('[Content] ✅ Deals fetched successfully:', deals.length, 'deals found for contact', contactIdStr);
+      whatsyncDebug('[Content] ✅ Deals fetched successfully:', deals.length, 'deals found for contact', contactIdStr);
       
       // Additional validation: Log deal details for debugging
       if (deals.length > 0) {
-        console.log('[Content] Sample deal data:', deals.slice(0, 2).map(d => ({
+        whatsyncDebug('[Content] Sample deal data:', deals.slice(0, 2).map(d => ({
           id: d.id,
           name: d.properties?.dealname,
           associations: d.associations
@@ -8879,7 +8882,7 @@ async function fetchDealsFromHubSpot(contactId) {
 // Function to search tickets in HubSpot
 async function searchTicketsInHubSpot(searchTerm, contactId) {
   try {
-    console.log('[Content] Searching tickets in HubSpot:', searchTerm);
+    whatsyncDebug('[Content] Searching tickets in HubSpot:', searchTerm);
     
     // Call edge function to search tickets
     const response = await sendExtensionMessage({
@@ -8902,7 +8905,7 @@ async function searchTicketsInHubSpot(searchTerm, contactId) {
 // Function to fetch all tickets from HubSpot (not just associated ones)
 async function fetchAllTicketsFromHubSpot(contactId) {
   try {
-    console.log('[Content] Fetching all tickets from HubSpot (not filtered by contact)');
+    whatsyncDebug('[Content] Fetching all tickets from HubSpot (not filtered by contact)');
     
     // Try using getAllHubSpotTickets first
     let response = await sendExtensionMessage({
@@ -8912,12 +8915,12 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     });
     
     if (response && response.success && response.data && response.data.length > 0) {
-      console.log('[Content] Fetched all tickets via getAllHubSpotTickets:', response.data.length);
+      whatsyncDebug('[Content] Fetched all tickets via getAllHubSpotTickets:', response.data.length);
       return response.data;
     }
     
     // Fallback 1: Use getHubSpotTickets with fetchAll flag
-    console.log('[Content] Fallback 1: Trying getHubSpotTickets with fetchAll flag');
+    whatsyncDebug('[Content] Fallback 1: Trying getHubSpotTickets with fetchAll flag');
     response = await sendExtensionMessage({
       action: 'getHubSpotTickets',
       contactId: null,
@@ -8925,12 +8928,12 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     });
     
     if (response && response.success && response.data && response.data.length > 0) {
-      console.log('[Content] Fetched all tickets via getHubSpotTickets:', response.data.length);
+      whatsyncDebug('[Content] Fetched all tickets via getHubSpotTickets:', response.data.length);
       return response.data;
     }
     
     // Fallback 2: Use search with wildcard pattern
-    console.log('[Content] Fallback 2: Trying search with wildcard');
+    whatsyncDebug('[Content] Fallback 2: Trying search with wildcard');
     response = await sendExtensionMessage({
       action: 'searchHubSpotTickets',
       searchTerm: '*', // Wildcard to get all
@@ -8939,12 +8942,12 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     });
     
     if (response && response.success && response.data && response.data.length > 0) {
-      console.log('[Content] Fetched all tickets via search wildcard:', response.data.length);
+      whatsyncDebug('[Content] Fetched all tickets via search wildcard:', response.data.length);
       return response.data;
     }
     
     // Fallback 3: Use search with empty term
-    console.log('[Content] Fallback 3: Trying search with empty term');
+    whatsyncDebug('[Content] Fallback 3: Trying search with empty term');
     response = await sendExtensionMessage({
       action: 'searchHubSpotTickets',
       searchTerm: '',
@@ -8953,7 +8956,7 @@ async function fetchAllTicketsFromHubSpot(contactId) {
     });
     
     if (response && response.success && response.data) {
-      console.log('[Content] Fetched tickets via search empty term:', response.data.length);
+      whatsyncDebug('[Content] Fetched tickets via search empty term:', response.data.length);
       return response.data;
     }
     
@@ -8968,7 +8971,7 @@ async function fetchAllTicketsFromHubSpot(contactId) {
 // Function to associate tickets with a contact
 async function associateTicketsWithContact(contactId, ticketIds) {
   try {
-    console.log('[Content] Associating tickets with contact:', contactId, ticketIds);
+    whatsyncDebug('[Content] Associating tickets with contact:', contactId, ticketIds);
     
     const response = await sendExtensionMessage({
       action: 'associateTicketsWithContact',
@@ -8977,7 +8980,7 @@ async function associateTicketsWithContact(contactId, ticketIds) {
     });
     
     if (response && response.success) {
-      console.log('[Content] Successfully associated tickets');
+      whatsyncDebug('[Content] Successfully associated tickets');
       return response.data;
     } else {
       throw new Error(response?.error || 'Failed to associate tickets');
@@ -8991,7 +8994,7 @@ async function associateTicketsWithContact(contactId, ticketIds) {
 // Function to disassociate tickets from a contact
 async function disassociateTicketsFromContact(contactId, ticketIds) {
   try {
-    console.log('[Content] Disassociating tickets from contact:', contactId, ticketIds);
+    whatsyncDebug('[Content] Disassociating tickets from contact:', contactId, ticketIds);
     
     const response = await sendExtensionMessage({
       action: 'disassociateTicketsFromContact',
@@ -9000,7 +9003,7 @@ async function disassociateTicketsFromContact(contactId, ticketIds) {
     });
     
     if (response && response.success) {
-      console.log('[Content] Successfully disassociated tickets');
+      whatsyncDebug('[Content] Successfully disassociated tickets');
       return response.data;
     } else {
       throw new Error(response?.error || 'Failed to disassociate tickets');
@@ -9363,19 +9366,19 @@ async function logWhatsAppConversation(contactId, body, createTodo = false, foll
 
 // Function to create a note in HubSpot (via background script)
 async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, followUpType = null, followUpDate = null) {
-  console.log('[Content] ===== CREATE HUBSPOT NOTE =====');
-  console.log('[Content] HubSpot Contact ID:', contactId);
-  console.log('[Content] Note text length:', noteText?.length || 0);
-  console.log('[Content] Note text preview:', noteText ? `"${noteText.substring(0, 100)}${noteText.length > 100 ? '...' : ''}"` : 'undefined');
-  console.log('[Content] Note HTML length:', noteHtml?.length || 0);
-  console.log('[Content] Create todo:', createTodo);
+  whatsyncDebug('[Content] ===== CREATE HUBSPOT NOTE =====');
+  whatsyncDebug('[Content] HubSpot Contact ID:', contactId);
+  whatsyncDebug('[Content] Note text length:', noteText?.length || 0);
+  whatsyncDebug('[Content] Note text preview:', noteText ? `"${noteText.substring(0, 100)}${noteText.length > 100 ? '...' : ''}"` : 'undefined');
+  whatsyncDebug('[Content] Note HTML length:', noteHtml?.length || 0);
+  whatsyncDebug('[Content] Create todo:', createTodo);
   
   if (!contactId) {
     console.error('[Content] ❌ Validation failed: Contact ID is required');
     throw new Error('Contact ID is required to create a note');
   }
   
-  console.log('[Content] ✅ Validation passed, sending message to background script...');
+  whatsyncDebug('[Content] ✅ Validation passed, sending message to background script...');
   
   // Convert contactId to number if it's a string
   const numericContactId = typeof contactId === 'string' ? parseInt(contactId, 10) : contactId;
@@ -9397,21 +9400,21 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, foll
     }
   };
   
-  console.log('[Content] Creating note for contact:', numericContactId);
+  whatsyncDebug('[Content] Creating note for contact:', numericContactId);
 
   try {
-    console.log('[Content] Sending message to background script...');
+    whatsyncDebug('[Content] Sending message to background script...');
     const response = await sendExtensionMessage(messagePayload);
 
-    console.log('[Content] Response received from background script');
-    console.log('[Content] Response success:', response?.success);
+    whatsyncDebug('[Content] Response received from background script');
+    whatsyncDebug('[Content] Response success:', response?.success);
 
     if (!response) {
       throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
     }
 
     if (response.success) {
-      console.log('[Content] ✅ Note created successfully!');
+      whatsyncDebug('[Content] ✅ Note created successfully!');
       // Fire note_created automations for this contact (non-blocking).
       automations.noteCreated({ contactId: numericContactId, noteId: response.data?.id }).catch(() => {});
       return response.data;
@@ -9427,7 +9430,7 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, foll
     if (error.stack) {
       console.error('[Content] Error stack:', error.stack);
     }
-    console.log('[Content] =========================================');
+    whatsyncDebug('[Content] =========================================');
     throw error;
   }
 }
@@ -9435,11 +9438,11 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, foll
 // Function to check HubSpot CRM for phone number match (via background script)
 async function checkHubSpotContact(phoneNumber) {
   if (!phoneNumber) {
-    console.log('[Content] No phone number to check');
+    whatsyncDebug('[Content] No phone number to check');
     return null;
   }
   
-  console.log('[Content] Sending HubSpot search request for phone:', phoneNumber);
+  whatsyncDebug('[Content] Sending HubSpot search request for phone:', phoneNumber);
   
   try {
     const response = await sendExtensionMessage({
@@ -9447,15 +9450,15 @@ async function checkHubSpotContact(phoneNumber) {
       phoneNumber: phoneNumber
     });
     
-    console.log('[Content] Received response from background:', response);
+    whatsyncDebug('[Content] Received response from background:', response);
     
     if (response) {
       if (response.success) {
         if (response.data) {
-          console.log('[Content] ✅ HubSpot Contact Match Found:', response.data);
+          whatsyncDebug('[Content] ✅ HubSpot Contact Match Found:', response.data);
           return response.data;
         } else {
-          console.log('[Content] ⚠️ No matching contacts found in HubSpot for:', phoneNumber);
+          whatsyncDebug('[Content] ⚠️ No matching contacts found in HubSpot for:', phoneNumber);
           return null;
         }
       } else if (response.error) {
@@ -9487,7 +9490,7 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
     ? maskPhoneForPrivacy(hubspotPhoneFormat)
     : hubspotPhoneFormat;
 
-  console.log('[Privacy] mask_phone check (Create Contact form):', {
+  whatsyncDebug('[Privacy] mask_phone check (Create Contact form):', {
     mask_phone: privacy.mask_phone,
     rawPhone: hubspotPhoneFormat || '(empty)',
     displayPhone: displayPhone || '(empty)',
@@ -9624,7 +9627,7 @@ async function getPrivacySettings() {
     const response = await sendExtensionMessage({ action: 'getPrivacySettings' });
     if (!response) return DEFAULT_PRIVACY;
     if (response?.success && response.privacy) {
-      console.log('[Privacy] Fetched from backend:', response.privacy);
+      whatsyncDebug('[Privacy] Fetched from backend:', response.privacy);
       const p = response.privacy;
       return {
         mask_phone: !!p.mask_phone,
@@ -9660,6 +9663,39 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// Preserve safe HubSpot note formatting without allowing CRM-controlled HTML
+// to inject scripts, handlers, embedded content, or unsafe links into WhatsApp.
+function sanitizeRichHtml(value) {
+  const template = document.createElement('template');
+  template.innerHTML = String(value ?? '');
+  const allowedTags = new Set([
+    'P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'UL', 'OL', 'LI',
+    'BLOCKQUOTE', 'CODE', 'PRE', 'SPAN', 'A'
+  ]);
+
+  Array.from(template.content.querySelectorAll('*')).forEach((element) => {
+    if (!allowedTags.has(element.tagName)) {
+      element.replaceWith(...Array.from(element.childNodes));
+      return;
+    }
+
+    const href = element.tagName === 'A' ? element.getAttribute('href') : null;
+    Array.from(element.attributes).forEach((attribute) => element.removeAttribute(attribute.name));
+    if (element.tagName === 'A' && href) {
+      try {
+        const url = new URL(href, 'https://whatsync.io');
+        if (['http:', 'https:', 'mailto:'].includes(url.protocol)) {
+          element.setAttribute('href', url.href);
+          element.setAttribute('target', '_blank');
+          element.setAttribute('rel', 'noopener noreferrer');
+        }
+      } catch { /* Keep malformed links inert. */ }
+    }
+  });
+
+  return template.innerHTML;
 }
 
 // Map hubspot_property to display label
@@ -9815,7 +9851,7 @@ async function getEnabledActionFields(userId) {
   const enabledActions = actionFields.filter(
     (field) => field.field_type === 'action' && field.enabled === true
   );
-  console.log(`[Action Fields] ✅ Fetched ${enabledActions.length} enabled action fields for user`);
+  whatsyncDebug(`[Action Fields] ✅ Fetched ${enabledActions.length} enabled action fields for user`);
   return enabledActions;
 }
 
@@ -10013,12 +10049,12 @@ async function renderAboutSection(contact, userId, privacyOverride = null) {
  */
 async function refreshAboutSection() {
   if (!currentContactData || !currentPhoneNumber) {
-    console.log('[Sidebar Refresh] No contact data stored, cannot refresh');
+    whatsyncDebug('[Sidebar Refresh] No contact data stored, cannot refresh');
     return;
   }
   
   try {
-    console.log('[Sidebar Refresh] 🔄 Refreshing about section...');
+    whatsyncDebug('[Sidebar Refresh] 🔄 Refreshing about section...');
     
     // Get userId
     const result = await extensionStorageGet('external_auth_session');
@@ -10041,7 +10077,7 @@ async function refreshAboutSection() {
       setupAboutCollapsible();
       setupEditableContactFields();
       setupOwnerNameResolution();
-      console.log('[Sidebar Refresh] ✅ About section refreshed successfully');
+      whatsyncDebug('[Sidebar Refresh] ✅ About section refreshed successfully');
     } else {
       console.warn('[Sidebar Refresh] About section not found in DOM');
     }
@@ -10647,7 +10683,7 @@ async function getWhatsyncState() {
 // State screens shown in the sidebar when we can't show CRM data yet.
 function renderSignInState(sidebarContent) {
   sidebarContent.innerHTML = `
-    <div class="ws-state ws-login-form-state">
+    <div class="ws-state">
       <div class="ws-state-icon">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
@@ -10656,13 +10692,8 @@ function renderSignInState(sidebarContent) {
         </svg>
       </div>
       <h4>Sign in to WhatSync</h4>
-      <p>Log in to sync HubSpot CRM details with your chats.</p>
-      <form class="ws-inline-login" id="ws-inline-login-form" autocomplete="on">
-        <input type="email" id="ws-login-email" class="ws-login-input" placeholder="Email" autocomplete="username" required />
-        <input type="password" id="ws-login-password" class="ws-login-input" placeholder="Password" autocomplete="current-password" required />
-        <div class="ws-login-error" id="ws-login-error" style="display:none"></div>
-        <button type="submit" class="ws-state-btn ws-login-submit" id="ws-login-submit-btn">Sign in</button>
-      </form>
+      <p>Open the secure extension window to sign in, then return to this chat.</p>
+      <button type="button" class="ws-state-btn" id="ws-open-popup-btn">Open secure sign in</button>
       <p class="ws-state-hint">
         Don't have an account?
         <a href="https://whatsync.io/auth" target="_blank" rel="noopener noreferrer" class="ws-state-link">Sign up free</a>
@@ -10670,66 +10701,11 @@ function renderSignInState(sidebarContent) {
     </div>
   `;
 
-  const form = sidebarContent.querySelector('#ws-inline-login-form');
-  const emailInput = sidebarContent.querySelector('#ws-login-email');
-  const passwordInput = sidebarContent.querySelector('#ws-login-password');
-  const errorDiv = sidebarContent.querySelector('#ws-login-error');
-  const submitBtn = sidebarContent.querySelector('#ws-login-submit-btn');
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = emailInput.value.trim();
-    const password = passwordInput.value;
-    if (!email || !password) return;
-
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Signing in…';
-    errorDiv.style.display = 'none';
-
-    try {
-      const edgeUrl = `${typeof EDGE_FUNCTIONS_CONFIG !== 'undefined' ? EDGE_FUNCTIONS_CONFIG.url : 'https://ogsvchujqpayuckxuwdf.supabase.co'}/functions/v1/external-auth`;
-      const anonKey = typeof EDGE_FUNCTIONS_CONFIG !== 'undefined' ? EDGE_FUNCTIONS_CONFIG.anonKey : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc3ZjaHVqcXBheXVja3h1d2RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzU3MzIsImV4cCI6MjA5NTk1MTczMn0.naUOzsjvZk5BT6kUM-eV1g4JxPhBogkBu8gb1Rg0Z8M';
-
-      const response = await fetch(edgeUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: anonKey,
-          Authorization: `Bearer ${anonKey}`,
-        },
-        body: JSON.stringify({ action: 'signIn', email, password }),
-      });
-
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.error) {
-        throw new Error(data.error || `Login failed (${response.status})`);
-      }
-      if (!data.user || !data.session) {
-        throw new Error('Unexpected server response. Please try again.');
-      }
-
-      const session = data.session;
-      await chrome.storage.local.set({
-        userLoggedIn: true,
-        userId: data.user.id,
-        accessToken: session.access_token || null,
-        refreshToken: session.refresh_token || null,
-        loginTimestamp: Date.now(),
-        external_auth_session: { ...session, user: data.user },
-        userProfile: {
-          id: data.user.id,
-          email: data.user.email || email,
-          name: data.user.user_metadata?.full_name || data.user.user_metadata?.name || email.split('@')[0],
-        },
-      });
-
-      // Refresh sidebar now that we're logged in — no redirect needed.
-      updateSidebarContent();
-    } catch (err) {
-      errorDiv.textContent = err.message || 'Sign in failed. Please try again.';
-      errorDiv.style.display = 'block';
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Sign in';
+  const openButton = sidebarContent.querySelector('#ws-open-popup-btn');
+  openButton?.addEventListener('click', async () => {
+    const result = await sendExtensionMessage({ action: 'openPopup' });
+    if (!result?.opened) {
+      window.open('https://whatsync.io/auth', '_blank', 'noopener,noreferrer');
     }
   });
 }
@@ -10803,17 +10779,17 @@ async function updateSidebarContent(known = null) {
   } else {
     // Main div exists - extract phone and check HubSpot
     // Phone extraction happens when sidebar shows
-    console.log('[Sidebar] Sidebar is showing - extracting phone number...');
+    whatsyncDebug('[Sidebar] Sidebar is showing - extracting phone number...');
     return (known?.phone ? Promise.resolve(known.phone) : extractPhoneFromChat()).then(async extractedPhone => {
       if (!isCurrent()) return;
 
       if (extractedPhone) {
-        console.log('[Sidebar] ✅ Extracted Phone:', extractedPhone);
+        whatsyncDebug('[Sidebar] ✅ Extracted Phone:', extractedPhone);
         const contacts = known?.contact ? [known.contact] : await checkHubSpotContact(extractedPhone);
         if (!isCurrent()) return;
 
         if (contacts && contacts.length > 0) {
-          console.log('Matching contact found in HubSpot:', contacts);
+          whatsyncDebug('Matching contact found in HubSpot:', contacts);
           const html = await formatContactDetails(contacts, extractedPhone);
           if (!isCurrent()) return;
           sidebarContent.innerHTML = html;
@@ -10870,7 +10846,7 @@ async function updateSidebarContent(known = null) {
             if (ticketsSection) {
               const contactIdAttr = ticketsSection.getAttribute('data-contact-id');
               if (contactIdAttr) {
-                console.log('[Content] Loading initial tickets count for contact:', contactIdAttr);
+                whatsyncDebug('[Content] Loading initial tickets count for contact:', contactIdAttr);
                 refreshTicketsCount(contactIdAttr, ticketsSection).catch(error => {
                   console.error('[Content] Error loading initial tickets count:', error);
                 });
@@ -10881,7 +10857,7 @@ async function updateSidebarContent(known = null) {
             if (tasksSection) {
               const contactIdAttr = tasksSection.getAttribute('data-contact-id');
               if (contactIdAttr) {
-                console.log('[Content] Loading initial tasks count for contact:', contactIdAttr);
+                whatsyncDebug('[Content] Loading initial tasks count for contact:', contactIdAttr);
                 refreshTasksCount(contactIdAttr, tasksSection).catch(error => {
                   console.error('[Content] Error loading initial tasks count:', error);
                 });
@@ -11002,7 +10978,7 @@ function injectSidebar() {
   
   document.body.appendChild(sidebar);
   sidebar.querySelector('.ws-refresh-contact')?.addEventListener('click', () => updateSidebarContent());
-  console.log('Sidebar injected successfully');
+  whatsyncDebug('Sidebar injected successfully');
   
   // Update content based on maindiv
   updateSidebarContent();
@@ -11314,13 +11290,13 @@ function initializeChatListRowObserver() {
       chatListObserverRetries++;
       setTimeout(initializeChatListRowObserver, 1000);
     } else {
-      console.log('[Chat List Observer] Chat list not found after max retries — stopping.');
+      whatsyncDebug('[Chat List Observer] Chat list not found after max retries — stopping.');
     }
     return;
   }
   chatListObserverRetries = 0;
 
-  console.log('[Chat List Observer] ✅ Chat list container found, initializing observer...');
+  whatsyncDebug('[Chat List Observer] ✅ Chat list container found, initializing observer...');
   
   // Clean up existing observer if any
   if (chatListObserver) {
@@ -11337,7 +11313,7 @@ function initializeChatListRowObserver() {
     // Check if clicked element or its parent is a gridcell
     const gridcell = e.target.closest('[role="gridcell"]');
     if (gridcell) {
-      console.log('[Chat List Observer] 🖱️ Chat clicked (via click event)');
+      whatsyncDebug('[Chat List Observer] 🖱️ Chat clicked (via click event)');
       // div#main only exists once a chat is open, and WhatsApp can recreate it —
       // (re)arm its observer whenever the observed node is gone or detached
       if (!observedMainChat || !observedMainChat.isConnected) {
@@ -11350,7 +11326,7 @@ function initializeChatListRowObserver() {
   
   // Use capture phase to catch clicks early
   chatList.addEventListener('click', chatClickHandler, true);
-  console.log('[Chat List Observer] ✅ Click event listener attached');
+  whatsyncDebug('[Chat List Observer] ✅ Click event listener attached');
   
   // Create a mutation observer to listen for changes in the chat list
   chatListObserver = new MutationObserver((mutationsList, observer) => {
@@ -11365,7 +11341,7 @@ function initializeChatListRowObserver() {
               : node.querySelector && node.querySelector('[role="gridcell"]');
             
             if (clickedChat) {
-              console.log('[Chat List Observer] ✅ Chat gridcell added');
+              whatsyncDebug('[Chat List Observer] ✅ Chat gridcell added');
               retriggerSidebar();
             }
           }
@@ -11379,7 +11355,7 @@ function initializeChatListRowObserver() {
         if (mutation.attributeName === 'aria-selected') {
           const isSelected = target.getAttribute('aria-selected') === 'true';
           if (isSelected && target.matches('[role="gridcell"]')) {
-            console.log('[Chat List Observer] ✅ Chat selected via aria-selected change');
+            whatsyncDebug('[Chat List Observer] ✅ Chat selected via aria-selected change');
             retriggerSidebar();
           }
         }
@@ -11397,7 +11373,7 @@ function initializeChatListRowObserver() {
   
   // Start observing the chat list
   chatListObserver.observe(chatList, config);
-  console.log('[Chat List Observer] ✅ MutationObserver initialized and watching chat list');
+  whatsyncDebug('[Chat List Observer] ✅ MutationObserver initialized and watching chat list');
   
   // Also observe the main chat area for changes (when a chat is opened)
   setupMainChatObserver();
@@ -11429,7 +11405,7 @@ function setupMainChatObserver() {
     mainChatObserver.disconnect();
   }
   
-  console.log('[Chat List Observer] ✅ Setting up main chat area observer...');
+  whatsyncDebug('[Chat List Observer] ✅ Setting up main chat area observer...');
   
   mainChatObserver = new MutationObserver((mutationsList) => {
     mutationsList.forEach(mutation => {
@@ -11449,7 +11425,7 @@ function setupMainChatObserver() {
         });
         
         if (hasSignificantChange) {
-          console.log('[Chat List Observer] ✅ Main chat area changed (new chat opened)');
+          whatsyncDebug('[Chat List Observer] ✅ Main chat area changed (new chat opened)');
           retriggerSidebar();
         }
       }
@@ -11462,7 +11438,7 @@ function setupMainChatObserver() {
   });
   observedMainChat = mainChat;
 
-  console.log('[Chat List Observer] ✅ Main chat area observer initialized');
+  whatsyncDebug('[Chat List Observer] ✅ Main chat area observer initialized');
 }
 
 // Function to retrigger the sidebar only if it's already showing
@@ -11477,14 +11453,14 @@ function retriggerSidebar() {
     
     // Check if sidebar exists and is currently showing/open
     if (!sidebar) {
-      console.log('[Chat List Observer] ⏭️ Sidebar not found - skipping (not opening automatically)');
+      whatsyncDebug('[Chat List Observer] ⏭️ Sidebar not found - skipping (not opening automatically)');
       return;
     }
     
     const isSidebarOpen = sidebar.classList.contains('open');
 
     if (!isSidebarOpen) {
-      console.log('[Chat List Observer] ⏭️ Sidebar is not showing - skipping (not opening automatically)');
+      whatsyncDebug('[Chat List Observer] ⏭️ Sidebar is not showing - skipping (not opening automatically)');
       return;
     }
 
@@ -11498,11 +11474,11 @@ function retriggerSidebar() {
     }
 
     // Sidebar is showing and the chat changed — update its content.
-    console.log('[Chat List Observer] ✅ Chat changed - updating sidebar content...');
+    whatsyncDebug('[Chat List Observer] ✅ Chat changed - updating sidebar content...');
     updateSidebarContent();
     const maindiv = document.querySelector("div#main");
     if (maindiv) widthSetting(); // Adjust width if maindiv exists
-    console.log('[Chat List Observer] ✅ Sidebar content updated');
+    whatsyncDebug('[Chat List Observer] ✅ Sidebar content updated');
   }, 60); // Coalesce header mutations without delaying until chat loading settles.
 }
 

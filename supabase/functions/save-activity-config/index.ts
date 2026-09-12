@@ -21,6 +21,14 @@ serve(async (req) => {
   try {
     const { action, data } = await req.json();
 
+    const auth = await authenticateRequest(req);
+    if (!auth.ok) {
+      return new Response(JSON.stringify({ success: false, error: auth.error }), {
+        status: auth.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (action === 'get') {
       const config = await loadActivityConfig();
       const source = getExternalSupabaseCredentials() ? 'database' : 'defaults';
@@ -38,13 +46,6 @@ serve(async (req) => {
       // This config decides which table retention purges DELETE from — only an
       // authenticated Owner/Admin may change it (it was previously open to
       // anyone with the public anon key).
-      const auth = await authenticateRequest(req);
-      if (!auth.ok) {
-        return new Response(JSON.stringify({ success: false, error: auth.error }), {
-          status: auth.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
       const profile = await fetchUserProfileRole(auth.userId);
       if (!profile || !['Owner', 'Admin'].includes(String(profile.role))) {
         return new Response(JSON.stringify({ success: false, error: 'Only Owners and Admins can change the activity configuration' }), {

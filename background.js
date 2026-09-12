@@ -1,3 +1,7 @@
+// Production logs omit customer and CRM payloads unless a developer deliberately opts in.
+const WHATSYNC_DEBUG = false;
+function whatsyncDebug(...args) { if (WHATSYNC_DEBUG) console.log(...args); }
+
 // Background service worker for handling API calls
 
 // Supabase Functions Edge Function URL for HubSpot token
@@ -282,7 +286,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true; // Keep channel open for async response
   }
-  
+
   // Handle executeScript request (for injecting code into page context)
   if (request.action === 'executeScript') {
     (async () => {
@@ -292,7 +296,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: 'Could not get tab ID' });
           return;
         }
-        
+
         // Functions can't be serialized, so we receive funcString and reconstruct it
         let funcToExecute;
         if (request.funcString) {
@@ -304,7 +308,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: 'No function provided' });
           return;
         }
-        
+
         await chrome.scripting.executeScript({
           target: { tabId: tabId },
           func: funcToExecute,
@@ -319,43 +323,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
   if (request.action === 'fetchContactNotes') {
-    
+
     // Get userId and session from storage
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn', 'external_auth_session'], async (storageData) => {
       const userId = storageData.userId || null;
       const contactId = request.contactId || null;
-      
+
       // Try to get Supabase session token from external_auth_session
       let supabaseAccessToken = null;
       if (storageData.external_auth_session) {
         try {
-          const session = typeof storageData.external_auth_session === 'string' 
-            ? JSON.parse(storageData.external_auth_session) 
+          const session = typeof storageData.external_auth_session === 'string'
+            ? JSON.parse(storageData.external_auth_session)
             : storageData.external_auth_session;
           supabaseAccessToken = session?.access_token || session?.accessToken || null;
         } catch (e) {
           // Silent fail
         }
       }
-      
+
       // Fallback to accessToken if no Supabase token found
       if (!supabaseAccessToken) {
         supabaseAccessToken = storageData.accessToken || null;
       }
-      
+
       if (!userId) {
         sendResponse({ success: false, error: 'User not authenticated' });
         return;
       }
-      
+
       if (!contactId) {
         sendResponse({ success: false, error: 'Contact ID is required' });
         return;
       }
-      
+
       try {
         // Route notes fetching through edge function (bypasses RLS/JWT issues)
-        const result = await callHubSpotEdgeFunction('getContactNotes', { 
+        const result = await callHubSpotEdgeFunction('getContactNotes', {
           userId: userId,
           hubspotContactId: contactId ? String(contactId) : null
         });
@@ -367,10 +371,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, data: [] });
       }
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'clearHubSpotCache') {
     hubspotConnectionCache = null;
     hubspotReadCache.clear();
@@ -476,14 +480,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
-  
+
   if (request.action === 'checkHubSpotContact') {
-    console.log('[Background] Received HubSpot search request for phone:', request.phoneNumber);
-    
+    whatsyncDebug('[Background] Received HubSpot search request for phone:', request.phoneNumber);
+
     // Route HubSpot API call through edge function (more secure - token stays on server)
     checkHubSpotContactViaEdgeFunction(request.phoneNumber)
       .then(result => {
-        console.log('[Background] HubSpot API call completed. Result:', result);
+        whatsyncDebug('[Background] HubSpot API call completed. Result:', result);
         sendResponse({ success: true, data: result });
       })
       .catch(error => {
@@ -492,26 +496,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'createHubSpotContact') {
-    console.log('[Background] Received HubSpot create contact request:', request.contactData);
-    
+    whatsyncDebug('[Background] Received HubSpot create contact request:', request.contactData);
+
     // Get userId and accessToken from storage
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
       const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] ===== STORAGE DATA =====');
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      console.log('[Background] ========================');
-      
+
+      whatsyncDebug('[Background] ===== STORAGE DATA =====');
+      whatsyncDebug('[Background] User Logged In:', userLoggedIn);
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+      whatsyncDebug('[Background] ========================');
+
       // Route create contact through edge function
       createHubSpotContactViaEdgeFunction(request.contactData, userId, accessToken)
         .then(result => {
-          console.log('[Background] HubSpot contact created. Result:', result);
+          whatsyncDebug('[Background] HubSpot contact created. Result:', result);
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -519,39 +523,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'getHubSpotTickets') {
-    console.log('[Background] Received get HubSpot tickets request');
-    console.log('[Background] Contact ID:', request.contactId);
-    console.log('[Background] Fetch All:', request.fetchAll);
-    
+    whatsyncDebug('[Background] Received get HubSpot tickets request');
+    whatsyncDebug('[Background] Contact ID:', request.contactId);
+    whatsyncDebug('[Background] Fetch All:', request.fetchAll);
+
     // Get userId from storage (required for edge function to query external database)
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
       const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      
+
+      whatsyncDebug('[Background] User Logged In:', userLoggedIn);
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+
       if (!userId) {
         sendResponse({ success: false, error: 'Not authenticated - userId required' });
         return;
       }
-      
+
       // If fetchAll is true, we want all tickets (not filtered by contact)
       // Pass null as contactId to the edge function
       const contactIdToUse = request.fetchAll ? null : request.contactId;
-      
+
       // Route ticket fetching through edge function with userId
       getHubSpotTicketsViaEdgeFunction(contactIdToUse, userId)
         .then(result => {
-          console.log('[Background] ✅ HubSpot tickets fetched successfully!');
-          console.log('[Background] Result count:', result ? result.length : 0);
+          whatsyncDebug('[Background] ✅ HubSpot tickets fetched successfully!');
+          whatsyncDebug('[Background] Result count:', result ? result.length : 0);
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -560,35 +564,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'searchHubSpotTickets') {
-    console.log('[Background] Received search HubSpot tickets request');
-    console.log('[Background] Search term:', request.searchTerm);
-    console.log('[Background] Contact ID:', request.contactId);
-    
+    whatsyncDebug('[Background] Received search HubSpot tickets request');
+    whatsyncDebug('[Background] Search term:', request.searchTerm);
+    whatsyncDebug('[Background] Contact ID:', request.contactId);
+
     // Get userId from storage (required for edge function to query external database)
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
       const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      
+
+      whatsyncDebug('[Background] User Logged In:', userLoggedIn);
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+
       if (!userId) {
         sendResponse({ success: false, error: 'Not authenticated - userId required' });
         return;
       }
-      
+
       // Route ticket search through edge function with userId
       searchHubSpotTicketsViaEdgeFunction(request.searchTerm, request.contactId, userId)
         .then(result => {
-          console.log('[Background] ✅ HubSpot ticket search completed!');
-          console.log('[Background] Result:', JSON.stringify(result, null, 2));
+          whatsyncDebug('[Background] ✅ HubSpot ticket search completed!');
+          whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -597,30 +601,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'createHubSpotTicket') {
-    console.log('[Background] ===== CREATE TICKET REQUEST RECEIVED =====');
+    whatsyncDebug('[Background] ===== CREATE TICKET REQUEST RECEIVED =====');
 
     // Get userId and accessToken from storage for logging
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
       const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] ===== STORAGE DATA FOR TICKET LOGGING =====');
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      console.log('[Background] ===========================================');
-      
+
+      whatsyncDebug('[Background] ===== STORAGE DATA FOR TICKET LOGGING =====');
+      whatsyncDebug('[Background] User Logged In:', userLoggedIn);
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+      whatsyncDebug('[Background] ===========================================');
+
       // Route ticket creation through edge function
       createHubSpotTicketViaEdgeFunction(request.ticketData, userId, accessToken, request.contactId)
         .then(result => {
-          console.log('[Background] ✅ HubSpot ticket created successfully!');
-          console.log('[Background] Result:', JSON.stringify(result, null, 2));
+          whatsyncDebug('[Background] ✅ HubSpot ticket created successfully!');
+          whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -630,35 +634,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'createHubSpotNote') {
-    console.log('[Background] ===== CREATE NOTE REQUEST RECEIVED =====');
-    console.log('[Background] Contact ID:', request.data?.contactId);
-    console.log('[Background] Note text length:', request.data?.noteText?.length || 0);
-    console.log('[Background] Has timestamp:', !!request.data?.timestamp);
-    console.log('[Background] Create todo:', request.data?.createTodo || false);
-    console.log('[Background] ===========================================');
-    
+    whatsyncDebug('[Background] ===== CREATE NOTE REQUEST RECEIVED =====');
+    whatsyncDebug('[Background] Contact ID:', request.data?.contactId);
+    whatsyncDebug('[Background] Note text length:', request.data?.noteText?.length || 0);
+    whatsyncDebug('[Background] Has timestamp:', !!request.data?.timestamp);
+    whatsyncDebug('[Background] Create todo:', request.data?.createTodo || false);
+    whatsyncDebug('[Background] ===========================================');
+
     // Get userId and accessToken from storage for logging
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
       const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] ===== STORAGE DATA FOR NOTE LOGGING =====');
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      console.log('[Background] ===========================================');
-      
+
+      whatsyncDebug('[Background] ===== STORAGE DATA FOR NOTE LOGGING =====');
+      whatsyncDebug('[Background] User Logged In:', userLoggedIn);
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+      whatsyncDebug('[Background] ===========================================');
+
       // Route note creation through edge function
       createHubSpotNoteViaEdgeFunction(request.data, userId, accessToken)
         .then(result => {
-          console.log('[Background] ✅ HubSpot note created successfully!');
-          console.log('[Background] Result:', JSON.stringify(result, null, 2));
+          whatsyncDebug('[Background] ✅ HubSpot note created successfully!');
+          whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -668,14 +672,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'getHubSpotDeals') {
     const contactId = request.contactId || null;
-    console.log('[Background] getHubSpotDeals request for contact:', contactId);
-    
+    whatsyncDebug('[Background] getHubSpotDeals request for contact:', contactId);
+
     // Get userId and accessToken from storage
     chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
@@ -701,13 +705,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message });
       }
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'getHubSpotOwners') {
-    console.log('[Background] getHubSpotOwners request');
-    
+    whatsyncDebug('[Background] getHubSpotOwners request');
+
     // Get userId and accessToken from storage
     chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
@@ -733,7 +737,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message });
       }
     });
-    
+
     return true; // Keep channel open for async response
   }
 
@@ -849,14 +853,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // Open the extension popup (sign-in UI) from the sidebar's "Sign in" button.
   if (request.action === 'openPopup') {
-    try {
-      if (chrome.action && typeof chrome.action.openPopup === 'function') {
-        chrome.action.openPopup().catch(() => {});
+    (async () => {
+      try {
+        if (!chrome.action || typeof chrome.action.openPopup !== 'function') {
+          sendResponse({ success: false, opened: false });
+          return;
+        }
+        await chrome.action.openPopup();
+        sendResponse({ success: true, opened: true });
+      } catch (e) {
+        console.warn('[Background] openPopup not available:', e);
+        sendResponse({ success: false, opened: false });
       }
-    } catch (e) {
-      console.warn('[Background] openPopup not available:', e);
-    }
-    sendResponse({ success: true });
+    })();
     return true;
   }
 
@@ -954,11 +963,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     })();
     return true;
   }
-  
+
   if (request.action === 'getHubSpotTasks') {
     const contactId = request.contactId || null;
-    console.log('[Background] getHubSpotTasks request for contact:', contactId);
-    
+    whatsyncDebug('[Background] getHubSpotTasks request for contact:', contactId);
+
     // Get userId and accessToken from storage
     chrome.storage.local.get(['userId', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
@@ -984,30 +993,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message });
       }
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'createHubSpotTask') {
-    console.log('[Background] ===== CREATE TASK REQUEST RECEIVED =====');
+    whatsyncDebug('[Background] ===== CREATE TASK REQUEST RECEIVED =====');
 
     // Get userId and accessToken from storage for logging (if needed)
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
       const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] ===== STORAGE DATA FOR TASK LOGGING =====');
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      console.log('[Background] ===========================================');
-      
+
+      whatsyncDebug('[Background] ===== STORAGE DATA FOR TASK LOGGING =====');
+      whatsyncDebug('[Background] User Logged In:', userLoggedIn);
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+      whatsyncDebug('[Background] ===========================================');
+
       // Route task creation through edge function
       createHubSpotTaskViaEdgeFunction(request.data, userId, accessToken)
         .then(result => {
-          console.log('[Background] ✅ HubSpot task created successfully!');
-          console.log('[Background] Result:', JSON.stringify(result, null, 2));
+          whatsyncDebug('[Background] ✅ HubSpot task created successfully!');
+          whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -1017,31 +1026,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'logDealCreation') {
-    console.log('[Background] ===== LOG DEAL CREATION REQUEST RECEIVED =====');
+    whatsyncDebug('[Background] ===== LOG DEAL CREATION REQUEST RECEIVED =====');
 
     // Get userId and accessToken from storage
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
 
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+
       if (!userId) {
         console.warn('[Background] No userId found, cannot log deal creation');
         sendResponse({ success: false, error: 'No userId found' });
         return;
       }
-      
+
       // Log deal creation to Supabase
       logDealCreationToSupabase(userId, accessToken, request.data)
         .then(result => {
-          console.log('[Background] ✅ Deal creation logged successfully!');
+          whatsyncDebug('[Background] ✅ Deal creation logged successfully!');
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -1049,34 +1058,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'getAllHubSpotTickets') {
-    console.log('[Background] Received get all HubSpot tickets request');
-    console.log('[Background] Contact ID:', request.contactId);
-    
+    whatsyncDebug('[Background] Received get all HubSpot tickets request');
+    whatsyncDebug('[Background] Contact ID:', request.contactId);
+
     // Get userId from storage (required for edge function to query external database)
     chrome.storage.local.get(['userId', 'accessToken', 'userLoggedIn'], async (storageData) => {
       const userId = storageData.userId || null;
       const accessToken = storageData.accessToken || null;
       const userLoggedIn = storageData.userLoggedIn || false;
-      
-      console.log('[Background] User Logged In:', userLoggedIn);
-      console.log('[Background] User ID:', userId);
-      console.log('[Background] Access Token:', accessToken ? 'present' : 'missing');
-      
+
+      whatsyncDebug('[Background] User Logged In:', userLoggedIn);
+      whatsyncDebug('[Background] User ID:', userId);
+      whatsyncDebug('[Background] Access Token:', accessToken ? 'present' : 'missing');
+
       if (!userId) {
         sendResponse({ success: false, error: 'Not authenticated - userId required' });
         return;
       }
-      
+
       // Route ticket fetching through edge function (get all tickets, not just associated) with userId
       getAllHubSpotTicketsViaEdgeFunction(request.contactId, userId)
         .then(result => {
-          console.log('[Background] ✅ All HubSpot tickets fetched successfully!');
-          console.log('[Background] Result:', JSON.stringify(result, null, 2));
+          whatsyncDebug('[Background] ✅ All HubSpot tickets fetched successfully!');
+          whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
           sendResponse({ success: true, data: result });
         })
         .catch(error => {
@@ -1085,19 +1094,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: error.message });
         });
     });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'associateTicketsWithContact') {
-    console.log('[Background] Received associate tickets request');
-    console.log('[Background] Contact ID:', request.contactId);
-    console.log('[Background] Ticket IDs:', request.ticketIds);
-    
+    whatsyncDebug('[Background] Received associate tickets request');
+    whatsyncDebug('[Background] Contact ID:', request.contactId);
+    whatsyncDebug('[Background] Ticket IDs:', request.ticketIds);
+
     // Route ticket association through edge function
     associateTicketsWithContactViaEdgeFunction(request.contactId, request.ticketIds)
       .then(result => {
-        console.log('[Background] ✅ Tickets associated successfully!');
+        whatsyncDebug('[Background] ✅ Tickets associated successfully!');
         sendResponse({ success: true, data: result });
       })
       .catch(error => {
@@ -1105,19 +1114,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.error('[Background] Error message:', error.message);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     return true; // Keep channel open for async response
   }
-  
+
   if (request.action === 'disassociateTicketsFromContact') {
-    console.log('[Background] Received disassociate tickets request');
-    console.log('[Background] Contact ID:', request.contactId);
-    console.log('[Background] Ticket IDs:', request.ticketIds);
-    
+    whatsyncDebug('[Background] Received disassociate tickets request');
+    whatsyncDebug('[Background] Contact ID:', request.contactId);
+    whatsyncDebug('[Background] Ticket IDs:', request.ticketIds);
+
     // Route ticket disassociation through edge function
     disassociateTicketsFromContactViaEdgeFunction(request.contactId, request.ticketIds)
       .then(result => {
-        console.log('[Background] ✅ Tickets disassociated successfully!');
+        whatsyncDebug('[Background] ✅ Tickets disassociated successfully!');
         sendResponse({ success: true, data: result });
       })
       .catch(error => {
@@ -1125,41 +1134,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.error('[Background] Error message:', error.message);
         sendResponse({ success: false, error: error.message });
       });
-    
+
     return true; // Keep channel open for async response
   }
 });
 
 // Function to get tickets from HubSpot via edge function
 async function getHubSpotTicketsViaEdgeFunction(contactId, userId) {
-  console.log('[Background] ===== GET TICKETS VIA EDGE FUNCTION =====');
-  console.log('[Background] Contact ID:', contactId, '(null means fetch ALL tickets)');
-  console.log('[Background] User ID:', userId);
-  
+  whatsyncDebug('[Background] ===== GET TICKETS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Contact ID:', contactId, '(null means fetch ALL tickets)');
+  whatsyncDebug('[Background] User ID:', userId);
+
   if (!userId) {
     console.error('[Background] ❌ userId is required for getTickets');
     throw new Error('userId is required to query external database for logged tickets');
   }
-  
+
   try {
     // Call edge function to get tickets
     // Edge function should have getTickets action that fetches tickets
     // If contactId is null, the edge function should return ALL tickets
-    const params = contactId === null || contactId === undefined 
+    const params = contactId === null || contactId === undefined
       ? { fetchAll: true, userId: userId } // Don't pass contactId when we want all tickets, but include userId
       : { contactId: contactId, userId: userId };
-    
-    console.log('[Background] Calling edge function with params:', params);
+
+    whatsyncDebug('[Background] Calling edge function with params:', params);
     const result = await callHubSpotEdgeFunction('getTickets', params);
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result type:', typeof result);
-    console.log('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result type:', typeof result);
+    whatsyncDebug('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
+
     // Extract tickets from response
     // HubSpot CRM v3 API returns { results: [...] }
     const tickets = result?.results || result?.data || (Array.isArray(result) ? result : []);
-    console.log('[Background] Extracted tickets:', tickets.length);
+    whatsyncDebug('[Background] Extracted tickets:', tickets.length);
     return tickets;
   } catch (error) {
     console.error('[Background] ❌ Error in getHubSpotTicketsViaEdgeFunction');
@@ -1171,34 +1180,34 @@ async function getHubSpotTicketsViaEdgeFunction(contactId, userId) {
 
 // Function to search tickets in HubSpot via edge function
 async function searchHubSpotTicketsViaEdgeFunction(searchTerm, contactId, userId) {
-  console.log('[Background] ===== SEARCH TICKETS VIA EDGE FUNCTION =====');
-  console.log('[Background] Search term:', searchTerm);
-  console.log('[Background] Contact ID:', contactId, '(null means search ALL tickets)');
-  console.log('[Background] User ID:', userId);
-  
+  whatsyncDebug('[Background] ===== SEARCH TICKETS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Search term:', searchTerm);
+  whatsyncDebug('[Background] Contact ID:', contactId, '(null means search ALL tickets)');
+  whatsyncDebug('[Background] User ID:', userId);
+
   if (!userId) {
     console.error('[Background] ❌ userId is required for searchTickets');
     throw new Error('userId is required to query external database for logged tickets');
   }
-  
+
   try {
     // Call edge function to search tickets
     // Edge function should have searchTickets action that searches tickets by subject/content
     // If contactId is null and searchTerm is empty, we want ALL tickets
-    const result = await callHubSpotEdgeFunction('searchTickets', { 
+    const result = await callHubSpotEdgeFunction('searchTickets', {
       searchTerm: searchTerm,
       contactId: contactId,
       userId: userId,
       fetchAll: (contactId === null || contactId === undefined) && (!searchTerm || searchTerm.trim() === '')
     });
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result:', JSON.stringify(result, null, 2));
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
+
     // Extract tickets from response
     // HubSpot CRM v3 API returns { results: [...] }
     const tickets = result?.results || result?.data || (Array.isArray(result) ? result : []);
-    console.log('[Background] Extracted tickets:', tickets.length);
+    whatsyncDebug('[Background] Extracted tickets:', tickets.length);
     return tickets;
   } catch (error) {
     console.error('[Background] ❌ Error in searchHubSpotTicketsViaEdgeFunction');
@@ -1210,21 +1219,20 @@ async function searchHubSpotTicketsViaEdgeFunction(searchTerm, contactId, userId
 
 // Function to create ticket in HubSpot via edge function
 async function createHubSpotTicketViaEdgeFunction(ticketData, userId, accessToken, contactId) {
-  console.log('[Background] ===== CREATE TICKET VIA EDGE FUNCTION =====');
-  console.log('[Background] Input ticketData:', JSON.stringify(ticketData, null, 2));
-  
+  whatsyncDebug('[Background] ===== CREATE TICKET VIA EDGE FUNCTION =====');
+
   try {
     // Call edge function to create ticket. contactId must ride along in the
     // payload — the edge function uses it to associate the ticket with the
     // contact (it used to be dropped here, leaving every ticket unassociated).
     const payload = contactId ? { ...ticketData, contactId: String(contactId) } : ticketData;
     const result = await callHubSpotEdgeFunction('createTicket', payload);
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result type:', typeof result);
-    console.log('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
-    console.log('[Background] Result:', JSON.stringify(result, null, 2));
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result type:', typeof result);
+    whatsyncDebug('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
+    whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
+
     // Log to Supabase if userId and accessToken are provided
     if (userId && accessToken) {
       await logTicketCreationToSupabase(userId, accessToken, ticketData, result, contactId);
@@ -1232,7 +1240,7 @@ async function createHubSpotTicketViaEdgeFunction(ticketData, userId, accessToke
       console.warn('[Background] Missing userId or accessToken, skipping Supabase log for ticket');
       console.warn('[Background] userId:', userId, 'accessToken:', accessToken ? 'present' : 'missing');
     }
-    
+
     return result;
   } catch (error) {
     console.error('[Background] ❌ Error in createHubSpotTicketViaEdgeFunction');
@@ -1248,39 +1256,39 @@ async function createHubSpotTicketViaEdgeFunction(ticketData, userId, accessToke
 
 // Function to get all tickets from HubSpot via edge function (not just associated ones)
 async function getAllHubSpotTicketsViaEdgeFunction(contactId, userId) {
-  console.log('[Background] ===== GET ALL TICKETS VIA EDGE FUNCTION =====');
-  console.log('[Background] Contact ID:', contactId, '(null means fetch ALL tickets)');
-  console.log('[Background] User ID:', userId);
-  
+  whatsyncDebug('[Background] ===== GET ALL TICKETS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Contact ID:', contactId, '(null means fetch ALL tickets)');
+  whatsyncDebug('[Background] User ID:', userId);
+
   if (!userId) {
     console.error('[Background] ❌ userId is required for getAllTickets/getTickets');
     throw new Error('userId is required to query external database for logged tickets');
   }
-  
+
   try {
     // Use the same getTickets action but with fetchAll flag
     // If getAllTickets doesn't exist, fall back to getTickets with fetchAll
-    const params = contactId === null || contactId === undefined 
+    const params = contactId === null || contactId === undefined
       ? { fetchAll: true, userId: userId } // Don't pass contactId when we want all tickets, but include userId
       : { contactId: contactId, fetchAll: true, userId: userId };
-    
-    console.log('[Background] Calling edge function with params:', params);
-    
+
+    whatsyncDebug('[Background] Calling edge function with params:', params);
+
     // Try getAllTickets first, fallback to getTickets
     let result;
     try {
       result = await callHubSpotEdgeFunction('getAllTickets', params);
     } catch (error) {
-      console.log('[Background] getAllTickets not available, using getTickets with fetchAll');
+      whatsyncDebug('[Background] getAllTickets not available, using getTickets with fetchAll');
       result = await callHubSpotEdgeFunction('getTickets', params);
     }
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result type:', typeof result);
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result type:', typeof result);
+
     // Extract tickets from response
     const tickets = result?.results || result?.data || (Array.isArray(result) ? result : []);
-    console.log('[Background] Extracted tickets:', tickets.length);
+    whatsyncDebug('[Background] Extracted tickets:', tickets.length);
     return tickets;
   } catch (error) {
     console.error('[Background] ❌ Error in getAllHubSpotTicketsViaEdgeFunction');
@@ -1292,20 +1300,20 @@ async function getAllHubSpotTicketsViaEdgeFunction(contactId, userId) {
 
 // Function to associate tickets with contact via edge function
 async function associateTicketsWithContactViaEdgeFunction(contactId, ticketIds) {
-  console.log('[Background] ===== ASSOCIATE TICKETS VIA EDGE FUNCTION =====');
-  console.log('[Background] Contact ID:', contactId);
-  console.log('[Background] Ticket IDs:', ticketIds);
-  
+  whatsyncDebug('[Background] ===== ASSOCIATE TICKETS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Contact ID:', contactId);
+  whatsyncDebug('[Background] Ticket IDs:', ticketIds);
+
   try {
     // Call edge function to associate tickets
     const result = await callHubSpotEdgeFunction('associateTickets', {
       contactId: contactId,
       ticketIds: ticketIds
     });
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result:', JSON.stringify(result, null, 2));
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
+
     return result;
   } catch (error) {
     console.error('[Background] ❌ Error in associateTicketsWithContactViaEdgeFunction');
@@ -1316,20 +1324,20 @@ async function associateTicketsWithContactViaEdgeFunction(contactId, ticketIds) 
 
 // Function to disassociate tickets from contact via edge function
 async function disassociateTicketsFromContactViaEdgeFunction(contactId, ticketIds) {
-  console.log('[Background] ===== DISASSOCIATE TICKETS VIA EDGE FUNCTION =====');
-  console.log('[Background] Contact ID:', contactId);
-  console.log('[Background] Ticket IDs:', ticketIds);
-  
+  whatsyncDebug('[Background] ===== DISASSOCIATE TICKETS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Contact ID:', contactId);
+  whatsyncDebug('[Background] Ticket IDs:', ticketIds);
+
   try {
     // Call edge function to disassociate tickets
     const result = await callHubSpotEdgeFunction('disassociateTickets', {
       contactId: contactId,
       ticketIds: ticketIds
     });
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result:', JSON.stringify(result, null, 2));
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
+
     return result;
   } catch (error) {
     console.error('[Background] ❌ Error in disassociateTicketsFromContactViaEdgeFunction');
@@ -1341,34 +1349,34 @@ async function disassociateTicketsFromContactViaEdgeFunction(contactId, ticketId
 // Function to get tasks from Supabase via edge function
 // Function to get deals from HubSpot via edge function
 async function getHubSpotDealsViaEdgeFunction(contactId, userId, accessToken) {
-  console.log('[Background] ===== GET DEALS VIA EDGE FUNCTION =====');
-  console.log('[Background] Contact ID:', contactId, '(type:', typeof contactId, ')');
-  console.log('[Background] User ID:', userId);
-  
+  whatsyncDebug('[Background] ===== GET DEALS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Contact ID:', contactId, '(type:', typeof contactId, ')');
+  whatsyncDebug('[Background] User ID:', userId);
+
   if (!contactId) {
     console.warn('[Background] No contact ID provided, returning empty array');
     return [];
   }
-  
+
   try {
     // Ensure contactId is a string for consistency
     const contactIdStr = String(contactId);
-    console.log('[Background] Calling edge function with contactId:', contactIdStr);
-    
+    whatsyncDebug('[Background] Calling edge function with contactId:', contactIdStr);
+
     // Call edge function to get deals associated with this contact
     // The edge function should filter deals by contact association
-    const result = await callHubSpotEdgeFunction('getDeals', { 
-      contactId: contactIdStr 
+    const result = await callHubSpotEdgeFunction('getDeals', {
+      contactId: contactIdStr
     });
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result type:', typeof result);
-    console.log('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result type:', typeof result);
+    whatsyncDebug('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
+
     // Extract deals from response
     let deals = result?.results || result?.data || (Array.isArray(result) ? result : []);
-    console.log('[Background] Result count:', deals.length);
-    
+    whatsyncDebug('[Background] Result count:', deals.length);
+
     // The edge function returns deals already scoped to this contact (via the
     // contact -> deals association lookup), so trust them. Only apply a secondary
     // association check when the deals actually carry association data; otherwise we
@@ -1391,10 +1399,10 @@ async function getHubSpotDealsViaEdgeFunction(contactId, userId, accessToken) {
           deals = filteredDeals;
         }
       }
-      console.log('[Background] Deals belonging to contact', contactIdStr, ':', deals.length);
+      whatsyncDebug('[Background] Deals belonging to contact', contactIdStr, ':', deals.length);
     }
-    
-    console.log('[Background] Extracted deals:', deals.length);
+
+    whatsyncDebug('[Background] Extracted deals:', deals.length);
     return deals;
   } catch (error) {
     console.error('[Background] ❌ Error in getHubSpotDealsViaEdgeFunction');
@@ -1406,10 +1414,10 @@ async function getHubSpotDealsViaEdgeFunction(contactId, userId, accessToken) {
 }
 
 async function getHubSpotTasksViaEdgeFunction(contactId, userId, accessToken) {
-  console.log('[Background] ===== GET TASKS VIA EDGE FUNCTION =====');
-  console.log('[Background] Contact ID:', contactId);
-  console.log('[Background] User ID:', userId);
-  
+  whatsyncDebug('[Background] ===== GET TASKS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Contact ID:', contactId);
+  whatsyncDebug('[Background] User ID:', userId);
+
   try {
     // Call edge function to get tasks from Supabase
     // Action: 'getContactTasks' with { userId, hubspotContactId }
@@ -1417,10 +1425,10 @@ async function getHubSpotTasksViaEdgeFunction(contactId, userId, accessToken) {
       userId: userId,
       hubspotContactId: contactId ? String(contactId) : null
     });
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result count:', result ? result.length : 0);
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result count:', result ? result.length : 0);
+
     return result || [];
   } catch (error) {
     console.error('[Background] ❌ Error in getHubSpotTasksViaEdgeFunction');
@@ -1430,31 +1438,31 @@ async function getHubSpotTasksViaEdgeFunction(contactId, userId, accessToken) {
 }
 
 async function getHubSpotOwnersViaEdgeFunction(userId, accessToken) {
-  console.log('[Background] ===== GET OWNERS VIA EDGE FUNCTION =====');
-  console.log('[Background] User ID:', userId);
-  
+  whatsyncDebug('[Background] ===== GET OWNERS VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] User ID:', userId);
+
   try {
     // Call edge function to get owners from HubSpot
-    // Action: 'getOwners' 
+    // Action: 'getOwners'
     const result = await callHubSpotEdgeFunction('getOwners', {});
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result type:', typeof result);
-    console.log('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result type:', typeof result);
+    whatsyncDebug('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
+
     // Extract owners from response
     let owners = result?.results || result?.data || (Array.isArray(result) ? result : []);
-    console.log('[Background] Owners count:', owners.length);
-    
+    whatsyncDebug('[Background] Owners count:', owners.length);
+
     if (owners.length > 0) {
-      console.log('[Background] Sample owner data:', owners.slice(0, 2).map(o => ({
+      whatsyncDebug('[Background] Sample owner data:', owners.slice(0, 2).map(o => ({
         id: o.id,
         email: o.email,
         firstName: o.firstName,
         lastName: o.lastName
       })));
     }
-    
+
     return owners;
   } catch (error) {
     console.error('[Background] ❌ Error in getHubSpotOwnersViaEdgeFunction');
@@ -1467,24 +1475,24 @@ async function getHubSpotOwnersViaEdgeFunction(userId, accessToken) {
 
 // Function to create task in HubSpot via edge function
 async function createHubSpotTaskViaEdgeFunction(taskData, userId, accessToken) {
-  console.log('[Background] ===== CREATE TASK VIA EDGE FUNCTION =====');
-  console.log('[Background] Input taskData:', JSON.stringify(taskData, null, 2));
-  
+  whatsyncDebug('[Background] ===== CREATE TASK VIA EDGE FUNCTION =====');
+  whatsyncDebug('[Background] Input taskData:', JSON.stringify(taskData, null, 2));
+
   try {
     // Call edge function to create task
     // The edge function should handle both CRM v3 properties format and simple flat format
     const result = await callHubSpotEdgeFunction('createTask', taskData);
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result type:', typeof result);
-    console.log('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
-    console.log('[Background] Result:', JSON.stringify(result, null, 2));
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result type:', typeof result);
+    whatsyncDebug('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
+    whatsyncDebug('[Background] Result:', JSON.stringify(result, null, 2));
+
     // Log to Supabase if userId and accessToken are provided (optional, similar to tickets)
     if (userId && accessToken) {
       // Extract contactId from taskData if available
       // It can be in taskData.contactId (from content.js) or in associations
-      const contactId = taskData?.contactId || 
+      const contactId = taskData?.contactId ||
                        taskData?.associations?.contact?.results?.[0]?.id ||
                        taskData?.associations?.contacts?.results?.[0]?.id ||
                        null;
@@ -1493,7 +1501,7 @@ async function createHubSpotTaskViaEdgeFunction(taskData, userId, accessToken) {
       console.warn('[Background] Missing userId or accessToken, skipping Supabase log for task');
       console.warn('[Background] userId:', userId, 'accessToken:', accessToken ? 'present' : 'missing');
     }
-    
+
     return result;
   } catch (error) {
     console.error('[Background] ❌ Error in createHubSpotTaskViaEdgeFunction');
@@ -1509,78 +1517,77 @@ async function createHubSpotTaskViaEdgeFunction(taskData, userId, accessToken) {
 
 // Function to create note in HubSpot via edge function
 async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
-  console.log('[Background] ===== CREATE NOTE VIA EDGE FUNCTION =====');
-  console.log('[Background] Input noteData:', JSON.stringify(noteData, null, 2));
-  
+  whatsyncDebug('[Background] ===== CREATE NOTE VIA EDGE FUNCTION =====');
+
   const { contactId, noteText, noteHtml, createTodo, followUpType, followUpDate } = noteData;
-  
-  console.log('[Background] Extracted values:');
-  console.log('[Background]   - contactId:', contactId, '(Type:', typeof contactId + ')');
-  console.log('[Background]   - noteText:', noteText ? `"${noteText.substring(0, 50)}${noteText.length > 50 ? '...' : ''}" (${noteText.length} chars)` : 'undefined');
-  console.log('[Background]   - noteHtml:', noteHtml ? `"${noteHtml.substring(0, 50)}${noteHtml.length > 50 ? '...' : ''}" (${noteHtml.length} chars)` : 'undefined');
-  console.log('[Background]   - createTodo:', createTodo);
-  
+
+  whatsyncDebug('[Background] Extracted values:');
+  whatsyncDebug('[Background]   - contactId:', contactId, '(Type:', typeof contactId + ')');
+  whatsyncDebug('[Background]   - noteText length:', noteText?.length || 0);
+  whatsyncDebug('[Background]   - rich text present:', !!noteHtml);
+  whatsyncDebug('[Background]   - createTodo:', createTodo);
+
   // Validate required fields with detailed error messages
   if (!contactId) {
     console.error('[Background] ❌ Validation failed: Contact ID is missing');
     throw new Error('Contact ID is required');
   }
-  
+
   if (contactId === 0 || contactId === '0') {
     console.error('[Background] ❌ Validation failed: Contact ID is zero');
     throw new Error('Contact ID cannot be zero');
   }
-  
+
   if (!noteText || !noteText.trim()) {
     console.error('[Background] ❌ Validation failed: Note text is missing or empty');
     console.error('[Background]   - noteText value:', noteText);
     console.error('[Background]   - noteText length:', noteText?.length || 0);
     throw new Error('Note text is required and cannot be empty');
   }
-  
+
   // Validate timestamp will be generated, but log if provided
   if (noteData.timestamp) {
-    console.log('[Background]   - timestamp provided:', noteData.timestamp);
+    whatsyncDebug('[Background]   - timestamp provided:', noteData.timestamp);
   }
-  
-  console.log('[Background] ✅ Validation passed');
-  
+
+  whatsyncDebug('[Background] ✅ Validation passed');
+
   try {
     // Prepare note data for HubSpot API using engagements API format
     // Based on working example: /engagements/v1/engagements
-    // 
+    //
     // IMPORTANT: The edge function MUST format this data as:
     // {
-    //   engagement: { 
-    //     active: true, 
-    //     type: "NOTE", 
+    //   engagement: {
+    //     active: true,
+    //     type: "NOTE",
     //     timestamp: timestamp (milliseconds)
     //   },
-    //   associations: { 
+    //   associations: {
     //     contactIds: [contactId]  // Array with numeric contact ID
     //   },
-    //   metadata: { 
+    //   metadata: {
     //     body: note  // The note text
     //   }
     // }
-    // 
+    //
     // Endpoint: POST https://api.hubapi.com/engagements/v1/engagements
     // Headers: Authorization: Bearer {token}, Content-Type: application/json
-    
+
     const timestamp = Date.now();
-    
+
     // Ensure contactId is a number (HubSpot requires numeric ID, not string)
     const numericContactId = typeof contactId === 'string' ? parseInt(contactId, 10) : Number(contactId);
-    
+
     if (isNaN(numericContactId) || numericContactId <= 0) {
       console.error('[Background] ❌ Invalid contact ID format:', contactId, 'Parsed as:', numericContactId);
       throw new Error(`Invalid contact ID: must be a positive numeric value, got: ${contactId}`);
     }
-    
+
     // Send data with multiple field name options for compatibility
     // Edge function might expect: 'note', 'noteBody', 'hs_note_body', or 'body'
     const trimmedNote = noteText.trim();
-    
+
     const requestData = {
       contactId: numericContactId, // HubSpot numeric contact ID (as number, not string)
       // Primary field name
@@ -1595,94 +1602,74 @@ async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
       followUpType: followUpType || null,   // 'To-do' | 'Call' | 'Email'
       followUpDate: followUpDate || null    // ISO date string for the task due date
     };
-    
-    console.log('[Background] Contact ID validation:');
-    console.log('[Background]   - Original:', contactId, 'Type:', typeof contactId);
-    console.log('[Background]   - Parsed:', numericContactId, 'Type:', typeof numericContactId);
-    console.log('[Background]   - Is valid number:', !isNaN(numericContactId) && numericContactId > 0);
-    
-    console.log('[Background] Preparing request data for edge function...');
-    console.log('[Background] ===== REQUEST DATA FOR EDGE FUNCTION =====');
-    console.log('[Background] Contact ID:', requestData.contactId, '(Type:', typeof requestData.contactId + ')');
-    console.log('[Background] Note text (note):', requestData.note);
-    console.log('[Background] Note text (noteBody):', requestData.noteBody);
-    console.log('[Background] Note text (body):', requestData.body);
-    console.log('[Background] Note length:', requestData.note.length);
-    console.log('[Background] Timestamp:', requestData.timestamp, '(Date:', new Date(requestData.timestamp).toISOString() + ')');
-    console.log('[Background] Create todo:', requestData.createTodo);
-    console.log('[Background] ===========================================');
-    console.log('[Background]');
-    console.log('[Background] 📋 FIELD NAME OPTIONS SENT (for edge function compatibility):');
-    console.log('[Background]   - contactId:', requestData.contactId);
-    console.log('[Background]   - note:', requestData.note, '(primary)');
-    console.log('[Background]   - noteBody:', requestData.noteBody, '(alternative)');
-    console.log('[Background]   - body:', requestData.body, '(alternative)');
-    console.log('[Background]   - timestamp:', requestData.timestamp);
-    console.log('[Background]');
-    console.log('[Background]');
-    console.log('[Background] ⚠️ EDGE FUNCTION MUST FORMAT AS:');
-    console.log('[Background] ===========================================');
-    console.log('[Background] ENDPOINT: POST https://api.hubapi.com/engagements/v1/engagements');
-    console.log('[Background] HEADERS: Authorization: Bearer {HUBSPOT_TOKEN}');
-    console.log('[Background]          Content-Type: application/json');
-    console.log('[Background] ===========================================');
-    console.log('[Background] REQUEST BODY:');
-    console.log(JSON.stringify({
-      engagement: {
-        active: true,
-        type: "NOTE",
-        timestamp: requestData.timestamp
-      },
-      associations: {
-        contactIds: [requestData.contactId]
-      },
-      metadata: {
-        body: requestData.note
-      }
-    }, null, 2));
-    console.log('[Background] ===========================================');
-    console.log('[Background]');
-    console.log('[Background] ⚠️ REQUIRED PROPERTIES CHECKLIST:');
-    console.log('[Background]   ✅ engagement.active = true');
-    console.log('[Background]   ✅ engagement.type = "NOTE" (must be exact string)');
-    console.log('[Background]   ✅ engagement.timestamp =', requestData.timestamp, '(milliseconds)');
-    console.log('[Background]   ✅ associations.contactIds = [' + requestData.contactId + '] (must be array)');
 
-    console.log('[Background] Calling edge function: createNote...');
-    console.log('[Background] Edge function endpoint:', HUBSPOT_TOKEN_ENDPOINT);
-    console.log('[Background] Action:', 'createNote');
-    
+    whatsyncDebug('[Background] Contact ID validation:');
+    whatsyncDebug('[Background]   - Original:', contactId, 'Type:', typeof contactId);
+    whatsyncDebug('[Background]   - Parsed:', numericContactId, 'Type:', typeof numericContactId);
+    whatsyncDebug('[Background]   - Is valid number:', !isNaN(numericContactId) && numericContactId > 0);
+
+    whatsyncDebug('[Background] Preparing request data for edge function...');
+    whatsyncDebug('[Background] ===== REQUEST DATA FOR EDGE FUNCTION =====');
+    whatsyncDebug('[Background] Contact ID:', requestData.contactId, '(Type:', typeof requestData.contactId + ')');
+    whatsyncDebug('[Background] Note length:', requestData.note.length);
+    whatsyncDebug('[Background] Timestamp:', requestData.timestamp, '(Date:', new Date(requestData.timestamp).toISOString() + ')');
+    whatsyncDebug('[Background] Create todo:', requestData.createTodo);
+    whatsyncDebug('[Background] ===========================================');
+    whatsyncDebug('[Background]');
+    whatsyncDebug('[Background] 📋 FIELD NAME OPTIONS SENT (for edge function compatibility):');
+    whatsyncDebug('[Background]   - contactId:', requestData.contactId);
+    whatsyncDebug('[Background]   - timestamp:', requestData.timestamp);
+    whatsyncDebug('[Background]');
+    whatsyncDebug('[Background]');
+    whatsyncDebug('[Background] ⚠️ EDGE FUNCTION MUST FORMAT AS:');
+    whatsyncDebug('[Background] ===========================================');
+    whatsyncDebug('[Background] ENDPOINT: POST https://api.hubapi.com/engagements/v1/engagements');
+    whatsyncDebug('[Background] HEADERS: Authorization: Bearer {HUBSPOT_TOKEN}');
+    whatsyncDebug('[Background]          Content-Type: application/json');
+    whatsyncDebug('[Background] ===========================================');
+    whatsyncDebug('[Background] Request body validated (content omitted from logs)');
+    whatsyncDebug('[Background]');
+    whatsyncDebug('[Background] ⚠️ REQUIRED PROPERTIES CHECKLIST:');
+    whatsyncDebug('[Background]   ✅ engagement.active = true');
+    whatsyncDebug('[Background]   ✅ engagement.type = "NOTE" (must be exact string)');
+    whatsyncDebug('[Background]   ✅ engagement.timestamp =', requestData.timestamp, '(milliseconds)');
+    whatsyncDebug('[Background]   ✅ associations.contactIds = [' + requestData.contactId + '] (must be array)');
+
+    whatsyncDebug('[Background] Calling edge function: createNote...');
+    whatsyncDebug('[Background] Edge function endpoint:', HUBSPOT_TOKEN_ENDPOINT);
+    whatsyncDebug('[Background] Action:', 'createNote');
+
     const result = await callHubSpotEdgeFunction('createNote', requestData);
-    
-    console.log('[Background] ✅ Edge function call successful!');
-    console.log('[Background] Result type:', typeof result);
-    console.log('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
-    console.log('[Background] Result:', JSON.stringify(result, null, 2));
-    
+
+    whatsyncDebug('[Background] ✅ Edge function call successful!');
+    whatsyncDebug('[Background] Result type:', typeof result);
+    whatsyncDebug('[Background] Result keys:', result ? Object.keys(result) : 'null/undefined');
+    whatsyncDebug('[Background] Note created successfully');
+
     // Log to Supabase - try to get userId and accessToken from storage if not provided
     let finalUserId = userId;
     let finalAccessToken = accessToken;
-    
+
     if (!finalUserId || !finalAccessToken) {
-      console.log('[Background] userId or accessToken not provided, attempting to get from storage...');
+      whatsyncDebug('[Background] userId or accessToken not provided, attempting to get from storage...');
       try {
         const storageData = await new Promise((resolve) => {
           chrome.storage.local.get(['userId', 'accessToken'], resolve);
         });
         finalUserId = finalUserId || storageData.userId || null;
         finalAccessToken = finalAccessToken || storageData.accessToken || null;
-        console.log('[Background] Retrieved from storage - userId:', finalUserId ? 'present' : 'missing', 'accessToken:', finalAccessToken ? 'present' : 'missing');
+        whatsyncDebug('[Background] Retrieved from storage - userId:', finalUserId ? 'present' : 'missing', 'accessToken:', finalAccessToken ? 'present' : 'missing');
       } catch (error) {
         console.error('[Background] Error getting userId/accessToken from storage:', error);
       }
     }
-    
+
     // Log to Supabase if userId and accessToken are available
     if (finalUserId && finalAccessToken) {
-      console.log('[Background] Attempting to log note creation to Supabase...');
+      whatsyncDebug('[Background] Attempting to log note creation to Supabase...');
       try {
         await logNoteCreationToSupabase(finalUserId, finalAccessToken, noteData, requestData, result);
-        console.log('[Background] ✅ Supabase logging completed');
+        whatsyncDebug('[Background] ✅ Supabase logging completed');
       } catch (error) {
         console.error('[Background] ❌ Error during Supabase logging (non-fatal):', error);
         // Don't throw - logging failure shouldn't break the note creation
@@ -1692,7 +1679,7 @@ async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
       console.warn('[Background] userId:', finalUserId, 'accessToken:', finalAccessToken ? 'present' : 'missing');
       console.warn('[Background] Note: This is a warning, not an error. Note was still created in HubSpot.');
     }
-    
+
     return result;
   } catch (error) {
     console.error('[Background] ❌ Error in createHubSpotNoteViaEdgeFunction');
@@ -1704,7 +1691,7 @@ async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
     }
     throw error;
   } finally {
-    console.log('[Background] ===========================================');
+    whatsyncDebug('[Background] ===========================================');
   }
 }
 
@@ -1714,11 +1701,11 @@ async function logNoteCreationToSupabase(userId, accessToken, noteData, requestD
     console.warn('[Background] No userId provided, skipping note log');
     return;
   }
-  
+
   try {
     // Get contact ID from request data
     const contactId = requestData.contactId || noteData.contactId;
-    
+
     // Initialize contact details with default values
     let firstName = null;
     let lastName = null;
@@ -1727,7 +1714,7 @@ async function logNoteCreationToSupabase(userId, accessToken, noteData, requestD
     let company = null;
     let jobTitle = null;
     let contactName = 'Contact';
-    
+
     // Fetch contact details to populate all columns
     try {
       if (contactId) {
@@ -1738,14 +1725,14 @@ async function logNoteCreationToSupabase(userId, accessToken, noteData, requestD
         const contactResult = await callHubSpotEdgeFunction('getContact', contactData);
         const contact = contactResult?.results?.[0] || contactResult?.data || contactResult;
         const properties = contact?.properties || {};
-        
+
         firstName = properties.firstname || properties.first_name || null;
         lastName = properties.lastname || properties.last_name || null;
         contactPhone = properties.phone || null;
         email = properties.email || null;
         company = properties.company || null;
         jobTitle = properties.jobtitle || properties.job_title || null;
-        
+
         // Build contact name for description
         const fullName = `${firstName || ''} ${lastName || ''}`.trim();
         contactName = fullName || 'Contact';
@@ -1754,7 +1741,7 @@ async function logNoteCreationToSupabase(userId, accessToken, noteData, requestD
       console.warn('[Background] Could not fetch contact details for note log:', error);
       // Continue with default values
     }
-    
+
     // Build description: "Note added to John Doe • +971xxxx"
     const descriptionParts = [`Note added to ${contactName}`];
     if (contactPhone) {
@@ -1767,31 +1754,31 @@ async function logNoteCreationToSupabase(userId, accessToken, noteData, requestD
         phoneDisplay = phoneMatch[1] + 'xxxx';
       } else {
         // Fallback: mask last 4 digits
-        phoneDisplay = contactPhone.length > 4 
+        phoneDisplay = contactPhone.length > 4
           ? contactPhone.substring(0, contactPhone.length - 4) + 'xxxx'
           : contactPhone;
       }
       descriptionParts.push(phoneDisplay);
     }
     const description = descriptionParts.join(' • ');
-    
+
     // Extract note text and HTML
     const noteText = requestData.note || requestData.body || noteData.noteText || '';
     const noteHtml = noteData.noteHtml || null;
-    
+
     // Extract note ID from HubSpot response (check data.id first as per user's format: noteResponse.data.id)
     const noteId = hubspotNote?.data?.id ||
-                   hubspotNote?.engagement?.id || 
-                   hubspotNote?.id || 
+                   hubspotNote?.engagement?.id ||
+                   hubspotNote?.id ||
                    hubspotNote?.data?.engagement?.id ||
                    null;
-    
-    console.log('[Background] ===== LOGGING NOTE TO SUPABASE VIA EDGE FUNCTION =====');
-    console.log('[Background] Edge function URL:', HUBSPOT_TOKEN_ENDPOINT);
-    console.log('[Background] User ID:', userId);
-    console.log('[Background] Contact ID:', contactId);
-    console.log('[Background] Note ID:', noteId);
-    
+
+    whatsyncDebug('[Background] ===== LOGGING NOTE TO SUPABASE VIA EDGE FUNCTION =====');
+    whatsyncDebug('[Background] Edge function URL:', HUBSPOT_TOKEN_ENDPOINT);
+    whatsyncDebug('[Background] User ID:', userId);
+    whatsyncDebug('[Background] Contact ID:', contactId);
+    whatsyncDebug('[Background] Note ID:', noteId);
+
     // Route through callHubSpotEdgeFunction so the request carries the same
     // auth headers (apikey + JWT), timeout, and refresh-retry as every other
     // edge call. A raw fetch here used to go out unauthenticated.
@@ -1811,7 +1798,7 @@ async function logNoteCreationToSupabase(userId, accessToken, noteData, requestD
       rawNoteResponse: hubspotNote,
       rawNoteData: noteData
     });
-    console.log('[Background] ✅ Note creation logged to Supabase successfully via edge function');
+    whatsyncDebug('[Background] ✅ Note creation logged to Supabase successfully via edge function');
   } catch (error) {
     console.error('[Background] ❌ Failed to log note to Supabase (non-fatal — note was still created in HubSpot):', error.message);
     // Don't throw - logging failure shouldn't break the note creation
@@ -1874,9 +1861,9 @@ async function logContactCreationToSupabase(userId, accessToken, contactData, hu
       },
     };
 
-    console.log('[Background] Logging contact creation via edge function:', logData);
+    whatsyncDebug('[Background] Logging contact creation via edge function:', logData);
     const result = await callHubSpotEdgeFunction('logContactCreation', logData);
-    console.log('[Background] ✅ Contact creation logged successfully via edge function:', result);
+    whatsyncDebug('[Background] ✅ Contact creation logged successfully via edge function:', result);
     return result;
   } catch (error) {
     console.error('[Background] Error logging contact creation:', error);
@@ -1907,7 +1894,7 @@ async function doRefreshAccessToken(refreshTokenArg) {
     const refreshToken = latest || refreshTokenArg;
     if (!refreshToken) return null;
 
-    console.log('[Background] Attempting to refresh access token...');
+    whatsyncDebug('[Background] Attempting to refresh access token...');
     const response = await fetchWithTimeout(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST',
       headers: {
@@ -1928,7 +1915,7 @@ async function doRefreshAccessToken(refreshTokenArg) {
         const { accessToken: stored } = await chrome.storage.local.get(['accessToken']);
         const expMs = stored ? getJwtExpMs(stored) : 0;
         if (stored && expMs && expMs - Date.now() > SESSION_CONFIG.refreshLeewayMs) {
-          console.log('[Background] Refresh token already rotated; using current valid token from storage.');
+          whatsyncDebug('[Background] Refresh token already rotated; using current valid token from storage.');
           return stored;
         }
       }
@@ -1969,7 +1956,7 @@ async function doRefreshAccessToken(refreshTokenArg) {
     }
     await chrome.storage.local.set(updates);
 
-    console.log('[Background] ✅ Access token refreshed successfully');
+    whatsyncDebug('[Background] ✅ Access token refreshed successfully');
     return newAccessToken;
   } catch (error) {
     console.error('[Background] Error refreshing access token:', error);
@@ -1984,12 +1971,12 @@ async function getFreshAccessToken(userId, currentAccessToken) {
     const storageData = await chrome.storage.local.get(['accessToken']);
     const storedToken = storageData.accessToken;
     const refreshToken = await getStoredRefreshToken();
-    
+
     if (storedToken && storedToken !== currentAccessToken) {
-      console.log('[Background] Found updated access token in storage');
+      whatsyncDebug('[Background] Found updated access token in storage');
       return storedToken;
     }
-    
+
     // If we have a refresh token, try to refresh the access token
     if (refreshToken) {
       const refreshedToken = await refreshAccessToken(refreshToken);
@@ -1997,7 +1984,7 @@ async function getFreshAccessToken(userId, currentAccessToken) {
         return refreshedToken;
       }
     }
-    
+
     // Fallback to current token or stored token
     return currentAccessToken || storedToken;
   } catch (error) {
@@ -2012,21 +1999,21 @@ async function logTicketCreationToSupabase(userId, accessToken, ticketData, hubs
     console.warn('[Background] No userId provided, skipping ticket log');
     return;
   }
-  
+
   try {
     // Extract ticket ID from HubSpot response
     // HubSpot CRM v3 API returns object with id
-    const hubspotTicketId = hubspotTicket?.id || 
+    const hubspotTicketId = hubspotTicket?.id ||
                            hubspotTicket?.results?.[0]?.id ||
                            hubspotTicket?.data?.id ||
                            hubspotTicket?.data?.results?.[0]?.id ||
                            null;
-    
+
     // Get ticket subject/name
-    const ticketSubject = hubspotTicket?.properties?.subject || 
-                         ticketData?.properties?.subject || 
+    const ticketSubject = hubspotTicket?.properties?.subject ||
+                         ticketData?.properties?.subject ||
                          'Ticket created';
-    
+
     // Initialize contact details with default values
     let firstName = null;
     let lastName = null;
@@ -2035,7 +2022,7 @@ async function logTicketCreationToSupabase(userId, accessToken, ticketData, hubs
     let company = null;
     let jobTitle = null;
     let contactName = 'Contact';
-    
+
     // Fetch contact details to populate all columns
     try {
       if (contactId) {
@@ -2046,14 +2033,14 @@ async function logTicketCreationToSupabase(userId, accessToken, ticketData, hubs
         const contactResult = await callHubSpotEdgeFunction('getContact', contactData);
         const contact = contactResult?.results?.[0] || contactResult?.data || contactResult;
         const properties = contact?.properties || {};
-        
+
         firstName = properties.firstname || properties.first_name || null;
         lastName = properties.lastname || properties.last_name || null;
         contactPhone = properties.phone || null;
         email = properties.email || null;
         company = properties.company || null;
         jobTitle = properties.jobtitle || properties.job_title || null;
-        
+
         // Build contact name for description
         const fullName = `${firstName || ''} ${lastName || ''}`.trim();
         contactName = fullName || 'Contact';
@@ -2062,7 +2049,7 @@ async function logTicketCreationToSupabase(userId, accessToken, ticketData, hubs
       console.warn('[Background] Could not fetch contact details for ticket log:', error);
       // Continue with default values
     }
-    
+
     // Prepare data for edge function logTicketCreation action
     const logData = {
       userId: userId,
@@ -2079,14 +2066,14 @@ async function logTicketCreationToSupabase(userId, accessToken, ticketData, hubs
       ticketPriority: ticketData?.properties?.hs_ticket_priority || null,
       ticketStage: ticketData?.properties?.hs_pipeline_stage || null
     };
-    
-    console.log('[Background] Logging ticket creation via edge function:', logData);
-    
+
+    whatsyncDebug('[Background] Logging ticket creation via edge function:', logData);
+
     // Call edge function to log ticket creation (bypasses JWT auth)
     const result = await callHubSpotEdgeFunction('logTicketCreation', logData);
-    
-    console.log('[Background] ✅ Ticket creation logged to Supabase successfully via edge function');
-    console.log('[Background] Log result:', result);
+
+    whatsyncDebug('[Background] ✅ Ticket creation logged to Supabase successfully via edge function');
+    whatsyncDebug('[Background] Log result:', result);
   } catch (error) {
     console.error('[Background] Error logging ticket to Supabase via edge function:', error);
     // Don't throw - logging failure shouldn't break the ticket creation
@@ -2099,54 +2086,54 @@ async function logTaskCreationToSupabase(userId, accessToken, taskData, hubspotT
     console.warn('[Background] No userId provided, skipping task log');
     return;
   }
-  
+
   try {
     // Extract task ID from HubSpot response
     // HubSpot CRM v3 API returns object with id
-    const hubspotTaskId = hubspotTask?.id || 
+    const hubspotTaskId = hubspotTask?.id ||
                          hubspotTask?.results?.[0]?.id ||
                          hubspotTask?.data?.id ||
                          hubspotTask?.data?.results?.[0]?.id ||
                          null;
-    
+
     // Get task subject/name
-    const taskSubject = hubspotTask?.properties?.hs_task_subject || 
+    const taskSubject = hubspotTask?.properties?.hs_task_subject ||
                        taskData?.properties?.hs_task_subject ||
                        taskData?.subject ||
                        taskData?.name ||
                        'Task created';
-    
+
     // Get task body/notes
     const taskBody = hubspotTask?.properties?.hs_task_body ||
                     taskData?.properties?.hs_task_body ||
                     taskData?.notes ||
                     taskData?.body ||
                     null;
-    
+
     // Get task due date
     const taskDueDate = hubspotTask?.properties?.hs_timestamp ||
                        taskData?.properties?.hs_timestamp ||
                        taskData?.dueDate ||
                        null;
-    
+
     // Get task priority
     const taskPriority = hubspotTask?.properties?.hs_task_priority ||
                         taskData?.properties?.hs_task_priority ||
                         taskData?.priority ||
                         null;
-    
+
     // Get task type
     const taskType = hubspotTask?.properties?.hs_task_type ||
                     taskData?.properties?.hs_task_type ||
                     taskData?.type ||
                     null;
-    
+
     // Get assigned to
     const assignedTo = hubspotTask?.properties?.hubspot_owner_id ||
                       taskData?.properties?.hubspot_owner_id ||
                       taskData?.assignedTo ||
                       null;
-    
+
     // Initialize contact details with default values
     let firstName = null;
     let lastName = null;
@@ -2155,7 +2142,7 @@ async function logTaskCreationToSupabase(userId, accessToken, taskData, hubspotT
     let company = null;
     let jobTitle = null;
     let contactName = 'Contact';
-    
+
     // Fetch contact details to populate all columns
     try {
       if (contactId) {
@@ -2166,14 +2153,14 @@ async function logTaskCreationToSupabase(userId, accessToken, taskData, hubspotT
         const contactResult = await callHubSpotEdgeFunction('getContact', contactData);
         const contact = contactResult?.results?.[0] || contactResult?.data || contactResult;
         const properties = contact?.properties || {};
-        
+
         firstName = properties.firstname || properties.first_name || null;
         lastName = properties.lastname || properties.last_name || null;
         contactPhone = properties.phone || null;
         email = properties.email || null;
         company = properties.company || null;
         jobTitle = properties.jobtitle || properties.job_title || null;
-        
+
         // Build contact name for description
         const fullName = `${firstName || ''} ${lastName || ''}`.trim();
         contactName = fullName || 'Contact';
@@ -2182,7 +2169,7 @@ async function logTaskCreationToSupabase(userId, accessToken, taskData, hubspotT
       console.warn('[Background] Could not fetch contact details for task log:', error);
       // Continue with default values
     }
-    
+
     // Prepare data for edge function logTaskCreation action
     const logData = {
       userId: userId,
@@ -2201,14 +2188,14 @@ async function logTaskCreationToSupabase(userId, accessToken, taskData, hubspotT
       taskType: taskType,
       assignedTo: assignedTo
     };
-    
-    console.log('[Background] Logging task creation via edge function:', logData);
-    
+
+    whatsyncDebug('[Background] Logging task creation via edge function:', logData);
+
     // Call edge function to log task creation (bypasses JWT auth)
     const result = await callHubSpotEdgeFunction('logTaskCreation', logData);
-    
-    console.log('[Background] ✅ Task creation logged to Supabase successfully via edge function');
-    console.log('[Background] Log result:', result);
+
+    whatsyncDebug('[Background] ✅ Task creation logged to Supabase successfully via edge function');
+    whatsyncDebug('[Background] Log result:', result);
   } catch (error) {
     console.error('[Background] Error logging task to Supabase via edge function:', error);
     // Don't throw - logging failure shouldn't break the task creation
@@ -2221,14 +2208,14 @@ async function logDealCreationToSupabase(userId, accessToken, dealLogData) {
     console.warn('[Background] No userId provided, skipping deal log');
     return;
   }
-  
+
   try {
     // Extract deal ID
     const dealId = dealLogData?.dealId || null;
-    
+
     // Get deal name
     const dealName = dealLogData?.dealName || 'Deal created';
-    
+
     // Initialize contact details with default values
     let firstName = null;
     let lastName = null;
@@ -2237,7 +2224,7 @@ async function logDealCreationToSupabase(userId, accessToken, dealLogData) {
     let company = null;
     let jobTitle = null;
     let contactName = 'Contact';
-    
+
     // Fetch contact details to populate all columns
     try {
       if (dealLogData?.hubspotContactId) {
@@ -2248,14 +2235,14 @@ async function logDealCreationToSupabase(userId, accessToken, dealLogData) {
         const contactResult = await callHubSpotEdgeFunction('getContact', contactData);
         const contact = contactResult?.results?.[0] || contactResult?.data || contactResult;
         const properties = contact?.properties || {};
-        
+
         firstName = properties.firstname || properties.first_name || null;
         lastName = properties.lastname || properties.last_name || null;
         contactPhone = properties.phone || null;
         email = properties.email || null;
         company = properties.company || null;
         jobTitle = properties.jobtitle || properties.job_title || null;
-        
+
         // Build contact name for description
         const fullName = `${firstName || ''} ${lastName || ''}`.trim();
         contactName = fullName || 'Contact';
@@ -2264,7 +2251,7 @@ async function logDealCreationToSupabase(userId, accessToken, dealLogData) {
       console.warn('[Background] Could not fetch contact details for deal log:', error);
       // Continue with default values
     }
-    
+
     // Build description: "Deal created: Deal Name • $5000 • Appointment Scheduled"
     const descriptionParts = [`Deal created: ${dealName}`];
     if (dealLogData?.dealAmount) {
@@ -2275,7 +2262,7 @@ async function logDealCreationToSupabase(userId, accessToken, dealLogData) {
       descriptionParts.push(stageLabel);
     }
     const description = descriptionParts.join(' • ');
-    
+
     // Prepare data for edge function logDealCreation action
     const logData = {
       userId: userId,
@@ -2294,14 +2281,14 @@ async function logDealCreationToSupabase(userId, accessToken, dealLogData) {
       dealType: dealLogData?.dealType || null,
       dealPriority: dealLogData?.dealPriority || null
     };
-    
-    console.log('[Background] Logging deal creation via edge function:', logData);
-    
+
+    whatsyncDebug('[Background] Logging deal creation via edge function:', logData);
+
     // Call edge function to log deal creation (bypasses JWT auth)
     const result = await callHubSpotEdgeFunction('logDealCreation', logData);
-    
-    console.log('[Background] ✅ Deal creation logged to Supabase successfully via edge function');
-    console.log('[Background] Log result:', result);
+
+    whatsyncDebug('[Background] ✅ Deal creation logged to Supabase successfully via edge function');
+    whatsyncDebug('[Background] Log result:', result);
     return result;
   } catch (error) {
     console.error('[Background] Error logging deal to Supabase via edge function:', error);
@@ -2333,8 +2320,8 @@ async function maybeCreateCompanyForContact(createdContact, payload, syncSetting
 }
 
 async function createHubSpotContactViaEdgeFunction(contactData, userId, accessToken) {
-  console.log('[Background] Creating HubSpot contact via edge function:', contactData);
-  
+  whatsyncDebug('[Background] Creating HubSpot contact via edge function:', contactData);
+
   try {
     let payload = contactData;
     if (userId) {
@@ -2355,7 +2342,7 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
         const phone = payload.sourceData?.phone || payload.properties?.phone;
         const existing = await findExistingHubSpotContactByPhone(phone);
         if (existing) {
-          console.log('[Background] enrich_before_create: using existing contact', existing.id);
+          whatsyncDebug('[Background] enrich_before_create: using existing contact', existing.id);
           if (userId && accessToken) {
             // No create occurred; do not write a creation log.
           }
@@ -2366,9 +2353,9 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
 
     // Call edge function to create contact
     const result = await callHubSpotEdgeFunction('createContact', payload);
-    
-    console.log('[Background] Edge function response:', result);
-    
+
+    whatsyncDebug('[Background] Edge function response:', result);
+
     // Handle different response formats from edge function
     const createdContact = result.results?.[0] || result.data?.[0] || result.data || result;
 
@@ -2379,9 +2366,9 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
     }
 
     if (createdContact) {
-      console.log('[Background] ✅ Contact created successfully');
-      console.log('[Background] Created contact details:', createdContact);
-      
+      whatsyncDebug('[Background] ✅ Contact created successfully');
+      whatsyncDebug('[Background] Created contact details:', createdContact);
+
       // Log to Supabase if userId and accessToken are provided
       if (userId && accessToken) {
         const syncSettings = await getSyncSettingsForUser(userId);
@@ -2392,7 +2379,7 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
         console.warn('[Background] Missing userId or accessToken, skipping Supabase log');
         console.warn('[Background] userId:', userId, 'accessToken:', accessToken ? 'present' : 'missing');
       }
-      
+
       return createdContact;
     } else {
       throw new Error('Failed to create contact - no contact data returned');
@@ -2407,7 +2394,7 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
 async function callHubSpotOAuthEdgeFunction(action, data) {
   const requestBody = { action, data };
 
-  console.log('[Background] Calling hubspot-oauth edge function:', action);
+  whatsyncDebug('[Background] Calling hubspot-oauth edge function:', action);
 
   let accessToken = await getStoredAccessToken();
   const doRequest = (token) => {
@@ -2465,7 +2452,7 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
 
   const now = Date.now();
   if (hubspotConnectionCache && hubspotConnectionCache.userId === userId && (now - hubspotConnectionCache.cachedAt) < HUBSPOT_CONNECTION_CACHE_MS) {
-    console.log('[Background] HubSpot connection status (cached):', hubspotConnectionCache.status);
+    whatsyncDebug('[Background] HubSpot connection status (cached):', hubspotConnectionCache.status);
     return {
       status: hubspotConnectionCache.status,
       portalId: hubspotConnectionCache.portalId,
@@ -2475,12 +2462,12 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
     };
   }
 
-  console.log('[Background] Checking HubSpot integration status via hubspot-oauth edge function');
-  console.log('[Background] User ID:', userId);
+  whatsyncDebug('[Background] Checking HubSpot integration status via hubspot-oauth edge function');
+  whatsyncDebug('[Background] User ID:', userId);
 
   try {
     const result = await callHubSpotOAuthEdgeFunction('getConnectionStatus', { userId: userId });
-    console.log('[Background] Edge function response:', result);
+    whatsyncDebug('[Background] Edge function response:', result);
 
     const portalId = result.portalId ?? result.portal_id;
     const connectedAt = result.connectedAt ?? result.connected_at;
@@ -2524,7 +2511,7 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
       const stored = await chrome.storage.local.get(HUBSPOT_CONNECTION_STORAGE_KEY);
       const saved = stored[HUBSPOT_CONNECTION_STORAGE_KEY];
       if (saved && saved.userId === userId && (Date.now() - saved.savedAt) < HUBSPOT_CONNECTION_STORAGE_TTL_MS) {
-        console.log('[Background] HubSpot status from durable fallback:', saved.status);
+        whatsyncDebug('[Background] HubSpot status from durable fallback:', saved.status);
         // Warm the in-memory cache from storage so the next call is instant.
         hubspotConnectionCache = { ...saved, cachedAt: Date.now() };
         return saved;
@@ -2899,7 +2886,7 @@ async function scanHubSpotContactsByPhone(phoneVariations) {
 
 async function checkHubSpotContactViaEdgeFunction(phoneNumber) {
   if (!phoneNumber) {
-    console.log('[Background] No phone number provided');
+    whatsyncDebug('[Background] No phone number provided');
     return null;
   }
 
@@ -2909,21 +2896,21 @@ async function checkHubSpotContactViaEdgeFunction(phoneNumber) {
     const matchingContacts = await searchHubSpotContactsByPhone(phoneVariations);
 
     if (matchingContacts.length > 0) {
-      console.log('[Background] ✅ Found', matchingContacts.length, 'matching contact(s)');
+      whatsyncDebug('[Background] ✅ Found', matchingContacts.length, 'matching contact(s)');
 
       // Enrich contacts with company names and missing properties
       const enrichedContacts = await Promise.all(
         matchingContacts.map(async (contact) => {
           const props = contact.properties || {};
           const contactId = contact.id || contact.hs_object_id || props.hs_object_id;
-          
+
           // Check if associations are present in the response
           if (contact.associations && contact.associations.company) {
-            console.log('[Background] Found company associations:', contact.associations.company);
+            whatsyncDebug('[Background] Found company associations:', contact.associations.company);
             const companyAssociations = contact.associations.company.results || contact.associations.company || [];
             if (companyAssociations.length > 0) {
               const companyId = companyAssociations[0].id || companyAssociations[0];
-              console.log('[Background] Found associated company ID from associations:', companyId);
+              whatsyncDebug('[Background] Found associated company ID from associations:', companyId);
               if (!props.associatedcompanyid) {
                 if (!contact.properties) {
                   contact.properties = {};
@@ -2932,17 +2919,17 @@ async function checkHubSpotContactViaEdgeFunction(phoneNumber) {
               }
             }
           }
-          
+
           // If we still have an associated company ID but no company name, fetch it
           const associatedCompanyId = props.associatedcompanyid;
           const hasCompanyName = props.associatedcompanyname || (props.company && props.company.trim() !== '');
-          
+
           if (associatedCompanyId && !hasCompanyName) {
             try {
-              console.log('[Background] Fetching company name for company ID:', associatedCompanyId);
+              whatsyncDebug('[Background] Fetching company name for company ID:', associatedCompanyId);
               const companyData = await callHubSpotEdgeFunction('getCompany', { companyId: associatedCompanyId });
               const companyName = companyData?.properties?.name || companyData?.name || null;
-              
+
               if (companyName) {
                 // Add company name to contact properties
                 if (!contact.properties) {
@@ -2950,21 +2937,21 @@ async function checkHubSpotContactViaEdgeFunction(phoneNumber) {
                 }
                 contact.properties.associatedcompanyname = companyName;
                 contact.properties.company = companyName; // Also set company property for consistency
-                console.log('[Background] ✅ Fetched company name:', companyName);
+                whatsyncDebug('[Background] ✅ Fetched company name:', companyName);
               }
             } catch (error) {
               console.warn('[Background] Failed to fetch company name:', error);
               // Continue without company name
             }
           }
-          
+
           return contact;
         })
       );
-      
+
       return enrichedContacts;
     } else {
-      console.log('[Background] ⚠️ No matching contacts found');
+      whatsyncDebug('[Background] ⚠️ No matching contacts found');
       return null;
     }
   } catch (error) {
@@ -3033,7 +3020,7 @@ async function maybeRefreshSession() {
     if (!newToken && expMs && expMs < Date.now()) {
       // Access token already dead AND refresh was rejected -> session is truly
       // over. Now (and only now) it is correct to require a fresh login.
-      console.log('[Background] Refresh token rejected; signing out.');
+      whatsyncDebug('[Background] Refresh token rejected; signing out.');
       await signOutEverywhere();
     }
   } catch (error) {
@@ -3072,12 +3059,12 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
       const isLoggedIn = changes.userLoggedIn.newValue === true;
       if (isLoggedIn) {
         // User logged in — start the periodic token-refresh check
-        console.log('[Background] User logged in, starting token-refresh checks');
+        whatsyncDebug('[Background] User logged in, starting token-refresh checks');
         scheduleSessionCheck();
         maybeRefreshSession();
       } else {
         // User logged out — stop checks
-        console.log('[Background] User logged out, stopping token-refresh checks');
+        whatsyncDebug('[Background] User logged out, stopping token-refresh checks');
         chrome.alarms.clear('sessionCheck');
       }
     }

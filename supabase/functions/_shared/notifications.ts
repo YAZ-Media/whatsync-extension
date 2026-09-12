@@ -29,12 +29,15 @@ function normalizeResendFrom(): string {
 
 export async function fetchUserProfile(
   userId: string
-): Promise<{ email: string | null; first_name?: string; last_name?: string; role?: string; company?: string } | null> {
+): Promise<{ email: string | null; first_name?: string; last_name?: string; role?: string; company?: string; organization_id?: string | null } | null> {
   const creds = getExternalSupabaseCredentials();
   if (!creds) return null;
 
-  const url = `${creds.url}/rest/v1/user_profiles?user_id=eq.${userId}&select=email,first_name,last_name,role,company&limit=1`;
-  const res = await fetch(url, {
+  const url = new URL(`${creds.url}/rest/v1/user_profiles`);
+  url.searchParams.set('user_id', `eq.${userId}`);
+  url.searchParams.set('select', 'email,first_name,last_name,role,company,organization_id');
+  url.searchParams.set('limit', '1');
+  const res = await fetch(url.toString(), {
     headers: {
       apikey: creds.serviceKey,
       Authorization: `Bearer ${creds.serviceKey}`,
@@ -130,8 +133,17 @@ export async function notifyTeamActivity(params: {
   const creds = getExternalSupabaseCredentials();
   if (!creds) return;
 
-  const profilesUrl = `${creds.url}/rest/v1/user_profiles?select=user_id,email,role&status=eq.Active`;
-  const profilesRes = await fetch(profilesUrl, {
+  const actor = await fetchUserProfile(params.actorUserId);
+  if (!actor) return;
+
+  // Team notifications must never cross workspace boundaries. Fresh owners use
+  // their own user id as the organization id; invited users inherit it.
+  const organizationId = actor.organization_id || params.actorUserId;
+  const profilesUrl = new URL(`${creds.url}/rest/v1/user_profiles`);
+  profilesUrl.searchParams.set('select', 'user_id,email,role');
+  profilesUrl.searchParams.set('status', 'eq.Active');
+  profilesUrl.searchParams.set('organization_id', `eq.${organizationId}`);
+  const profilesRes = await fetch(profilesUrl.toString(), {
     headers: {
       apikey: creds.serviceKey,
       Authorization: `Bearer ${creds.serviceKey}`,
@@ -150,8 +162,11 @@ export async function notifyTeamActivity(params: {
 
   if (adminIds.length === 0) return;
 
-  const settingsUrl = `${creds.url}/rest/v1/workspace_settings?select=user_id,team_activity&user_id=in.(${adminIds.join(',')})&team_activity=eq.true`;
-  const settingsRes = await fetch(settingsUrl, {
+  const settingsUrl = new URL(`${creds.url}/rest/v1/workspace_settings`);
+  settingsUrl.searchParams.set('select', 'user_id,team_activity');
+  settingsUrl.searchParams.set('user_id', `in.(${adminIds.join(',')})`);
+  settingsUrl.searchParams.set('team_activity', 'eq.true');
+  const settingsRes = await fetch(settingsUrl.toString(), {
     headers: {
       apikey: creds.serviceKey,
       Authorization: `Bearer ${creds.serviceKey}`,

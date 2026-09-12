@@ -684,51 +684,6 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     transform: none;
 }
 
-/* Inline login form inside sidebar sign-in state */
-#hubspot-sidebar .ws-login-form-state {
-    padding-top: 32px;
-}
-
-#hubspot-sidebar .ws-inline-login {
-    width: 100%;
-    max-width: 260px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-top: 16px;
-}
-
-#hubspot-sidebar .ws-login-input {
-    width: 100%;
-    padding: 10px 14px;
-    border: 1px solid var(--sidebar-border, #e0e0e0);
-    border-radius: 8px;
-    font-size: 13.5px;
-    background: var(--sidebar-bg, #fff);
-    color: var(--sidebar-text, #1a1a1a);
-    outline: none;
-    box-sizing: border-box;
-    transition: border-color 0.15s ease;
-}
-
-#hubspot-sidebar .ws-login-input:focus {
-    border-color: #ff7a59;
-}
-
-#hubspot-sidebar .ws-login-error {
-    font-size: 12px;
-    color: #ef4444;
-    background: rgba(239,68,68,0.08);
-    border-radius: 6px;
-    padding: 8px 10px;
-    text-align: left;
-}
-
-#hubspot-sidebar .ws-login-submit {
-    margin-top: 4px;
-    width: 100%;
-}
-
 /* ==================== Recent activity timeline ==================== */
 #hubspot-sidebar .activities-section {
     padding: 16px 20px;

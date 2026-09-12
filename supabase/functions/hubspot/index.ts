@@ -22,6 +22,7 @@ import { assertWorkspaceAccess, getWorkspaceAccess } from '../_shared/entitlemen
 
 import { sendResendEmail } from '../_shared/notifications.ts';
 import { signInviteToken } from '../_shared/invites.ts';
+import { assertSeatCapacity, consumesPaidSeat } from '../_shared/seats.ts';
 
 const EXTERNAL_SUPABASE_URL = Deno.env.get('EXTERNAL_SUPABASE_URL') ?? '';
 const SERVICE_ROLE_KEY = Deno.env.get('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -473,6 +474,16 @@ async function updateTeamMember(userId: string, data: Record<string, unknown>): 
     throw new HttpError(400, 'No valid updates provided');
   }
 
+  const nextRole = String(patch.role ?? target.role ?? 'Member');
+  const nextStatus = String(patch.status ?? target.status ?? 'Active');
+  if (!consumesPaidSeat(target.role, target.status) && consumesPaidSeat(nextRole, nextStatus)) {
+    try {
+      await assertSeatCapacity(orgId, userId);
+    } catch (error) {
+      throw new HttpError(402, error instanceof Error ? error.message : 'No paid seat is available');
+    }
+  }
+
   const res = await db(`user_profiles?user_id=eq.${targetUserId}`, {
     method: 'PATCH',
     headers: { Prefer: 'return=representation' },
@@ -499,6 +510,14 @@ async function inviteTeamMember(userId: string, data: Record<string, unknown>): 
     : 'https://whatsync.io';
 
   const { profile: me, orgId } = await requireTeamManager(userId);
+
+  if (consumesPaidSeat(role, 'Active')) {
+    try {
+      await assertSeatCapacity(orgId, userId);
+    } catch (error) {
+      throw new HttpError(402, error instanceof Error ? error.message : 'No paid seat is available');
+    }
+  }
 
   // Don't invite someone who's already in the org.
   const existingRes = await db(

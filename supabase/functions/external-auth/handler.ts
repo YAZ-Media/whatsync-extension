@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { verifyInviteToken } from "../_shared/invites.ts";
+import { assertSeatCapacity, consumesPaidSeat } from "../_shared/seats.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -104,6 +105,19 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
           JSON.stringify({ error: "EMAIL_ALREADY_REGISTERED" }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
+      }
+
+      // Re-check at acceptance time. Several valid links may be opened at once,
+      // so checking only when an invitation is sent cannot enforce plan quantity.
+      if (inviteToken && profileOrg && invitedBy && consumesPaidSeat(profileRole, 'Active')) {
+        try {
+          await assertSeatCapacity(profileOrg, invitedBy);
+        } catch (seatError) {
+          return new Response(
+            JSON.stringify({ error: seatError instanceof Error ? seatError.message : "No paid seat is available." }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
       }
 
       const { data, error } = await externalSupabase.auth.signUp({

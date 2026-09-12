@@ -8,8 +8,10 @@ Reviewed 12 September 2026. No zero-bug guarantee is possible. Passing local tes
 - Extension connection is required and detected by a same-account handshake on whatsync.io. Local previews explain that detection requires the published site.
 - Inputs use 38px border-box height, contact markup is correctly nested, actions wrap with spacing. Empty chat scan results stay compact until explicitly scanned; already-filled suggestions are distinguished from absent details.
 - All three sidebar groups have saved ordering, applied in the real extension and preview. Ticket is a direct sortable action; Templates replaces the generic More label.
-- CRM writes require a valid active/trialing subscription with a future period end; no-plan/expired/overdue writes fail closed. Setup preferences and permitted CRM reads remain available. There is no hidden owner exemption and no automatic free trial implemented yet.
+- CRM writes require a valid active/trialing subscription with a future period end; no-plan/expired/overdue writes fail closed. Setup preferences and permitted CRM reads remain available. There is no customer-owner exemption and no automatic free trial implemented yet. Explicit server-allowlisted platform owners now have labelled internal access.
 - Existing billing users no longer see Create workspace. Customer-facing plan and checkout messages use plain language.
+
+- Owner console: account and integration health, registered users, recent error metadata, processed billing events, and Stripe configuration checks. See `release/OWNER_AND_STRIPE_STATUS.md` for scope and connection blockers.
 
 ## Changes delivered
 
@@ -26,7 +28,7 @@ Reviewed 12 September 2026. No zero-bug guarantee is possible. Passing local tes
 
 ## Verification evidence
 
-Final local result: **52 automated tests passed** (12 Node, 12 Deno, 28 browser), plus the disposable database checks. The browser suite includes a fresh-profile MV3 service-worker and popup startup check.
+Final local result: **55 automated tests passed** (12 Node, 14 Deno, 29 browser), plus the disposable database checks. The browser suite includes a fresh-profile MV3 service-worker and popup startup check.
 
 Reproducible checks are in `tests/`, `supabase/tests/`, and `website/tests/`. The release bundle contains the final report files.
 

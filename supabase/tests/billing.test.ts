@@ -102,3 +102,22 @@ Deno.test('live workspace enforcement denies no-plan, expired, overdue, suspende
   role='Read-only';await denied();role='Owner';status='Suspended';equal((await getWorkspaceAccess('u')).canRead,false);await denied();
  }finally{globalThis.fetch=oldFetch;}
 });
+Deno.test('internal owner access requires the exact server UUID and an active account',async()=>{
+ const {getWorkspaceAccess}=await import('../functions/_shared/entitlements.ts');const oldFetch=globalThis.fetch;
+ const prior=Deno.env.get('BILLING_ADMIN_USER_IDS');Deno.env.set('BILLING_ADMIN_USER_IDS','internal-owner');let status='Active';
+ globalThis.fetch=async(input:RequestInfo|URL)=>new Response(JSON.stringify(String(input).includes('user_profiles')?{role:'Owner',status,organization_id:null}:[]),{headers:{'content-type':'application/json'}});
+ try {equal((await getWorkspaceAccess('internal-owner')).state,'internal');equal((await getWorkspaceAccess('ordinary-owner')).canWrite,false);status='Suspended';equal((await getWorkspaceAccess('internal-owner')).canRead,false);}finally{globalThis.fetch=oldFetch;prior===undefined?Deno.env.delete('BILLING_ADMIN_USER_IDS'):Deno.env.set('BILLING_ADMIN_USER_IDS',prior);}
+});
+Deno.test('operator endpoints deny customer owners and expose no credentials to the internal owner',async()=>{
+ const oldFetch=globalThis.fetch;const prior=Deno.env.get('BILLING_ADMIN_USER_IDS');const key=Deno.env.get('STRIPE_SECRET_KEY');Deno.env.set('STRIPE_SECRET_KEY','');Deno.env.set('BILLING_ADMIN_USER_IDS','internal-owner');let uid='customer-owner';
+ globalThis.fetch=async(input:RequestInfo|URL)=>{
+  const url=String(input);
+  if(url.includes('/auth/v1/user'))return new Response(JSON.stringify({id:uid}));
+  if(url.includes('/user_profiles'))return new Response(JSON.stringify({role:'Owner',status:'Active',organization_id:'org-1',email:'owner@example.com'}),{headers:{'content-type':'application/json'}});
+  throw new Error('Unexpected request');
+ };
+ try {
+  for(const action of ['getBillingHealth','getOperatorOverview','listOperatorAccounts'])equal((await handleBilling(request(action,{}, {Authorization:'Bearer fixture'}))).status,403);
+  uid='internal-owner';const r=await handleBilling(request('getBillingHealth',{}, {Authorization:'Bearer fixture'}));equal(r.status,200);const result=await r.json();equal(result.ready,false);equal(result.mode,'unconfigured');equal(result.configured.apiKey,false);equal(JSON.stringify(result).includes('sk_test'),false);
+ }finally{globalThis.fetch=oldFetch;prior===undefined?Deno.env.delete('BILLING_ADMIN_USER_IDS'):Deno.env.set('BILLING_ADMIN_USER_IDS',prior);key===undefined?Deno.env.delete('STRIPE_SECRET_KEY'):Deno.env.set('STRIPE_SECRET_KEY',key);}
+});

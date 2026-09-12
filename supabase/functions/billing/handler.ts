@@ -1,3 +1,5 @@
+import { operatorAction } from './operator.ts';
+import { isOperator } from '../_shared/operator.ts';
 import Stripe from 'npm:stripe@18.5.0';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { authenticateRequest } from '../_shared/auth.ts';
@@ -90,8 +92,12 @@ export async function handleBilling(req: Request): Promise<Response> {
     const profile = must(await ext.from('user_profiles').select('role,status,organization_id,email').eq('user_id', auth.userId).maybeSingle()).data;
     if (!profile || profile.status !== 'Active') return json({ error: 'An active workspace account is required.' }, 403);
     const accountId = profile.organization_id || auth.userId;
-    const operator = env('BILLING_ADMIN_USER_IDS').split(',').map(s => s.trim()).filter(Boolean).includes(auth.userId);
+    const operator = isOperator(auth.userId);
     if (action === 'getAdminAccess') return json({ isOperator: operator });
+    if (['getOperatorOverview','listOperatorAccounts','getBillingHealth'].includes(action)) {
+      if (!operator) return json({error:'Operator access required.'},403);
+      return json(await operatorAction(action,data,auth.userId,ext));
+    }
     if (action === 'listSubscribers') {
       if (!operator) return json({ error: 'Operator access required.' }, 403);
       const page = Math.max(0, Math.min(Number(data.page) || 0, 10000));
@@ -105,14 +111,14 @@ export async function handleBilling(req: Request): Promise<Response> {
     const customer = must(await ext.from('billing_customers').select('stripe_customer_id').eq('account_id', accountId).maybeSingle()).data;
     if (action === 'getBillingData') {
       const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
-      return json({ subscription, hasCustomer: !!customer, salesEnabled: salesEnabled() });
+      return json({ subscription, hasCustomer: !!customer, salesEnabled: salesEnabled(), internalAccess: operator });
     }
     if (!canManageBilling(profile.role, profile.status)) return json({ error: 'Only a workspace owner or billing manager can manage this subscription.' },403);
     if (['savePaymentMethod','processPayment','changePlan','deletePaymentMethod','setDefaultPaymentMethod'].includes(action)) return json({ error: 'Use secure hosted checkout or the billing portal. Card details are not accepted here.' },410);
     const stripe = stripeClient();
     if (action === 'createPortalSession') {
       if (!customer) return json({ error: 'No billing account yet. Choose a subscription first.' },409);
-      const session = await stripe.billingPortal.sessions.create({ customer:customer.stripe_customer_id,return_url:`${origin()}/dashboard/billing` });
+      const session = await stripe.billingPortal.sessions.create({ customer:customer.stripe_customer_id, ...(env('STRIPE_PORTAL_CONFIGURATION_ID') ? {configuration:env('STRIPE_PORTAL_CONFIGURATION_ID')} : {}),return_url:`${origin()}/dashboard/billing` });
       return json({ url:session.url });
     }
     if (action === 'createCheckoutSession') {

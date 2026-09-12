@@ -33,6 +33,45 @@ export async function handleExternalAuth(req: Request): Promise<Response> {
 
     const { action, email, password, firstName, lastName, company, redirectTo, emailRedirectTo, inviteToken, refreshToken, token_hash, tokenHash, type } = await req.json();
 
+    if (action === "resendConfirmation") {
+      const normalizedEmail = String(email ?? "").trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return new Response(
+          JSON.stringify({ error: "Enter a valid email address." }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      let confirmationUrl = "https://whatsync.io/auth/callback";
+      try {
+        const requested = new URL(String(emailRedirectTo || confirmationUrl));
+        const allowedProduction = requested.protocol === "https:" && ["whatsync.io", "www.whatsync.io"].includes(requested.hostname);
+        const allowedLocal = requested.protocol === "http:" && ["localhost", "127.0.0.1"].includes(requested.hostname);
+        if (allowedProduction || allowedLocal) confirmationUrl = requested.toString();
+      } catch {
+        // Use the production callback for malformed or untrusted redirect input.
+      }
+
+      const { error } = await externalSupabase.auth.resend({
+        type: "signup",
+        email: normalizedEmail,
+        options: { emailRedirectTo: confirmationUrl },
+      });
+      if (error) {
+        const rateLimited = /rate|seconds|minute/i.test(error.message);
+        return new Response(
+          JSON.stringify({ error: rateLimited ? "Please wait a minute before requesting another email." : "We couldn’t send a new confirmation email. Please retry." }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Keep the response generic so this endpoint cannot be used to discover accounts.
+      return new Response(
+        JSON.stringify({ success: true, message: "If this account is awaiting confirmation, a fresh link has been sent." }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     if (action === "signIn") {
       const { data, error } = await externalSupabase.auth.signInWithPassword({
         email,

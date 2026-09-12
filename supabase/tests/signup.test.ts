@@ -25,3 +25,18 @@ for(const failure of [false,true]) Deno.test(`signup uses server privileges for 
   if(failure)equal(body.session,undefined);
  } finally {globalThis.fetch=savedFetch;}
 });
+Deno.test('expired confirmation can request a fresh link without exposing account existence',async()=>{
+ Deno.env.set('EXTERNAL_SUPABASE_URL','https://test-project.supabase.co');
+ Deno.env.set('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY','fixture-service-key');
+ const savedFetch=globalThis.fetch;let resendBody='',resendUrl='';
+ globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);
+  if(url.includes('/auth/v1/resend')){resendUrl=url;resendBody=String(init?.body);return Response.json({});}
+  throw new Error('Unexpected provider request: '+url);
+ };
+ try {
+  const response=await handleExternalAuth(new Request('https://test.local/auth',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'resendConfirmation',email:' Buyer@Example.com ',emailRedirectTo:'https://evil.example/capture'})}));
+  equal(response.status,200);const body=await response.json();equal(body.success,true);
+  const provider=JSON.parse(resendBody);equal(provider.email,'buyer@example.com');equal(new URL(resendUrl).searchParams.get('redirect_to'),'https://whatsync.io/auth/callback');
+ } finally {globalThis.fetch=savedFetch;}
+});

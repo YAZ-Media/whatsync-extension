@@ -47,7 +47,8 @@ Deno.test('signed subscription event persists provider state, ignores forged sna
  const oldFetch=globalThis.fetch;let persisted:Record<string,unknown>|null=null;let fail=false;
  Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');
  globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
-  const url=String(input);
+ const url=String(input);
+  if(url.includes('api.stripe.com/v1/customers/cus_fixture'))return new Response(JSON.stringify({id:'cus_fixture'}),{headers:{'content-type':'application/json'}});
   if(url.includes('/billing_customers'))return new Response(JSON.stringify({account_id:'org-fixture'}),{headers:{'content-type':'application/json'}});
   if(url.includes('api.stripe.com/v1/subscriptions/sub_fixture'))return new Response(JSON.stringify({id:'sub_fixture',customer:'cus_fixture',status:'past_due',cancel_at_period_end:false,livemode:false,items:{data:[{price:{id:'price_fixture',currency:'usd',unit_amount:2900},current_period_end:2000000000}]}}),{headers:{'content-type':'application/json'}});
   if(url.includes('/rpc/apply_billing_event')){persisted=JSON.parse(String(init?.body));return fail?new Response(JSON.stringify({message:'Database unavailable'}),{status:503,headers:{'content-type':'application/json'}}):new Response(null,{status:204});}
@@ -61,6 +62,27 @@ Deno.test('signed subscription event persists provider state, ignores forged sna
   fail=true;equal((await handleBilling(signed())).status,500);
  } finally {globalThis.fetch=oldFetch;}
 });
+Deno.test('invoice webhooks tag WhatSync invoices and payment intents for finance',async()=>{
+ const oldFetch=globalThis.fetch;let invoiceBody='',paymentBody='';Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');
+ const metadata={product:'WhatSync',product_code:'whatsync',revenue_stream:'whatsync_saas',workspace_id:'org-fixture',environment:'production'};
+ globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);
+  if(url.includes('api.stripe.com/v1/customers/cus_fixture'))return new Response(JSON.stringify({id:'cus_fixture'}),{headers:{'content-type':'application/json'}});
+  if(url.includes('/billing_customers'))return new Response(JSON.stringify({account_id:'org-fixture'}),{headers:{'content-type':'application/json'}});
+  if(url.includes('api.stripe.com/v1/subscriptions/sub_fixture'))return new Response(JSON.stringify({id:'sub_fixture',customer:'cus_fixture',status:'active',cancel_at_period_end:false,livemode:true,metadata,items:{data:[{price:{id:'price_fixture',currency:'usd',unit_amount:1900,recurring:{interval:'month'}},quantity:1,current_period_end:2000000000}]}}),{headers:{'content-type':'application/json'}});
+  if(url.includes('api.stripe.com/v1/invoices/in_fixture')){invoiceBody=String(init?.body);return new Response(JSON.stringify({id:'in_fixture',payment_intent:'pi_fixture'}),{headers:{'content-type':'application/json'}});}
+  if(url.includes('api.stripe.com/v1/payment_intents/pi_fixture')){paymentBody=String(init?.body);return new Response(JSON.stringify({id:'pi_fixture'}),{headers:{'content-type':'application/json'}});}
+  if(url.includes('/rpc/apply_billing_event'))return new Response(null,{status:204});
+  throw new Error('Unexpected request: '+url);
+ };
+ try {
+  const stripe=new Stripe('sk_test_fixture');const body=JSON.stringify({id:'evt_invoice',type:'invoice.paid',created:Math.floor(Date.now()/1000),data:{object:{id:'in_fixture',customer:'cus_fixture',subscription:'sub_fixture'}}});
+  const signature=await stripe.webhooks.generateTestHeaderStringAsync({payload:body,secret:'whsec_fixture',cryptoProvider:Stripe.createSubtleCryptoProvider()});
+  const response=await handleBilling(new Request('https://test.local/billing',{method:'POST',headers:{'stripe-signature':signature},body}));equal(response.status,200);
+  equal(new URLSearchParams(invoiceBody).get('metadata[product]'),'WhatSync');equal(new URLSearchParams(invoiceBody).get('metadata[revenue_stream]'),'whatsync_saas');
+  equal(new URLSearchParams(paymentBody).get('metadata[product_code]'),'whatsync');equal(new URLSearchParams(paymentBody).get('description'),'WhatSync subscription payment');
+ } finally {globalThis.fetch=oldFetch;}
+});
 Deno.test('checkout uses the server price and blocks legacy card submissions',async()=>{
  const oldFetch=globalThis.fetch;let checkoutBody='';let checkoutKey='';Deno.env.set('BILLING_SALES_ENABLED','true');Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');
  globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
@@ -69,6 +91,7 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  else if(url.includes('/user_profiles'))result={role:'Owner',status:'Active',organization_id:'org-1',email:'owner@example.com'};
  else if(url.includes('/billing_customers'))result={stripe_customer_id:'cus_fixture'};
  else if(url.includes('/rpc/reserve_billing_checkout'))result={attempt_id:'stable-attempt',plan_name:'Pro Monthly',seats:3,expires_at:2000000000};
+ else if(url.includes('api.stripe.com/v1/customers/cus_fixture'))result={id:'cus_fixture'};
  else if(url.includes('api.stripe.com/v1/subscriptions'))result={data:[]};
  else if(url.includes('api.stripe.com/v1/checkout/sessions')){checkoutBody=String(init?.body);checkoutKey=new Headers(init?.headers).get('Idempotency-Key')||'';result={url:'https://checkout.stripe.com/c/pay/fixture'};}
  else throw new Error('Unexpected request: '+url);
@@ -79,6 +102,7 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3},auth))).status,400);
  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3,termsAccepted:true,amount:1,price:'evil_price'},auth))).status,200);
  const encoded=new URLSearchParams(checkoutBody);equal(encoded.get('line_items[0][price]'),'price_fixture');equal(encoded.get('line_items[0][quantity]'),'3');equal(encoded.get('line_items[0][adjustable_quantity][minimum]'),'1');
+ equal(encoded.get('metadata[product]'),'WhatSync');equal(encoded.get('metadata[revenue_stream]'),'whatsync_saas');equal(encoded.get('subscription_data[metadata][product_code]'),'whatsync');
  equal(checkoutKey,'checkout-stable-attempt');equal(encoded.get('expires_at'),'2000000000');
  Deno.env.set('BILLING_SALES_ENABLED','false');Deno.env.set('BILLING_ACCEPTANCE_EMAILS','owner@example.com');
  equal(await (await handleBilling(request('getPlans'))).json(),{salesEnabled:false,plans:[]});
@@ -121,6 +145,8 @@ Deno.test('acceptance checkout uses isolated test Stripe resources without chang
   const encoded=new URLSearchParams(checkoutBody);
   equal(encoded.get('line_items[0][price]'),'price_test_monthly');
   equal(encoded.get('metadata[environment]'),'acceptance_test');
+  equal(encoded.get('metadata[product]'),'WhatSync');
+  equal(encoded.get('subscription_data[metadata][revenue_stream]'),'whatsync_saas');
   equal(checkoutAuth,'Bearer sk_test_acceptance');
   equal((customerWrite as Record<string,unknown>|null)?.livemode,false);
  } finally {

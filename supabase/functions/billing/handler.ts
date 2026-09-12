@@ -14,6 +14,25 @@ const acceptanceCheckoutEnabled = (email: string | null | undefined) => {
   return !!email && allowed.includes(email.trim().toLowerCase());
 };
 type BillingRuntime = { stripe: Stripe; priceId: (plan: PlanKey) => string; portalConfigurationId: string; livemode: boolean };
+const whatSyncMetadata = (accountId: string, runtime: BillingRuntime) => ({
+  product: 'WhatSync',
+  product_code: 'whatsync',
+  revenue_stream: 'whatsync_saas',
+  workspace_id: accountId,
+  environment: runtime.livemode ? 'production' : 'acceptance_test',
+});
+const needsMetadata = (current: Stripe.Metadata | null | undefined, expected: Record<string,string>) =>
+  Object.entries(expected).some(([key,value]) => current?.[key] !== value);
+const invoicePaymentIntentId = (invoice: Record<string,unknown>) => {
+  if (typeof invoice.payment_intent === 'string') return invoice.payment_intent;
+  const payments = (invoice.payments as { data?: Array<{ payment?: { payment_intent?: string | { id?: string } } }> } | undefined)?.data || [];
+  for (const entry of payments) {
+    const intent = entry.payment?.payment_intent;
+    if (typeof intent === 'string') return intent;
+    if (intent?.id) return intent.id;
+  }
+  return null;
+};
 const stripeClient = (key: string) => {
   if (!key) throw new Error('Billing provider is not configured.');
   return new Stripe(key, { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2 });
@@ -99,6 +118,14 @@ export async function handleBilling(req: Request): Promise<Response> {
       const item = subscription.items.data[0];
       const plan = PLAN_KEYS.find(plan => runtime.priceId(plan) === item?.price.id);
       if (!plan || subscription.items.data.length !== 1) throw new Error('Unrecognized subscription price');
+      const tags = whatSyncMetadata(String(account.account_id), runtime);
+      await runtime.stripe.customers.update(customerId, { metadata: tags });
+      if (needsMetadata(subscription.metadata, tags)) await runtime.stripe.subscriptions.update(subscription.id, { metadata: tags });
+      if (event.type.startsWith('invoice.')) {
+        const invoice = await runtime.stripe.invoices.update(String(object.id), { metadata: tags });
+        const paymentIntentId = invoicePaymentIntentId(invoice as unknown as Record<string,unknown>);
+        if (paymentIntentId) await runtime.stripe.paymentIntents.update(paymentIntentId, { metadata: tags, description: 'WhatSync subscription payment' });
+      }
       const periodEnd = item?.current_period_end;
       const snapshot = {
         stripe_subscription_id: subscription.id, account_id: account.account_id, plan_name: plan,
@@ -214,10 +241,13 @@ export async function handleBilling(req: Request): Promise<Response> {
       const minimumSeats = Math.max(1, billable.count || 0);
       if (seats < minimumSeats) return json({ error:`This workspace currently needs at least ${minimumSeats} syncing seats.` },400);
       let customerId = runtimeCustomer?.stripe_customer_id;
+      const tags = whatSyncMetadata(String(accountId), runtime);
       if (!customerId) {
-        const created = await stripe.customers.create({email:profile.email,metadata:{account_id:accountId}}, {idempotencyKey:`whatsync-customer-${accountId}-${runtime.livemode?'live':'test'}`});
+        const created = await stripe.customers.create({email:profile.email,metadata:tags}, {idempotencyKey:`whatsync-customer-${accountId}-${runtime.livemode?'live':'test'}`});
         customerId = created.id;
         must(await ext.from('billing_customers').upsert({account_id:accountId,stripe_customer_id:customerId,billing_email:profile.email,livemode:runtime.livemode},{onConflict:'account_id'}));
+      } else {
+        await stripe.customers.update(customerId, { metadata: tags });
       }
       const subscriptions = await stripe.subscriptions.list({customer:customerId,status:'all',limit:100});
       if (subscriptions.data.some(s => !['canceled','incomplete_expired'].includes(s.status))) return json({error:'This workspace already has a subscription. Use Manage billing to change it.'},409);
@@ -233,8 +263,8 @@ export async function handleBilling(req: Request): Promise<Response> {
         expires_at:attempt.expires_at,
         line_items:[{price:runtime.priceId(data.planName),quantity:seats,adjustable_quantity:{enabled:true,minimum:minimumSeats,maximum:250}}],
         success_url:`${origin()}/dashboard/billing?checkout=returned`,cancel_url:`${origin()}/dashboard/billing?checkout=canceled`,
-        metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId,environment:runtime.livemode?'live':'acceptance_test'},
-        subscription_data:{metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId,environment:runtime.livemode?'live':'acceptance_test'}},allow_promotion_codes:true,
+        metadata:{...tags,terms_version:'2026-09-12',terms_accepted_by:auth.userId},
+        subscription_data:{metadata:{...tags,terms_version:'2026-09-12',terms_accepted_by:auth.userId}},allow_promotion_codes:true,
       }, {idempotencyKey:`checkout-${attempt.attempt_id}${runtime.livemode?'':'-test'}`});
       return json({url:session.url});
     }

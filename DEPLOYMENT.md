@@ -1,6 +1,6 @@
 # WhatSync deployment
 
-**Current package: 1.5.0 release candidate. Public paid launch is blocked pending live acceptance.**
+**Current package: 1.5.2 release candidate. Public checkout remains closed pending the final live acceptance transaction.**
 
 Follow [the launch runbook](release/LAUNCH_RUNBOOK.md) and [readiness report](LAUNCH_READINESS.md). They supersede the older deployment instructions.
 

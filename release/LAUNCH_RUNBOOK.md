@@ -11,13 +11,14 @@
 ## Deployment status — 12 September 2026
 
 - Complete: live WhatSync schema/permissions inspected; existing function source downloaded; billing and profile-privilege migrations rehearsed then applied with migration records; tested checkout reservation migration applied; HubSpot, billing and external-auth deployed to ogsvchujqpayuckxuwdf; sales explicitly closed.
-- Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns salesEnabled=false. Stripe test credentials and a dedicated signed webhook are configured; a sandbox `invoice.paid` event received HTTP 200 from the deployed billing function.
-- Remaining: card-free trial and seat-cap enforcement, payment lifecycle acceptance, qualified legal/tax review, authenticated CRM and tenant tests, website publication, extension store rollout, and recoverable backups. No physical backups were listed by the project.
+- Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns salesEnabled=false. Live Stripe credentials, prices and signed webhook are configured on the correct backend.
+- Complete: live Stripe product and prices, live signed webhook, default customer portal, subscription terms acceptance, paid-role seat enforcement and prorated self-service seat changes.
+- Remaining: publish the latest website main commit, complete one authorized live purchase/cancel/refund lifecycle, run authenticated CRM and tenant acceptance, obtain qualified legal/tax review, complete extension store rollout, and establish recoverable backups. No physical backups were listed by the project.
 - The database's historical schema existed with an empty migration journal. Only the four reviewed September migrations are recorded. **Do not run blanket db push until historical migrations are reconciled.** The commands below describe future releases and must not be used to replay the old baseline on this database.
 
 September 12: deployed HubSpot and hubspot-oauth fixes, added `20260912000000_sidebar_defaults.sql` (lead default and sort order). CRM-write subscription enforcement is now mandatory, independent of the legacy BILLING_ENFORCE_ACCESS flag. Sales remain closed; this means an account without a valid subscription can set up and read, but cannot write to HubSpot. Stripe trials are respected; a no-card trial is not implemented.
 
-Reload the extension from the main folder to use v1.5.1, then refresh WhatsApp Web and whatsync.io. Publish the website candidate from YAZ-Media/whatsync-website; Lovable Cloud function deployments still target the wrong database and are not the deployment path for backend changes.
+Reload the extension from the main folder to use v1.5.2, then refresh WhatsApp Web and whatsync.io. Publish the latest website main commit from YAZ-Media/whatsync-website; Lovable Cloud function deployments still target the wrong database and are not the deployment path for backend changes.
 
 ## 1. Validate the candidate locally
 
@@ -68,35 +69,35 @@ Deploy other root functions only after reviewing their diff/configuration agains
 
 Lovable Cloud cannot be repointed merely by editing supabase/config.toml. GitHub sync is for source; backend deployment still needs the explicit WhatSync project above.
 
-## 3. Configure subscriptions in test mode
+## 3. Verify production subscriptions
 
-Keep `BILLING_SALES_ENABLED=false` until provider, prices and terms are approved. Required server secrets:
+Keep `BILLING_SALES_ENABLED=false` until the authorized live acceptance transaction passes. Required server secrets:
 
 | Setting | Purpose |
 | --- | --- |
-| STRIPE_SECRET_KEY | Merchant secret key; start with test mode |
+| STRIPE_SECRET_KEY | Live merchant secret key |
 | STRIPE_WEBHOOK_SECRET | Signing secret for the billing function URL |
 | STRIPE_PRICE_PRO_MONTHLY / STRIPE_PRICE_PRO_ANNUAL | Active recurring per-user Stripe Price IDs; no client-supplied amount |
 | APP_URL | `https://whatsync.io` |
 | BILLING_ADMIN_USER_IDS | Comma-separated authenticated WhatSync user UUIDs allowed to view all subscribers |
 | BILLING_ENFORCE_ACCESS | Retired: CRM-write subscription checks are always enforced |
-| BILLING_REQUIRE_LIVE | `false` during test acceptance; `true` for paid production |
+| BILLING_REQUIRE_LIVE | `true` for paid production |
 
-Configure the dedicated hosted billing portal for invoices, payment-method updates and cancellation at period end. Seat quantity is selected in checkout and verified from Stripe webhooks. Keep public sales closed until invitation capacity and seat-change proration are accepted. Configure automatic tax and invoicing according to the merchant's approved setup; these are not enabled by this code by default.
+The hosted billing portal supports invoices, payment-method updates and cancellation at period end. Seat quantity is selected in checkout, verified from Stripe webhooks and can be changed from WhatSync with Stripe proration. Configure automatic tax and invoicing according to the merchant's approved setup; these are not enabled by this code by default.
 
-Register webhook URL `https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/billing` for checkout.session.completed, customer.subscription.created/updated/deleted, invoice.paid and invoice.payment_failed. The test destination uses Stripe API version `2024-06-20`, snapshot payloads and the matching encrypted signing secret. A signed sandbox `invoice.paid` event has been accepted by the deployed function. Webhooks use the raw request body and Stripe signature. HTTP 500 must be retried; monitor failures.
+The live webhook URL is `https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/billing` for checkout.session.completed, customer.subscription.created/updated/deleted, invoice.paid and invoice.payment_failed. Webhooks use the raw request body and Stripe signature. HTTP 500 responses must be retried and monitored.
 
 Checkout reservations last one hour. Retries use the same stored ID/expiry and provider request key. A different plan is rejected while the reservation is active; the buyer can resume the original plan or wait for expiry. If the first provider call never happened, a very late retry may fail until the reservation expires because Stripe requires at least 30 minutes for a newly created session. Validate these outcomes with real test-mode Stripe sessions before opening sales. [Stripe checkout expiry reference](https://docs.stripe.com/api/checkout/sessions/create).
 
 Run the payment acceptance matrix in LAUNCH_READINESS.md. The subscriber page is `/dashboard/subscribers`; normal workspace Owner access is deliberately insufficient. Use `/dashboard/billing` for customer self-service. These pages require this new function and migration to be deployed.
 
-When the offer is approved and all gates pass, set live merchant keys/price IDs/webhook secret, set BILLING_REQUIRE_LIVE=true, verify an authorized live transaction, and only then set BILLING_SALES_ENABLED=true. Do not change the IDs of prices still used by existing subscriptions without implementing a historical price mapping.
+Live merchant keys, price IDs, webhook secret and `BILLING_REQUIRE_LIVE=true` are configured. Sign into a non-operator test workspace, temporarily open sales for the controlled transaction, and verify checkout → webhook → subscription → CRM entitlement → seat change → cancellation/refund. Then set `BILLING_SALES_ENABLED=true` for launch. Do not change price IDs used by existing subscriptions without a historical price mapping.
 
 ## 4. Publish the website and extension
 
 Build/publish from `YAZ-Media/whatsync-website`. Confirm that the published assets target `ogsvchujqpayuckxuwdf`. The release ZIP includes static website assets; configure the host to serve index.html for client routes such as `/auth/hubspot/callback` and `/dashboard/billing`. Keep browser-server secrets out of the build.
 
-Upload the extension-only ZIP to Chrome Web Store. Its manifest version is 1.5.1; this bundle remains a candidate until accepted. Add an approved listing URL through `VITE_CHROME_STORE_URL`, rebuild the site, and verify the Setup page's Install button. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Merely publishing the website does not update an unpacked extension.
+Upload the extension-only ZIP to Chrome Web Store. Its manifest version is 1.5.2; this bundle remains a candidate until accepted. Add the approved listing URL through `VITE_CHROME_STORE_URL`, rebuild the site, and verify the Setup page's Install button. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Publishing the website does not update an unpacked extension.
 
 Before accepting money, publish approved Terms, billing/refund policy and the updated privacy policy; confirm support works and every public URL resolves. Conduct a clean-device install and full purchase→connect→create→read-back flow.
 

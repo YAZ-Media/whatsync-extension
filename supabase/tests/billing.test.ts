@@ -87,6 +87,29 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Annual',seats:3,termsAccepted:true},auth))).status,409);
  } finally {globalThis.fetch=oldFetch;Deno.env.set('BILLING_SALES_ENABLED','false');}
 });
+Deno.test('seat changes enforce active members and use Stripe pending updates with proration',async()=>{
+ const oldFetch=globalThis.fetch;let stripeBody='';Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');Deno.env.set('BILLING_REQUIRE_LIVE','true');
+ globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);let result:unknown;
+  if(url.includes('/auth/v1/user'))result={id:'user-1'};
+  else if(url.includes('/user_profiles')&&url.includes('select=role'))result={role:'Owner',status:'Active',organization_id:'org-1',email:'owner@example.com'};
+  else if(url.includes('/user_profiles'))return new Response(null,{headers:{'content-range':'0-1/2'}});
+  else if(url.includes('/billing_customers'))result={stripe_customer_id:'cus_fixture'};
+  else if(url.includes('/billing_subscriptions'))result={stripe_subscription_id:'sub_fixture',status:'active',quantity:2,livemode:true};
+  else if(url.includes('api.stripe.com/v1/subscriptions/sub_fixture')&&init?.method==='POST'){
+   stripeBody=String(init.body);result={id:'sub_fixture',customer:'cus_fixture',items:{data:[{id:'si_fixture',quantity:3,price:{id:'price_fixture'}}]}};
+  }
+  else if(url.includes('api.stripe.com/v1/subscriptions/sub_fixture'))result={id:'sub_fixture',customer:'cus_fixture',items:{data:[{id:'si_fixture',quantity:2,price:{id:'price_fixture'}}]}};
+  else throw new Error('Unexpected request: '+url);
+  return new Response(JSON.stringify(result),{headers:{'content-type':'application/json'}});
+ };
+ try {
+  const auth={Authorization:'Bearer fixture'};
+  equal((await handleBilling(request('updateSubscriptionSeats',{seats:1},auth))).status,400);
+  const response=await handleBilling(request('updateSubscriptionSeats',{seats:3},auth));equal(response.status,200);equal((await response.json()).quantity,3);
+  const body=new URLSearchParams(stripeBody);equal(body.get('items[0][quantity]'),'3');equal(body.get('proration_behavior'),'always_invoice');equal(body.get('payment_behavior'),'pending_if_incomplete');
+ } finally {globalThis.fetch=oldFetch;Deno.env.delete('BILLING_REQUIRE_LIVE');}
+});
 Deno.test('live workspace enforcement denies no-plan, expired, overdue, suspended and read-only writes',async()=>{
  const {assertWorkspaceAccess,getWorkspaceAccess}=await import('../functions/_shared/entitlements.ts');
  const oldFetch=globalThis.fetch;let status='Active',role='Owner',subs:unknown[]=[];

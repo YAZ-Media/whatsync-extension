@@ -122,6 +122,47 @@ export async function handleBilling(req: Request): Promise<Response> {
       const session = await stripe.billingPortal.sessions.create({ customer:customer.stripe_customer_id, ...(env('STRIPE_PORTAL_CONFIGURATION_ID') ? {configuration:env('STRIPE_PORTAL_CONFIGURATION_ID')} : {}),return_url:`${origin()}/dashboard/billing` });
       return json({ url:session.url });
     }
+    if (action === 'updateSubscriptionSeats') {
+      if (!customer) return json({ error: 'No billing account yet. Choose a subscription first.' }, 409);
+      const requestedSeats = Number(data.seats);
+      const seats = Number.isInteger(requestedSeats) ? requestedSeats : 0;
+      if (seats < 1 || seats > 250) return json({ error: 'Choose between 1 and 250 syncing users.' }, 400);
+
+      const billable = must(await ext.from('user_profiles').select('user_id', { count: 'exact', head: true })
+        .eq('organization_id', accountId).eq('status', 'Active').in('role', ['Owner', 'Admin', 'Member']));
+      const minimumSeats = Math.max(1, billable.count || 0);
+      if (seats < minimumSeats) {
+        return json({ error: `This workspace currently needs at least ${minimumSeats} syncing seats.` }, 400);
+      }
+
+      const stored = must(await ext.from('billing_subscriptions')
+        .select('stripe_subscription_id,status,quantity,livemode')
+        .eq('account_id', accountId).in('status', ['active', 'trialing'])
+        .order('updated_at', { ascending: false }).limit(1).maybeSingle()).data;
+      if (!stored?.stripe_subscription_id) return json({ error: 'An active subscription is required to change seats.' }, 409);
+      if (env('BILLING_REQUIRE_LIVE') === 'true' && stored.livemode !== true) {
+        return json({ error: 'A live subscription is required to change seats.' }, 409);
+      }
+
+      const subscription = await stripe.subscriptions.retrieve(stored.stripe_subscription_id);
+      if (subscription.customer !== customer.stripe_customer_id) return json({ error: 'Billing account mismatch.' }, 409);
+      const item = subscription.items.data[0];
+      if (!item || subscription.items.data.length !== 1 || !PLAN_KEYS.some(plan => priceId(plan) === item.price.id)) {
+        return json({ error: 'This subscription cannot be changed automatically. Contact support.' }, 409);
+      }
+      if ((item.quantity || 1) === seats) return json({ quantity: seats, unchanged: true });
+
+      const updated = await stripe.subscriptions.update(subscription.id, {
+        items: [{ id: item.id, quantity: seats }],
+        proration_behavior: 'always_invoice',
+        payment_behavior: 'pending_if_incomplete',
+      });
+      const pendingQuantity = updated.pending_update?.subscription_items?.find(entry => entry.id === item.id)?.quantity;
+      return json({
+        quantity: pendingQuantity || updated.items.data[0]?.quantity || item.quantity || 1,
+        pending: !!updated.pending_update,
+      });
+    }
     if (action === 'createCheckoutSession') {
       if (!salesEnabled()) return json({ error:'Subscriptions are not open yet.' },503);
       if (!isPlan(data.planName) || !priceId(data.planName)) return json({ error:'Choose a configured subscription plan.' },400);

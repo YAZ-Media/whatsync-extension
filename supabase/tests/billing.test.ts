@@ -71,19 +71,20 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  };
  try {
  const auth={Authorization:'Bearer fixture'};
- equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3,amount:1,price:'evil_price'},auth))).status,200);
+ equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3},auth))).status,400);
+ equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3,termsAccepted:true,amount:1,price:'evil_price'},auth))).status,200);
  const encoded=new URLSearchParams(checkoutBody);equal(encoded.get('line_items[0][price]'),'price_fixture');equal(encoded.get('line_items[0][quantity]'),'3');equal(encoded.get('line_items[0][adjustable_quantity][minimum]'),'1');
  equal(checkoutKey,'checkout-stable-attempt');equal(encoded.get('expires_at'),'2000000000');
  const originalNow=Date.now;
  try {
   Date.now=()=>originalNow()+1800001;
-  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3},auth))).status,200);
+  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3,termsAccepted:true},auth))).status,200);
   equal(checkoutKey,'checkout-stable-attempt');equal(new URLSearchParams(checkoutBody).get('expires_at'),'2000000000');
  } finally {Date.now=originalNow;}
  equal((await handleBilling(request('processPayment',{cardNumber:'fixture-card'},auth))).status,410);
  equal((await handleBilling(request('createCheckoutSession',{planName:'Free'},auth))).status,400);
  Deno.env.set('STRIPE_PRICE_PRO_ANNUAL','price_annual');
- equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Annual',seats:3},auth))).status,409);
+ equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Annual',seats:3,termsAccepted:true},auth))).status,409);
  } finally {globalThis.fetch=oldFetch;Deno.env.set('BILLING_SALES_ENABLED','false');}
 });
 Deno.test('live workspace enforcement denies no-plan, expired, overdue, suspended and read-only writes',async()=>{

@@ -125,6 +125,7 @@ export async function handleBilling(req: Request): Promise<Response> {
     if (action === 'createCheckoutSession') {
       if (!salesEnabled()) return json({ error:'Subscriptions are not open yet.' },503);
       if (!isPlan(data.planName) || !priceId(data.planName)) return json({ error:'Choose a configured subscription plan.' },400);
+      if (data.termsAccepted !== true) return json({ error:'Accept the subscription terms before checkout.' },400);
       const requestedSeats = Number(data.seats);
       const seats = Number.isInteger(requestedSeats) ? requestedSeats : 1;
       if (seats < 1 || seats > 250) return json({ error:'Choose between 1 and 250 syncing users.' },400);
@@ -151,7 +152,8 @@ export async function handleBilling(req: Request): Promise<Response> {
         expires_at:attempt.expires_at,
         line_items:[{price:priceId(data.planName),quantity:seats,adjustable_quantity:{enabled:true,minimum:minimumSeats,maximum:250}}],
         success_url:`${origin()}/dashboard/billing?checkout=returned`,cancel_url:`${origin()}/dashboard/billing?checkout=canceled`,
-        subscription_data:{metadata:{account_id:accountId}},allow_promotion_codes:true,
+        metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId},
+        subscription_data:{metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId}},allow_promotion_codes:true,
       }, {idempotencyKey:`checkout-${attempt.attempt_id}`});
       return json({url:session.url});
     }

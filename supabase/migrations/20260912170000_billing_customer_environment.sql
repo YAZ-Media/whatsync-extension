@@ -3,6 +3,9 @@
 alter table public.billing_subscriptions
   drop constraint if exists billing_subscriptions_account_id_fkey;
 
+alter table public.billing_checkout_attempts
+  drop constraint if exists billing_checkout_attempts_account_id_fkey;
+
 alter table public.billing_customers
   drop constraint if exists billing_customers_pkey;
 

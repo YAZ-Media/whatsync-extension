@@ -9129,15 +9129,17 @@ function setupContactSuggestions(form, contact = null) {
   const chatKey = getCurrentChatHeaderKey();
   const fields = { email: 'Email', firstName: 'First name', lastName: 'Last name', company: 'Company', jobTitle: 'Job title' };
   const props = { email: 'email', firstName: 'firstname', lastName: 'lastname', company: 'company', jobTitle: 'jobtitle' };
+  let scanned = false;
   const render = () => {
     if (chatKey !== getCurrentChatHeaderKey() || !form.isConnected) return;
-    const suggestions = extractContactInfoFromChat().filter(s => contact
+    const found = extractContactInfoFromChat();
+    const suggestions = found.filter(s => contact
       ? !contact.properties?.[props[s.field]]
       : !form.querySelector(`#${s.field}`)?.value.trim());
-    host.innerHTML = `<div class="ws-suggestion-heading"><strong>Details from this conversation</strong><button type="button" class="ws-scan-again">Scan again</button></div>
-      <p class="ws-hint">${suggestions.length ? 'Review the source, then use a suggestion. Nothing is saved automatically.' : 'No clear details found in loaded incoming messages. Scroll to a self-introduction or email, then scan again.'}</p>
+    host.innerHTML = `<div class="ws-suggestion-heading"><strong>Suggestions for empty fields</strong><button type="button" class="ws-scan-again">Scan again</button></div>
+      <p class="ws-hint" ${!suggestions.length && !scanned ? 'hidden' : ''}>${suggestions.length ? 'Review the source, then use a suggestion. Nothing is saved automatically.' : found.length ? 'The details found in this chat are already filled in. Your existing information is unchanged.' : 'No additional details to suggest from the received messages currently loaded. You can enter the details yourself or load more messages and scan again.'}</p>
       ${suggestions.map((s, i) => `<div class="ws-suggestion-row"><div><span class="ws-eyebrow">${fields[s.field]}</span><strong>${escapeHtml(s.value)}</strong><details><summary>View source message</summary><blockquote>${escapeHtml(s.source)}</blockquote></details></div><button type="button" data-suggestion="${i}">${contact ? 'Save' : 'Use'}</button></div>`).join('')}`;
-    host.querySelector('.ws-scan-again').onclick = render;
+    host.querySelector('.ws-scan-again').onclick = () => { scanned = true; render(); };
     host.querySelectorAll('[data-suggestion]').forEach(button => {
       button.onclick = async () => {
         if (chatKey !== getCurrentChatHeaderKey()) return;
@@ -9182,6 +9184,7 @@ function setupCreateContactForm(phoneNumber) {
   const ownerGroup = document.getElementById('contactOwnerGroup');
   
   if (!form || !createBtn || !messageDiv) return;
+  showWorkspaceAccess(form);
 
   const { firstName: defaultFirst, lastName: defaultLast } = parseContactNameParts(
     getCurrentContactName()
@@ -9230,13 +9233,16 @@ function setupCreateContactForm(phoneNumber) {
     populateCreateFormSelect('lifecycleStage', 'lifecyclestage', 'Select Lifecycle Stage'),
     settingsPromise,
   ]).then(([, syncSettings]) => {
-    const sel = document.getElementById('lifecycleStage');
+    const sel = form.querySelector('#lifecycleStage');
     const def = syncSettings?.default_lifecycle_stage;
-    if (sel && def && Array.from(sel.options).some((o) => o.value === def)) {
+    if (form.isConnected && sel && !sel.value && def && Array.from(sel.options).some((o) => o.value === def)) {
       sel.value = def;
     }
   }).catch(() => { /* selects keep their placeholder */ });
-  populateCreateFormSelect('leadStatus', 'hs_lead_status', 'Select Lead Status');
+  Promise.all([populateCreateFormSelect('leadStatus', 'hs_lead_status', 'Select Lead Status'), settingsPromise]).then(([, settings]) => {
+    const select = form.querySelector('#leadStatus');
+    if (select && !select.value && Array.from(select.options).some(o => o.value === settings?.default_lead_status)) select.value = settings.default_lead_status;
+  }).catch(() => {});
 
   // Company names must come from an explicit statement, never a guessed domain.
   setupContactSuggestions(form);
@@ -9695,7 +9701,44 @@ const SIDEBAR_CONTACT_CATALOG = [
 const SIDEBAR_LOCKED_FIELDS = ['firstname_lastname', 'phone'];
 
 // Map of field_key -> enabled. null until loaded; missing keys default to enabled.
+async function showWorkspaceAccess(root) {
+  const response = await sendExtensionMessage({action:'getAccessStatus'}).catch(() => null);
+  if (!root.isConnected) return;
+  const access = response?.success ? response.data : null;
+  let banner=root.querySelector('.ws-access-status');
+  if (!banner) { banner=document.createElement('div'); banner.className='ws-access-status'; banner.setAttribute('role','status'); root.prepend(banner); }
+  banner.textContent = access?.message || 'Subscription status is unavailable. Please refresh before making CRM changes.';
+  if (!access?.canWrite) {
+    const link=document.createElement('a'); link.href='https://whatsync.io/dashboard/billing'; link.target='_blank'; link.rel='noopener'; link.textContent=' Open billing'; banner.appendChild(link);
+  }
+}
+
+function applySidebarOrder(root) {
+  showWorkspaceAccess(root);
+  const actions = root.querySelector('.contact-actions');
+  const ticket = root.querySelector('#more-create-ticket-option');
+  if (actions && ticket) {
+    const button = document.createElement('button');
+    for (const attribute of ticket.attributes) button.setAttribute(attribute.name, attribute.value);
+    button.type = 'button'; button.className = 'action-btn'; button.innerHTML = ticket.innerHTML;
+    button.onclick = () => showTicketModal(button.dataset.name || 'Contact', button.dataset.email || '', button.dataset.contactId || '');
+    ticket.remove(); actions.appendChild(button);
+  }
+  const groups = [
+    [['action_note','#create-note-btn'],['action_email','#create-email-btn'],['action_log_whatsapp','#log-whatsapp-message-btn'],['action_task','#create-task-btn'],['action_meeting','#schedule-meeting-btn'],['action_ticket','#more-create-ticket-option'],['send_template','.more-actions-wrapper']],
+    [['section_activity','.activities-section'],['section_deals','.deals-section'],['section_notes','.notes-section'],['section_tickets','.tickets-section'],['section_tasks','.tasks-section']]
+  ];
+  for (const group of groups) {
+    const nodes = group.map(([key,selector]) => ({key,node:root.querySelector(selector)})).filter(item => item.node);
+    nodes.sort((a,b) => (sidebarOrderCache[a.key] ?? 0)-(sidebarOrderCache[b.key] ?? 0));
+    for (const {node} of nodes) node.parentElement.appendChild(node);
+  }
+  const more = root.querySelector('#more-actions-btn');
+  if (more) { more.title='Templates'; more.querySelector('span').textContent='Templates'; more.parentElement.hidden=!isSidebarFieldEnabled('send_template'); }
+}
+
 let sidebarPrefsCache = null;
+let sidebarOrderCache = {};
 function isSidebarFieldEnabled(key) {
   if (SIDEBAR_LOCKED_FIELDS.includes(key)) return true;
   if (!sidebarPrefsCache) return true; // default visible until prefs load
@@ -9729,7 +9772,7 @@ async function fetchSidebarFieldsFromBackend(userId) {
     const collectIntoPrefs = (arr) => {
       (arr || []).forEach((f) => {
         const key = f.field_key || f.hubspot_property;
-        if (key) prefs[key] = (f.is_enabled ?? f.enabled) !== false;
+        if (key) { prefs[key] = (f.is_enabled ?? f.enabled) !== false; sidebarOrderCache[key] = f.sort_order ?? 0; }
       });
     };
     collectIntoPrefs(data.fields);
@@ -9744,7 +9787,8 @@ async function fetchSidebarFieldsFromBackend(userId) {
     // Return the canonical About contact fields, filtered by prefs (locked always on).
     const contactFields = SIDEBAR_CONTACT_CATALOG
       .filter((f) => SIDEBAR_LOCKED_FIELDS.includes(f.hubspot_property) || isSidebarFieldEnabled(f.hubspot_property))
-      .map((f) => ({ ...f, field_type: 'contact_info', enabled: true }));
+      .map((f) => ({ ...f, field_type: 'contact_info', enabled: true }))
+      .sort((a,b) => (sidebarOrderCache[a.hubspot_property] ?? 0) - (sidebarOrderCache[b.hubspot_property] ?? 0));
 
     const value = { contactFields, actionFields: [] };
     sidebarCatalogCache = { userId, at: Date.now(), value };
@@ -10100,7 +10144,7 @@ try {
       lastSidebarFieldsHash = null;
       try {
         const { contactFields } = await getEnabledSidebarFields(await getExtensionUserId());
-        lastSidebarFieldsHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
+        lastSidebarFieldsHash = JSON.stringify({prefs:sidebarPrefsCache,order:sidebarOrderCache});
       } catch { /* ignore */ }
       updateSidebarContent();
     })();
@@ -10124,7 +10168,7 @@ async function startSidebarFieldsPolling(userId) {
   // Get initial state
   try {
     const { contactFields } = await getEnabledSidebarFields(userId);
-    lastSidebarFieldsHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
+    lastSidebarFieldsHash = JSON.stringify({prefs:sidebarPrefsCache,order:sidebarOrderCache});
   } catch {
     // use defaults
   }
@@ -10137,10 +10181,10 @@ async function startSidebarFieldsPolling(userId) {
     }
     try {
       const { contactFields } = await getEnabledSidebarFields(userId);
-      const currentHash = JSON.stringify(contactFields.map(f => ({ id: f.id, enabled: f.enabled })));
+      const currentHash = JSON.stringify({prefs:sidebarPrefsCache,order:sidebarOrderCache});
       
       if (lastSidebarFieldsHash && currentHash !== lastSidebarFieldsHash) {
-        await refreshAboutSection();
+        await updateSidebarContent();
       }
       
       lastSidebarFieldsHash = currentHash;
@@ -10363,7 +10407,6 @@ async function formatContactDetails(contacts, phoneNumber) {
             </div>
           </div>
         </div>
-      </div>
       <section class="ws-suggestions" aria-label="Missing contact details"></section>
       ${await renderAboutSection(contact, userId, headerPrivacy)}
       ${!isSidebarFieldEnabled('section_activity') ? '' : `
@@ -10786,6 +10829,7 @@ async function updateSidebarContent(known = null) {
           setupActionButtonTooltips();
           // Setup more actions dropdown
           setupMoreActionsDropdown();
+      applySidebarOrder(sidebarContent);
           // Make the About section collapsible + lifecycle/lead-status editable
           setupAboutCollapsible();
           setupEditableContactFields();
@@ -10872,6 +10916,7 @@ async function updateSidebarContent(known = null) {
                 setupTaskCreation();
                 setupActionButtonTooltips();
                 setupMoreActionsDropdown();
+      applySidebarOrder(sidebarContent);
                 setupAboutCollapsible();
                 setupEditableContactFields();
                 setupOwnerNameResolution();

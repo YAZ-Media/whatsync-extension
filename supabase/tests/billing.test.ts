@@ -86,3 +86,19 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  equal((await handleBilling(request('createCheckoutSession',{planName:'Team'},auth))).status,409);
  } finally {globalThis.fetch=oldFetch;Deno.env.set('BILLING_SALES_ENABLED','false');}
 });
+Deno.test('live workspace enforcement denies no-plan, expired, overdue, suspended and read-only writes',async()=>{
+ const {assertWorkspaceAccess,getWorkspaceAccess}=await import('../functions/_shared/entitlements.ts');
+ const oldFetch=globalThis.fetch;let status='Active',role='Owner',subs:unknown[]=[];
+ Deno.env.delete('BILLING_ENFORCE_ACCESS');
+ globalThis.fetch=async(input:RequestInfo|URL)=>{
+ const url=String(input);return new Response(JSON.stringify(url.includes('user_profiles')?{role,status,organization_id:'org-1'}:subs),{headers:{'content-type':'application/json'}});
+ };
+ const denied=async()=>{let rejected=false;try{await assertWorkspaceAccess('u',true);}catch{rejected=true;}equal(rejected,true);};
+ try {
+  await denied();await assertWorkspaceAccess('u',false);await assertWorkspaceAccess('u',true,false);
+  for(const s of ['past_due','unpaid','canceled','paused']) {subs=[{status:s,current_period_end:'2035-01-01',livemode:true}];await denied();}
+  subs=[{status:'active',current_period_end:'2020-01-01',livemode:true}];await denied();
+  for(const s of ['active','trialing']){subs=[{status:s,current_period_end:'2035-01-01',livemode:true}];await assertWorkspaceAccess('u',true);}
+  role='Read-only';await denied();role='Owner';status='Suspended';equal((await getWorkspaceAccess('u')).canRead,false);await denied();
+ }finally{globalThis.fetch=oldFetch;}
+});

@@ -1,4 +1,4 @@
-import { assertWorkspaceAccess } from '../_shared/entitlements.ts';
+import { assertWorkspaceAccess, getWorkspaceAccess } from '../_shared/entitlements.ts';
 // Supabase Edge Function: hubspot
 //
 // Multi-tenant HubSpot proxy for the WhatSync extension.
@@ -333,20 +333,21 @@ const SIDEBAR_CATALOG: SidebarCatalogEntry[] = [
 
 async function getSidebarFields(userId: string): Promise<unknown> {
   const prefsRes = await db(
-    `hubspot_sidebar_fields?user_id=eq.${userId}&select=field_key,is_enabled`,
+    `hubspot_sidebar_fields?user_id=eq.${userId}&select=field_key,is_enabled,sort_order`,
   );
 
   if (!prefsRes.ok) {
     throw new HttpError(500, 'Failed to load sidebar field configuration');
   }
 
-  const prefs: { field_key: string; is_enabled: boolean }[] = await prefsRes.json();
+  const prefs: { field_key: string; is_enabled: boolean; sort_order?: number }[] = await prefsRes.json();
   const prefMap = new Map(prefs.map((p) => [p.field_key, p.is_enabled]));
 
   // Flat array — one entry per canonical key. Default true; locked always true.
   const fields = SIDEBAR_CATALOG.map((f) => ({
     field_key: f.field_key,
     field_type: f.field_type,
+    sort_order: prefs.find(p => p.field_key === f.field_key)?.sort_order ?? SIDEBAR_CATALOG.indexOf(f),
     is_enabled: f.is_locked ? true : prefMap.get(f.field_key) ?? true,
   }));
 
@@ -355,6 +356,7 @@ async function getSidebarFields(userId: string): Promise<unknown> {
     field_key: f.field_key,
     field_label: f.field_label,
     field_type: f.field_type,
+    sort_order: prefs.find(p => p.field_key === f.field_key)?.sort_order ?? SIDEBAR_CATALOG.indexOf(f),
     is_locked: f.is_locked,
     is_enabled: f.is_locked ? true : prefMap.get(f.field_key) ?? true,
   }));
@@ -550,7 +552,7 @@ async function saveSidebarFields(
 
   const rows = incoming
     .map((f) => {
-      const entry = f as { field_key?: unknown; field_type?: unknown; is_enabled?: unknown };
+      const entry = f as { field_key?: unknown; field_type?: unknown; is_enabled?: unknown; sort_order?: unknown };
       const key = String(entry.field_key ?? '');
       const catalogEntry = valid.get(key);
       if (!catalogEntry) return null; // ignore unknown keys
@@ -558,6 +560,7 @@ async function saveSidebarFields(
         user_id: userId,
         field_key: key,
         field_type: catalogEntry.field_type,
+        sort_order: Number.isInteger(entry.sort_order) && Number(entry.sort_order) >= 0 && Number(entry.sort_order) < 100 ? Number(entry.sort_order) : SIDEBAR_CATALOG.indexOf(catalogEntry),
         // Locked keys are always enabled regardless of what was posted.
         is_enabled: catalogEntry.is_locked ? true : Boolean(entry.is_enabled),
       };
@@ -1796,7 +1799,8 @@ Deno.serve(async (req) => {
     // Identity comes from the JWT only — payload userId values are ignored.
     const userId = await getAuthenticatedUserId(req);
 
-    await assertWorkspaceAccess(userId, /^(create|update|delete|save|log|associate|disassociate|evaluate|execute|invite)/i.test(action));
+    if (action === 'getAccessStatus') return json(await getWorkspaceAccess(userId));
+    await assertWorkspaceAccess(userId, /^(create|update|delete|save|log|associate|disassociate|evaluate|execute|invite)/i.test(action), !['saveSidebarFields','createAutomation','updateAutomation','deleteAutomation','saveTemplate','createTemplate','updateTemplate','deleteTemplate'].includes(action));
     const result = await handleAction(action, (data as Record<string, unknown>) ?? {}, userId);
 
     return json(result ?? { success: true });

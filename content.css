@@ -5141,3 +5141,18 @@ body.whatsapp-theme-dark #hubspot-sidebar {
 #hubspot-sidebar .form-group {margin-bottom:0;gap:6px;}
 #hubspot-sidebar .form-group label {margin-bottom:0;}
 #hubspot-sidebar .ws-save-warning {padding:14px 20px;margin:0;background:#fff0dc;color:#70431d;font-size:13px;border-bottom:1px solid #d5a775;}
+
+/* Bound working controls independently of WhatsApp's global box model. */
+#hubspot-sidebar, #hubspot-sidebar * {box-sizing:border-box;}
+#hubspot-sidebar .form-group input, #hubspot-sidebar .form-group select {height:38px;min-height:38px;max-height:38px;padding:7px 10px;line-height:22px;width:100%;}
+#hubspot-sidebar .create-contact-form {gap:12px;}
+#hubspot-sidebar .contact-header {padding:16px;}
+#hubspot-sidebar .contact-actions {display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;margin-top:14px;}
+#hubspot-sidebar .contact-actions > .action-btn {min-width:44px;flex:0 0 auto;border:0;background:transparent;padding:4px;}
+#hubspot-sidebar .contact-details {min-width:0;}
+#hubspot-sidebar .contact-name-section {min-width:0;}
+#hubspot-sidebar .email-link {color:var(--sidebar-text);overflow-wrap:anywhere;}
+#hubspot-sidebar .about-section, #hubspot-sidebar .contact-info-section {padding-left:16px;padding-right:16px;}
+#hubspot-sidebar .ws-suggestions:empty {display:none;}
+
+#hubspot-sidebar .ws-access-status { margin:12px 16px; padding:10px; font-size:12px; line-height:1.5; border:1px solid var(--sidebar-border, #52616b); border-radius:8px; }

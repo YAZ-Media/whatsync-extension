@@ -269,6 +269,10 @@ async function getCurrentTabId() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'getAccessStatus') {
+    callHubSpotEdgeFunction('getAccessStatus').then(data => sendResponse({success:true,data})).catch(error => sendResponse({success:false,error:error.message}));
+    return true;
+  }
   // Handle getCurrentTabId request
   if (request.action === 'getCurrentTabId') {
     getCurrentTabId().then(tabId => {

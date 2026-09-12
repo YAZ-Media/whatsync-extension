@@ -92,6 +92,13 @@
     syncSidebarFieldsSignal();
   }
 
+  window.addEventListener('message', async event => {
+    if (event.source !== window || event.origin !== location.origin || event.data?.type !== 'WHATSYNC_STATUS_REQUEST') return;
+    try {
+      const stored = await chrome.storage.local.get(['userId','userLoggedIn','accessToken']);
+      window.postMessage({type:'WHATSYNC_STATUS_RESPONSE',requestId:event.data.requestId,version:chrome.runtime.getManifest().version,userId:stored.userLoggedIn && stored.accessToken ? stored.userId : null},location.origin);
+    } catch { /* Reloaded extension is reported as unavailable by the page. */ }
+  });
   syncAll();
 
   window.addEventListener('storage', (e) => {

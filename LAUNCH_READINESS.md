@@ -1,6 +1,15 @@
-# WhatSync 1.5.0 — release candidate, NOT approved for public paid launch
+# WhatSync 1.5.1 — release candidate, NOT approved for public paid launch
 
-Reviewed 11 September 2026. No zero-bug guarantee is possible. Passing local tests is not evidence that every live integration works. This package is suitable for controlled acceptance testing; sales stay closed by default.
+Reviewed 12 September 2026. No zero-bug guarantee is possible. Passing local tests is not evidence that every live integration works. This package is suitable for controlled acceptance testing; sales stay closed by default.
+
+## September 12 fixes
+
+- Dashboard metadata uses the same external-auth session as other requests. Pipeline, owner and property errors offer retries; custom lead-status defaults are saved and applied to new contacts.
+- Extension connection is required and detected by a same-account handshake on whatsync.io. Local previews explain that detection requires the published site.
+- Inputs use 38px border-box height, contact markup is correctly nested, actions wrap with spacing. Empty chat scan results stay compact until explicitly scanned; already-filled suggestions are distinguished from absent details.
+- All three sidebar groups have saved ordering, applied in the real extension and preview. Ticket is a direct sortable action; Templates replaces the generic More label.
+- CRM writes require a valid active/trialing subscription with a future period end; no-plan/expired/overdue writes fail closed. Setup preferences and permitted CRM reads remain available. There is no hidden owner exemption and no automatic free trial implemented yet.
+- Existing billing users no longer see Create workspace. Customer-facing plan and checkout messages use plain language.
 
 ## Changes delivered
 
@@ -12,12 +21,12 @@ Reviewed 11 September 2026. No zero-bug guarantee is possible. Passing local tes
 - Sidebar field/privacy saves now refresh all affected controls; an empty allowed-fields list remains empty. The unimplemented media-redaction toggle was removed from the UI.
 - Shared dashboard refresh coordination, worker/session bridge synchronization, and preservation of credentials during temporary outages.
 - Website and extension pinned to the same WhatSync backend. Local website config previously pointed to Lovable's different project.
-- Replaced simulated payment/card flows with Stripe-hosted checkout and customer portal, signed webhook verification, private subscription storage, replay/ordering protection, optional server subscription enforcement, and an operator-only subscriber page with billing email and status filters.
+- Replaced simulated payment/card flows with Stripe-hosted checkout and customer portal, signed webhook verification, private subscription storage, replay/ordering protection, mandatory server subscription enforcement for CRM writes, and an operator-only subscriber page with billing email and status filters.
 - Patched website dependencies. No known vulnerabilities reported by npm audit at validation time; this is not a guarantee that dependencies have no defects.
 
 ## Verification evidence
 
-Final local result: **45 automated tests passed** (12 Node, 11 Deno, 22 browser), plus the disposable database checks. The browser suite includes a fresh-profile MV3 service-worker and popup startup check.
+Final local result: **52 automated tests passed** (12 Node, 12 Deno, 28 browser), plus the disposable database checks. The browser suite includes a fresh-profile MV3 service-worker and popup startup check.
 
 Reproducible checks are in `tests/`, `supabase/tests/`, and `website/tests/`. The release bundle contains the final report files.
 
@@ -36,7 +45,7 @@ Latest local browser run: all 22 tests passed after the page-title fix. Initial 
 
 ## Gates before a green light
 
-1. **Publish and complete acceptance.** HubSpot/billing/auth and the three new migrations are deployed to the correct backend. Website publication and Chrome extension rollout remain pending. Publish from YAZ-Media/whatsync-website; reload the extension from this main folder or install the candidate ZIP. Lovable Cloud deploy buttons target its managed backend and are not sufficient. Historical live schema had no migration-history entries; do not replay old migrations blindly.
+1. **Publish and complete acceptance.** HubSpot/billing/auth and the four reviewed migrations are deployed to the correct backend. Website publication and Chrome extension rollout remain pending. Publish from YAZ-Media/whatsync-website; reload the extension from this main folder or install the candidate ZIP. Lovable Cloud deploy buttons target its managed backend and are not sufficient. Historical live schema had no migration-history entries; do not replay old migrations blindly.
 2. **Confirm the paid offer and configure a provider.** Stripe is the proposed implementation, not a confirmed merchant account. Approve plan prices, currency, monthly/yearly period, per-workspace/per-seat unit, trial, taxes, refunds and cancellation terms. Configure Stripe secrets/prices/webhooks/portal and an operator user ID. Three plan names are supported; differentiated seat/usage entitlements are not implemented. Do not sell quotas or premium tiers that the server does not enforce.
 3. **Payment acceptance.** In Stripe test mode verify checkout success, decline, authentication challenge, abandoned/duplicate checkout (including simultaneous clicks and reservation expiry), renewal, plan change, failed renewal, cancellation, refund, duplicate/out-of-order webhooks, and subscriber-table results. Then perform an approved live-mode merchant acceptance transaction and cancellation/refund. No live charge or refund was performed in this session. Do not mark old simulated invoices as paid or migrate them into verified subscriptions.
 4. **Live CRM and tenant acceptance.** With an unlocked browser, run the matrix below against dedicated HubSpot test records and two separate customer accounts. A signed-in WhatSync session connected to a dedicated HubSpot acceptance portal is still needed. Check token rotation over an extended session and two browser tabs. Verify wrong-tenant and suspended/read-only users cannot mutate CRM records.

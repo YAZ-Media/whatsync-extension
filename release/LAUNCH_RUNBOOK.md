@@ -8,12 +8,16 @@
 - Auth, database and deployed functions: WhatSync `ogsvchujqpayuckxuwdf`.
 - `website/src/lib/backend.ts` and extension `config.js` contain only public anonymous keys. Privileged secrets belong only in Supabase secrets/merchant dashboards.
 
-## Deployment status — 11 September 2026
+## Deployment status — 12 September 2026
 
 - Complete: live WhatSync schema/permissions inspected; existing function source downloaded; billing and profile-privilege migrations rehearsed then applied with migration records; tested checkout reservation migration applied; HubSpot, billing and external-auth deployed to ogsvchujqpayuckxuwdf; sales explicitly closed.
 - Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns salesEnabled=false. Stripe webhook is not configured.
 - Remaining: merchant/offer/terms decisions, payment acceptance, authenticated CRM and tenant tests, website publication, extension store rollout, and recoverable backups. No physical backups were listed by the project.
-- The database's historical schema existed with an empty migration journal. Only the three reviewed September migrations are recorded. **Do not run blanket db push until historical migrations are reconciled.** The commands below describe future releases and must not be used to replay the old baseline on this database.
+- The database's historical schema existed with an empty migration journal. Only the four reviewed September migrations are recorded. **Do not run blanket db push until historical migrations are reconciled.** The commands below describe future releases and must not be used to replay the old baseline on this database.
+
+September 12: deployed HubSpot and hubspot-oauth fixes, added `20260912000000_sidebar_defaults.sql` (lead default and sort order). CRM-write subscription enforcement is now mandatory, independent of the legacy BILLING_ENFORCE_ACCESS flag. Sales remain closed; this means an account without a valid subscription can set up and read, but cannot write to HubSpot. Stripe trials are respected; a no-card trial is not implemented.
+
+Reload the extension from the main folder to use v1.5.1, then refresh WhatsApp Web and whatsync.io. Publish the website candidate from YAZ-Media/whatsync-website; Lovable Cloud function deployments still target the wrong database and are not the deployment path for backend changes.
 
 ## 1. Validate the candidate locally
 
@@ -75,7 +79,7 @@ Keep `BILLING_SALES_ENABLED=false` until provider, prices and terms are approved
 | STRIPE_PRICE_STARTER / TEAM / BUSINESS | Active recurring fixed-amount Stripe Price IDs; no client-supplied amount |
 | APP_URL | `https://whatsync.io` |
 | BILLING_ADMIN_USER_IDS | Comma-separated authenticated WhatSync user UUIDs allowed to view all subscribers |
-| BILLING_ENFORCE_ACCESS | `true` enables server-side active-subscription checks for CRM mutations |
+| BILLING_ENFORCE_ACCESS | Retired: CRM-write subscription checks are always enforced |
 | BILLING_REQUIRE_LIVE | `false` during test acceptance; `true` for paid production |
 
 Configure hosted billing portal invoices, payment-method updates, cancellation and approved plan changes. Do not enable quantity changes or unconfigured prices. Configure automatic tax and invoicing according to the merchant's approved setup; these are not enabled by this code by default.
@@ -86,13 +90,13 @@ Checkout reservations last one hour. Retries use the same stored ID/expiry and p
 
 Run the payment acceptance matrix in LAUNCH_READINESS.md. The subscriber page is `/dashboard/subscribers`; normal workspace Owner access is deliberately insufficient. Use `/dashboard/billing` for customer self-service. These pages require this new function and migration to be deployed.
 
-When the offer is approved and all gates pass, set live merchant keys/price IDs/webhook secret, set BILLING_REQUIRE_LIVE=true and BILLING_ENFORCE_ACCESS=true, verify an authorized live transaction, and only then set BILLING_SALES_ENABLED=true. Do not change the IDs of prices still used by existing subscriptions without implementing a historical price mapping.
+When the offer is approved and all gates pass, set live merchant keys/price IDs/webhook secret, set BILLING_REQUIRE_LIVE=true, verify an authorized live transaction, and only then set BILLING_SALES_ENABLED=true. Do not change the IDs of prices still used by existing subscriptions without implementing a historical price mapping.
 
 ## 4. Publish the website and extension
 
 Build/publish from `YAZ-Media/whatsync-website`. Confirm that the published assets target `ogsvchujqpayuckxuwdf`. The release ZIP includes static website assets; configure the host to serve index.html for client routes such as `/auth/hubspot/callback` and `/dashboard/billing`. Keep browser-server secrets out of the build.
 
-Upload the extension-only ZIP to Chrome Web Store. Its manifest version is 1.5.0; this bundle remains a candidate until accepted. Add an approved listing URL through `VITE_CHROME_STORE_URL`, rebuild the site, and verify the Setup page's Install button. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Merely publishing the website does not update an unpacked extension.
+Upload the extension-only ZIP to Chrome Web Store. Its manifest version is 1.5.1; this bundle remains a candidate until accepted. Add an approved listing URL through `VITE_CHROME_STORE_URL`, rebuild the site, and verify the Setup page's Install button. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Merely publishing the website does not update an unpacked extension.
 
 Before accepting money, publish approved Terms, billing/refund policy and the updated privacy policy; confirm support works and every public URL resolves. Conduct a clean-device install and full purchase→connect→create→read-back flow.
 

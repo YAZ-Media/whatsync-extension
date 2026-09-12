@@ -1,6 +1,6 @@
-# Chrome Web Store submission — WhatSync 1.5.2
+# Chrome Web Store submission — WhatSync 1.5.3
 
-Submit this package for Chrome Web Store review while public checkout remains closed. Store approval is a separate launch gate; do not enable customer sales until the approved listing installs successfully and the live acceptance matrix in `LAUNCH_READINESS.md` passes.
+Submit this package for Chrome Web Store review. Store approval remains a separate launch gate; validate installation from the approved listing and complete the live acceptance matrix in `LAUNCH_READINESS.md` before promoting general availability.
 
 ## Proposed listing copy (verify against the accepted build)
 
@@ -23,4 +23,4 @@ A WhatSync account and a connected HubSpot account are required. Availability an
 
 Single purpose: keep a connected HubSpot CRM updated from the user's WhatsApp Web work.
 
-Prepare actual screenshots from the accepted build, the original icon, setup/support/privacy/terms URLs, and reviewer access. The combined release bundle is not the extension upload: upload only `dist/whatsync-1.5.2.zip`. Confirm the Chrome Web Store's current submission requirements in its developer dashboard; no approval or review time is promised here.
+Marketplace assets are under `release/chrome-web-store/` and contain fictional product data. The combined release bundle is not the extension upload: upload only `dist/whatsync-1.5.3.zip`. Confirm the Chrome Web Store's current submission requirements in its developer dashboard; no approval or review time is promised here.

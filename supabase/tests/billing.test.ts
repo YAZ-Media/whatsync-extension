@@ -95,6 +95,39 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Annual',seats:3,termsAccepted:true},auth))).status,409);
  } finally {globalThis.fetch=oldFetch;Deno.env.set('BILLING_SALES_ENABLED','false');Deno.env.delete('BILLING_ACCEPTANCE_EMAILS');}
 });
+Deno.test('acceptance checkout uses isolated test Stripe resources without changing live billing',async()=>{
+ const oldFetch=globalThis.fetch;let checkoutBody='',checkoutAuth='',customerWrite:Record<string,unknown>|null=null;
+ Deno.env.set('BILLING_ACCEPTANCE_EMAILS','acceptance@example.com');
+ Deno.env.set('BILLING_ACCEPTANCE_TEST_ENABLED','true');
+ Deno.env.set('STRIPE_TEST_SECRET_KEY','sk_test_acceptance');
+ Deno.env.set('STRIPE_TEST_PRICE_PRO_MONTHLY','price_test_monthly');
+ globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input);let result:unknown;
+  if(url.includes('/auth/v1/user'))result={id:'acceptance-user'};
+  else if(url.includes('/user_profiles')&&url.includes('select=role'))result={role:'Owner',status:'Active',organization_id:'acceptance-org',email:'acceptance@example.com'};
+  else if(url.includes('/user_profiles'))return new Response(null,{headers:{'content-range':'0-0/1'}});
+  else if(url.includes('/billing_customers')&&init?.method==='POST'){customerWrite=JSON.parse(String(init.body));result=customerWrite;}
+  else if(url.includes('/billing_customers'))result={stripe_customer_id:'cus_live_old',livemode:true};
+  else if(url.includes('/rpc/reserve_billing_checkout'))result={attempt_id:'acceptance-attempt',plan_name:'Pro Monthly',seats:1,expires_at:2000000000};
+  else if(url.includes('api.stripe.com/v1/customers'))result={id:'cus_test_acceptance'};
+  else if(url.includes('api.stripe.com/v1/subscriptions'))result={data:[]};
+  else if(url.includes('api.stripe.com/v1/checkout/sessions')){checkoutBody=String(init?.body);checkoutAuth=new Headers(init?.headers).get('Authorization')||'';result={url:'https://checkout.stripe.com/c/pay/test-fixture'};}
+  else throw new Error('Unexpected request: '+url);
+  return new Response(JSON.stringify(result),{headers:{'content-type':'application/json'}});
+ };
+ try {
+  const response=await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:1,termsAccepted:true},{Authorization:'Bearer fixture'}));
+  equal(response.status,200);
+  const encoded=new URLSearchParams(checkoutBody);
+  equal(encoded.get('line_items[0][price]'),'price_test_monthly');
+  equal(encoded.get('metadata[environment]'),'acceptance_test');
+  equal(checkoutAuth,'Bearer sk_test_acceptance');
+  equal((customerWrite as Record<string,unknown>|null)?.livemode,false);
+ } finally {
+  globalThis.fetch=oldFetch;
+  for(const key of ['BILLING_ACCEPTANCE_EMAILS','BILLING_ACCEPTANCE_TEST_ENABLED','STRIPE_TEST_SECRET_KEY','STRIPE_TEST_PRICE_PRO_MONTHLY'])Deno.env.delete(key);
+ }
+});
 Deno.test('seat changes enforce active members and use Stripe pending updates with proration',async()=>{
  const oldFetch=globalThis.fetch;let stripeBody='';Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');Deno.env.set('BILLING_REQUIRE_LIVE','true');
  globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{

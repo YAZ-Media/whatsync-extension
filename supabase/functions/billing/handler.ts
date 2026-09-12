@@ -8,15 +8,32 @@ import { PLAN_KEYS, isPlan, canManageBilling, planPriceEnvKey, type PlanKey } fr
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info, stripe-signature' };
 const json = (body: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 const env = (key: string) => Deno.env.get(key) || '';
-const priceId = (plan: PlanKey) => env(planPriceEnvKey(plan));
 const salesEnabled = () => env('BILLING_SALES_ENABLED') === 'true';
 const acceptanceCheckoutEnabled = (email: string | null | undefined) => {
   const allowed = env('BILLING_ACCEPTANCE_EMAILS').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
   return !!email && allowed.includes(email.trim().toLowerCase());
 };
-const stripeClient = () => {
-  if (!env('STRIPE_SECRET_KEY')) throw new Error('Billing provider is not configured.');
-  return new Stripe(env('STRIPE_SECRET_KEY'), { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2 });
+type BillingRuntime = { stripe: Stripe; priceId: (plan: PlanKey) => string; portalConfigurationId: string; livemode: boolean };
+const stripeClient = (key: string) => {
+  if (!key) throw new Error('Billing provider is not configured.');
+  return new Stripe(key, { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2 });
+};
+const liveRuntime = (): BillingRuntime => ({
+  stripe: stripeClient(env('STRIPE_SECRET_KEY')),
+  priceId: plan => env(planPriceEnvKey(plan)),
+  portalConfigurationId: env('STRIPE_PORTAL_CONFIGURATION_ID'),
+  livemode: true,
+});
+const acceptanceTestRuntimeEnabled = (email: string | null | undefined) =>
+  env('BILLING_ACCEPTANCE_TEST_ENABLED') === 'true' && acceptanceCheckoutEnabled(email);
+const runtimeForEmail = (email: string | null | undefined): BillingRuntime => {
+  if (!acceptanceTestRuntimeEnabled(email)) return liveRuntime();
+  return {
+    stripe: stripeClient(env('STRIPE_TEST_SECRET_KEY')),
+    priceId: plan => env(`STRIPE_TEST_${planPriceEnvKey(plan).replace('STRIPE_', '')}`),
+    portalConfigurationId: env('STRIPE_TEST_PORTAL_CONFIGURATION_ID'),
+    livemode: false,
+  };
 };
 const database = () => {
   if (!env('EXTERNAL_SUPABASE_URL') || !env('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY')) throw new Error('Billing database is not configured.');
@@ -27,11 +44,11 @@ const origin = () => {
   if (url.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(url.hostname)) throw new Error('Invalid application URL.');
   return url.origin;
 };
-async function planCatalog() {
-  const stripe = stripeClient();
+async function planCatalog(runtime: BillingRuntime) {
+  const stripe = runtime.stripe;
   const plans = await Promise.all(PLAN_KEYS.map(async name => {
-    if (!priceId(name)) throw new Error('A subscription price is not configured.');
-    const price = await stripe.prices.retrieve(priceId(name));
+    if (!runtime.priceId(name)) throw new Error('A subscription price is not configured.');
+    const price = await stripe.prices.retrieve(runtime.priceId(name));
     if (!price.active || !price.recurring || price.unit_amount === null) throw new Error('Invalid subscription price configuration.');
     return { name, amount: price.unit_amount, currency: price.currency, interval: price.recurring.interval, intervalCount: price.recurring.interval_count };
   }));
@@ -47,12 +64,22 @@ export async function handleBilling(req: Request): Promise<Response> {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   // Stripe webhooks use a signature, never a client-supplied userId or JWT bypass.
   if (req.headers.has('stripe-signature')) {
-    if (!env('STRIPE_WEBHOOK_SECRET') || !env('STRIPE_SECRET_KEY')) return json({ error: 'Webhook not configured' }, 503);
-    const stripe = stripeClient();
-    let event: Stripe.Event;
-    try {
-      event = await stripe.webhooks.constructEventAsync(await req.text(), req.headers.get('stripe-signature')!, env('STRIPE_WEBHOOK_SECRET'), undefined, Stripe.createSubtleCryptoProvider());
-    } catch { return json({ error: 'Invalid webhook signature' }, 400); }
+    const body = await req.text();
+    const signature = req.headers.get('stripe-signature')!;
+    const candidates = [
+      { runtime: liveRuntime(), secret: env('STRIPE_WEBHOOK_SECRET') },
+      ...(env('BILLING_ACCEPTANCE_TEST_ENABLED') === 'true' ? [{ runtime: runtimeForEmail(env('BILLING_ACCEPTANCE_EMAILS').split(',')[0]), secret: env('STRIPE_TEST_WEBHOOK_SECRET') }] : []),
+    ].filter(candidate => candidate.secret);
+    let event: Stripe.Event | null = null;
+    let runtime: BillingRuntime | null = null;
+    for (const candidate of candidates) {
+      try {
+        event = await candidate.runtime.stripe.webhooks.constructEventAsync(body, signature, candidate.secret, undefined, Stripe.createSubtleCryptoProvider());
+        runtime = candidate.runtime;
+        break;
+      } catch { /* Try the other isolated signing secret. */ }
+    }
+    if (!event || !runtime) return json({ error: 'Invalid webhook signature' }, 400);
     try {
       const supported = ['customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','invoice.paid','invoice.payment_failed','checkout.session.completed'];
       if (!supported.includes(event.type)) return json({ received: true });
@@ -67,10 +94,10 @@ export async function handleBilling(req: Request): Promise<Response> {
       const subscriptionId = event.type.startsWith('customer.subscription.') ? String(object.id) : (object.subscription || parent?.subscription_details?.subscription) as string | undefined;
       if (!subscriptionId) return json({ received: true });
       // Fetch current provider state, rather than trusting potentially old event snapshots.
-      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      const subscription = await runtime.stripe.subscriptions.retrieve(subscriptionId);
       if (subscription.customer !== customerId) return json({ error: 'Customer mismatch' }, 400);
       const item = subscription.items.data[0];
-      const plan = PLAN_KEYS.find(plan => priceId(plan) === item?.price.id);
+      const plan = PLAN_KEYS.find(plan => runtime.priceId(plan) === item?.price.id);
       if (!plan || subscription.items.data.length !== 1) throw new Error('Unrecognized subscription price');
       const periodEnd = item?.current_period_end;
       const snapshot = {
@@ -92,7 +119,7 @@ export async function handleBilling(req: Request): Promise<Response> {
     const { action, data = {} } = await req.json();
     if (action === 'getPlans') {
       if (!salesEnabled()) return json({ salesEnabled: false, plans: [] });
-      return json(await planCatalog());
+      return json(await planCatalog(liveRuntime()));
     }
     const auth = await authenticateRequest(req, data.userId || null);
     if (!auth.ok) return json({ error: auth.error }, auth.status);
@@ -117,24 +144,26 @@ export async function handleBilling(req: Request): Promise<Response> {
       return json({ subscribers: rows.data?.map(row => ({...row, billing_email: (row.billing_customers as unknown as {billing_email?:string})?.billing_email || null})), total: rows.count, page });
     }
     if (!['Owner','Admin','Billing','Read-only'].includes(profile.role)) return json({ error: 'Billing access required.' },403);
-    const customer = must(await ext.from('billing_customers').select('stripe_customer_id').eq('account_id', accountId).maybeSingle()).data;
+    const runtime = runtimeForEmail(profile.email);
+    const customer = must(await ext.from('billing_customers').select('stripe_customer_id,livemode').eq('account_id', accountId).maybeSingle()).data;
+    const runtimeCustomer = customer && (runtime.livemode ? customer.livemode !== false : customer.livemode === false) ? customer : null;
     if (action === 'getBillingData') {
-      const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
-      return json({ subscription, hasCustomer: !!customer, salesEnabled: checkoutEnabled, internalAccess: operator });
+      const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).eq('livemode',runtime.livemode).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
+      return json({ subscription, hasCustomer: !!runtimeCustomer, salesEnabled: checkoutEnabled, internalAccess: operator, testMode: !runtime.livemode });
     }
     if (action === 'getWorkspacePlans') {
-      return checkoutEnabled ? json(await planCatalog()) : json({ salesEnabled: false, plans: [] });
+      return checkoutEnabled ? json({...(await planCatalog(runtime)),testMode:!runtime.livemode}) : json({ salesEnabled: false, plans: [] });
     }
     if (!canManageBilling(profile.role, profile.status)) return json({ error: 'Only a workspace owner or billing manager can manage this subscription.' },403);
     if (['savePaymentMethod','processPayment','changePlan','deletePaymentMethod','setDefaultPaymentMethod'].includes(action)) return json({ error: 'Use secure hosted checkout or the billing portal. Card details are not accepted here.' },410);
-    const stripe = stripeClient();
+    const stripe = runtime.stripe;
     if (action === 'createPortalSession') {
-      if (!customer) return json({ error: 'No billing account yet. Choose a subscription first.' },409);
-      const session = await stripe.billingPortal.sessions.create({ customer:customer.stripe_customer_id, ...(env('STRIPE_PORTAL_CONFIGURATION_ID') ? {configuration:env('STRIPE_PORTAL_CONFIGURATION_ID')} : {}),return_url:`${origin()}/dashboard/billing` });
+      if (!runtimeCustomer) return json({ error: 'No billing account yet. Choose a subscription first.' },409);
+      const session = await stripe.billingPortal.sessions.create({ customer:runtimeCustomer.stripe_customer_id, ...(runtime.portalConfigurationId ? {configuration:runtime.portalConfigurationId} : {}),return_url:`${origin()}/dashboard/billing` });
       return json({ url:session.url });
     }
     if (action === 'updateSubscriptionSeats') {
-      if (!customer) return json({ error: 'No billing account yet. Choose a subscription first.' }, 409);
+      if (!runtimeCustomer) return json({ error: 'No billing account yet. Choose a subscription first.' }, 409);
       const requestedSeats = Number(data.seats);
       const seats = Number.isInteger(requestedSeats) ? requestedSeats : 0;
       if (seats < 1 || seats > 250) return json({ error: 'Choose between 1 and 250 syncing users.' }, 400);
@@ -151,14 +180,14 @@ export async function handleBilling(req: Request): Promise<Response> {
         .eq('account_id', accountId).in('status', ['active', 'trialing'])
         .order('updated_at', { ascending: false }).limit(1).maybeSingle()).data;
       if (!stored?.stripe_subscription_id) return json({ error: 'An active subscription is required to change seats.' }, 409);
-      if (env('BILLING_REQUIRE_LIVE') === 'true' && stored.livemode !== true) {
+      if (stored.livemode !== runtime.livemode || (env('BILLING_REQUIRE_LIVE') === 'true' && !acceptanceTestRuntimeEnabled(profile.email) && stored.livemode !== true)) {
         return json({ error: 'A live subscription is required to change seats.' }, 409);
       }
 
       const subscription = await stripe.subscriptions.retrieve(stored.stripe_subscription_id);
-      if (subscription.customer !== customer.stripe_customer_id) return json({ error: 'Billing account mismatch.' }, 409);
+      if (subscription.customer !== runtimeCustomer.stripe_customer_id) return json({ error: 'Billing account mismatch.' }, 409);
       const item = subscription.items.data[0];
-      if (!item || subscription.items.data.length !== 1 || !PLAN_KEYS.some(plan => priceId(plan) === item.price.id)) {
+      if (!item || subscription.items.data.length !== 1 || !PLAN_KEYS.some(plan => runtime.priceId(plan) === item.price.id)) {
         return json({ error: 'This subscription cannot be changed automatically. Contact support.' }, 409);
       }
       if ((item.quantity || 1) === seats) return json({ quantity: seats, unchanged: true });
@@ -176,7 +205,7 @@ export async function handleBilling(req: Request): Promise<Response> {
     }
     if (action === 'createCheckoutSession') {
       if (!checkoutEnabled) return json({ error:'Subscriptions are not open yet.' },503);
-      if (!isPlan(data.planName) || !priceId(data.planName)) return json({ error:'Choose a configured subscription plan.' },400);
+      if (!isPlan(data.planName) || !runtime.priceId(data.planName)) return json({ error:'Choose a configured subscription plan.' },400);
       if (data.termsAccepted !== true) return json({ error:'Accept the subscription terms before checkout.' },400);
       const requestedSeats = Number(data.seats);
       const seats = Number.isInteger(requestedSeats) ? requestedSeats : 1;
@@ -184,11 +213,11 @@ export async function handleBilling(req: Request): Promise<Response> {
       const billable = must(await ext.from('user_profiles').select('user_id',{count:'exact',head:true}).eq('organization_id',accountId).eq('status','Active').in('role',['Owner','Admin','Member']));
       const minimumSeats = Math.max(1, billable.count || 0);
       if (seats < minimumSeats) return json({ error:`This workspace currently needs at least ${minimumSeats} syncing seats.` },400);
-      let customerId = customer?.stripe_customer_id;
+      let customerId = runtimeCustomer?.stripe_customer_id;
       if (!customerId) {
-        const created = await stripe.customers.create({email:profile.email,metadata:{account_id:accountId}}, {idempotencyKey:`whatsync-customer-${accountId}`});
+        const created = await stripe.customers.create({email:profile.email,metadata:{account_id:accountId}}, {idempotencyKey:`whatsync-customer-${accountId}-${runtime.livemode?'live':'test'}`});
         customerId = created.id;
-        must(await ext.from('billing_customers').upsert({account_id:accountId,stripe_customer_id:customerId,billing_email:profile.email},{onConflict:'account_id'}));
+        must(await ext.from('billing_customers').upsert({account_id:accountId,stripe_customer_id:customerId,billing_email:profile.email,livemode:runtime.livemode},{onConflict:'account_id'}));
       }
       const subscriptions = await stripe.subscriptions.list({customer:customerId,status:'all',limit:100});
       if (subscriptions.data.some(s => !['canceled','incomplete_expired'].includes(s.status))) return json({error:'This workspace already has a subscription. Use Manage billing to change it.'},409);
@@ -202,11 +231,11 @@ export async function handleBilling(req: Request): Promise<Response> {
       const session = await stripe.checkout.sessions.create({
         mode:'subscription',customer:customerId,client_reference_id:accountId,
         expires_at:attempt.expires_at,
-        line_items:[{price:priceId(data.planName),quantity:seats,adjustable_quantity:{enabled:true,minimum:minimumSeats,maximum:250}}],
+        line_items:[{price:runtime.priceId(data.planName),quantity:seats,adjustable_quantity:{enabled:true,minimum:minimumSeats,maximum:250}}],
         success_url:`${origin()}/dashboard/billing?checkout=returned`,cancel_url:`${origin()}/dashboard/billing?checkout=canceled`,
-        metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId},
-        subscription_data:{metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId}},allow_promotion_codes:true,
-      }, {idempotencyKey:`checkout-${attempt.attempt_id}`});
+        metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId,environment:runtime.livemode?'live':'acceptance_test'},
+        subscription_data:{metadata:{account_id:accountId,terms_version:'2026-09-12',terms_accepted_by:auth.userId,environment:runtime.livemode?'live':'acceptance_test'}},allow_promotion_codes:true,
+      }, {idempotencyKey:`checkout-${attempt.attempt_id}${runtime.livemode?'':'-test'}`});
       return json({url:session.url});
     }
     return json({error:'Unknown billing action'},400);

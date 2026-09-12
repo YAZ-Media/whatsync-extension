@@ -11,7 +11,7 @@
 ## Deployment status — 12 September 2026
 
 - Complete: live WhatSync schema/permissions inspected; existing function source downloaded; billing and profile-privilege migrations rehearsed then applied with migration records; tested checkout reservation migration applied; HubSpot, billing and external-auth deployed to ogsvchujqpayuckxuwdf; sales explicitly closed.
-- Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns salesEnabled=false. Stripe webhook is not configured.
+- Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns salesEnabled=false. Stripe test credentials and a dedicated signed webhook are configured; a sandbox `invoice.paid` event received HTTP 200 from the deployed billing function.
 - Remaining: merchant/offer/terms decisions, payment acceptance, authenticated CRM and tenant tests, website publication, extension store rollout, and recoverable backups. No physical backups were listed by the project.
 - The database's historical schema existed with an empty migration journal. Only the four reviewed September migrations are recorded. **Do not run blanket db push until historical migrations are reconciled.** The commands below describe future releases and must not be used to replay the old baseline on this database.
 
@@ -84,7 +84,7 @@ Keep `BILLING_SALES_ENABLED=false` until provider, prices and terms are approved
 
 Configure hosted billing portal invoices, payment-method updates, cancellation and approved plan changes. Do not enable quantity changes or unconfigured prices. Configure automatic tax and invoicing according to the merchant's approved setup; these are not enabled by this code by default.
 
-Register webhook URL `https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/billing` for checkout.session.completed, customer.subscription.created/updated/deleted, invoice.paid and invoice.payment_failed. Use the matching Stripe event API version for SDK18.5.0 (2025-08-27.basil); verify fixtures against real test events before enabling. Webhooks use the raw request body and Stripe signature. HTTP500 must be retried; monitor failures.
+Register webhook URL `https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/billing` for checkout.session.completed, customer.subscription.created/updated/deleted, invoice.paid and invoice.payment_failed. The test destination uses Stripe API version `2024-06-20`, snapshot payloads and the matching encrypted signing secret. A signed sandbox `invoice.paid` event has been accepted by the deployed function. Webhooks use the raw request body and Stripe signature. HTTP 500 must be retried; monitor failures.
 
 Checkout reservations last one hour. Retries use the same stored ID/expiry and provider request key. A different plan is rejected while the reservation is active; the buyer can resume the original plan or wait for expiry. If the first provider call never happened, a very late retry may fail until the reservation expires because Stripe requires at least 30 minutes for a newly created session. Validate these outcomes with real test-mode Stripe sessions before opening sales. [Stripe checkout expiry reference](https://docs.stripe.com/api/checkout/sessions/create).
 

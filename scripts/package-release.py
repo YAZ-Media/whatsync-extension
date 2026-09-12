@@ -38,7 +38,14 @@ def bundle(name,base,paths):
 bundle('website-static.zip',website/'dist',['.'])
 bundle('website-source.zip',website,['src','public','index.html','package.json','package-lock.json','vite.config.ts','tailwind.config.ts','postcss.config.js','tsconfig.json','tsconfig.app.json','tsconfig.node.json'])
 bundle('backend-source.zip',root,['supabase/functions','supabase/migrations','supabase/config.toml'])
-for src in ['LAUNCH_READINESS.md','DEPLOYMENT.md','DESIGN_SYSTEM.md','STORE_LISTING.md','release/LAUNCH_RUNBOOK.md']:
+for src in [
+    'LAUNCH_READINESS.md',
+    'DEPLOYMENT.md',
+    'DESIGN_SYSTEM.md',
+    'STORE_LISTING.md',
+    'release/LAUNCH_RUNBOOK.md',
+    'release/OWNER_AND_STRIPE_STATUS.md',
+]:
  shutil.copy2(root/src,output/Path(src).name)
 evidence=output/'evidence';evidence.mkdir(exist_ok=True)
 for src,dest in [(website/'test-results/results.json','browser-tests.json'),(Path('/tmp/whatsync-final-audit.json'),'dependency-audit.json'),(Path('/tmp/whatsync-production-probe.json'),'production-readonly-probe.json'),(Path('/tmp/whatsync-production-acceptance.json'),'production-deployed-checks.json'),(Path('/tmp/whatsync-database-acceptance.json'),'database-deployed-checks.json'),(Path('/tmp/whatsync-node-tests.txt'),'node-tests.txt'),(Path('/tmp/whatsync-billing-tests.txt'),'billing-tests.txt'),(Path('/tmp/whatsync-signup-tests.txt'),'signup-tests.txt'),(Path('/tmp/whatsync-postgres-tests.txt'),'postgres-tests.txt'),(Path('/tmp/whatsync-compiled-tests.json'),'compiled-site-tests.json')]:

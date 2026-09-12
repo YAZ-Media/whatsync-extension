@@ -6,6 +6,8 @@
 - The WhatSync production backend now has the Stripe test API key and the matching test webhook signing secret stored as encrypted Edge Function secrets. Neither credential was copied into source code or release artifacts.
 - A dedicated test webhook destination is active at `https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/billing` for the six required subscription, checkout and invoice events. It uses snapshot payloads and Stripe API version `2024-06-20`.
 - A signed `invoice.paid` sandbox event reached the deployed WhatSync billing function and received HTTP 200 with `{"received":true}`. This proves transport and signature verification; it does not prove a WhatSync subscription checkout because the generated invoice was not attached to a WhatSync customer subscription.
+- The approved WhatSync Pro test catalog is configured at USD 19 per syncing user monthly and USD 180 per syncing user annually. Checkout accepts 1–250 seats, enforces the current active syncing-user minimum and stores the verified Stripe quantity and interval from webhooks.
+- A dedicated WhatSync test customer portal is configured for billing details, payment methods, invoices and cancellation at period end.
 - The configured owner allowlist matches yazan@yazmedia.com, user UUID 26ca8f7d-528b-4155-a840-db9d09d5aac2. The profile is Active with Owner role.
 - Internal owner access is explicit and restricted to that server allowlist. It enables the owner's own CRM operations without manufacturing a paid subscription. Suspended owner accounts are still blocked.
 - Customer workspace Owner roles do not confer platform ownership or customer-wide visibility.
@@ -24,8 +26,7 @@ No WhatSync checkout, subscription renewal, failure recovery or cancellation has
 
 ## Still required for paid launch
 
-1. Create matching WhatSync recurring test prices and a WhatSync-specific customer portal configuration. Set the resulting price IDs and `STRIPE_PORTAL_CONFIGURATION_ID`. Do not alter another business/product's portal defaults.
-2. Implement/approve the commercial offer. Current fixed Starter/Team/Business checkout is not the proposed Pro per-seat monthly/annual model; seats and the automatic no-card trial remain unimplemented.
-3. Run real sandbox checkout, signed webhook, declined payment, renewal, cancellation and refund acceptance, including tenant isolation. Keep test customers separate from live customers.
-4. Publish the reviewed website branch, complete authenticated CRM read-back acceptance, publish the extension through the store, finalise legal/invoice disclosures, and establish recoverable database backups.
-5. Only then open public sales. No paid-launch green light is warranted at this stage.
+1. Implement the approved card-free 14-day trial and enforce purchased seat capacity when invitations are accepted or roles change; validate seat-change proration.
+2. Run real sandbox checkout, signed subscription webhooks, declined payment, renewal, cancellation and refund acceptance, including tenant isolation.
+3. Publish the reviewed website branch, complete authenticated CRM read-back acceptance, publish extension 1.5.2 through the store, obtain legal review and establish recoverable database backups.
+4. Only then switch to matching live Stripe keys/prices/webhook and open public sales. No paid-launch green light is warranted yet.

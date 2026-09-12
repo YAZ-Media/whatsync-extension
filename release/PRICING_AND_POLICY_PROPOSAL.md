@@ -1,8 +1,9 @@
 # WhatSync commercial proposal — 12 September 2026
 
-Status: recommended offer, not an enabled Stripe catalog. Sales remain closed.
+Status: offer approved on 12 September 2026; matching Stripe test product and prices created. Sales remain closed pending acceptance testing and live configuration.
 
 Operator: YAZ MARKETING LLC
+UAE TRN: 100528135500003
 Support and refund requests: support@whatsync.io
 Subscriber administrator: yazan@yazmedia.com (verified active Owner; operator access configured separately).
 
@@ -37,6 +38,6 @@ Registered address, licensing information and applicable tax registration remain
 
 ## Implementation gate
 
-The current billing implementation has fixed Starter/Team/Business price keys and quantity=1; it does NOT yet enforce this per-seat model or the card-free 14-day trial. Before presenting the offer as purchasable, implement a canonical Pro monthly/yearly catalog, purchased seat quantities, invitation/seat assignment enforcement, trial start/expiry, seat-change proration, verified webhook quantity/interval persistence, and customer/admin visibility. Test all of these against Stripe test mode. Do not configure marketing promises as though they already work.
+The canonical Pro monthly/yearly test catalog, selectable checkout quantities, active-user minimum, verified webhook quantity/interval persistence, customer billing display and owner visibility are implemented. Before presenting the offer as purchasable, implement invitation/seat-cap enforcement, trial start/expiry and seat-change proration, then test the complete lifecycle in Stripe test mode.
 
-Business identity can be used now. Refund/cancellation text remains a proposal until incorporated into the published policies and operational workflow. Operator configuration alone is not an authenticated UI acceptance test; verify Subscribers while signed in as the approved account.
+Business identity and the approved refund/cancellation terms are included in the website Terms page. Qualified legal review, registered address and licensing information remain launch requirements. Operator configuration alone is not an authenticated UI acceptance test; verify Subscribers while signed in as the approved account.

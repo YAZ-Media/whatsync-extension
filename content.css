@@ -5146,9 +5146,17 @@ body.whatsapp-theme-dark #hubspot-sidebar {
 #hubspot-sidebar, #hubspot-sidebar * {box-sizing:border-box;}
 #hubspot-sidebar .form-group input, #hubspot-sidebar .form-group select {height:38px;min-height:38px;max-height:38px;padding:7px 10px;line-height:22px;width:100%;}
 #hubspot-sidebar .create-contact-form {gap:12px;}
-#hubspot-sidebar .contact-header {padding:16px;}
-#hubspot-sidebar .contact-actions {display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;margin-top:14px;}
-#hubspot-sidebar .contact-actions > .action-btn {min-width:44px;flex:0 0 auto;border:0;background:transparent;padding:4px;}
+#hubspot-sidebar .contact-header {padding:18px 16px 16px;margin:0;min-width:0;overflow:hidden;}
+#hubspot-sidebar .contact-header-row-1 {min-width:0;margin-bottom:8px;}
+#hubspot-sidebar .contact-name-section h3 {min-width:0;overflow-wrap:anywhere;}
+#hubspot-sidebar .contact-job-section {margin:0 0 8px;overflow-wrap:anywhere;}
+#hubspot-sidebar .contact-email-header {min-width:0;margin-bottom:14px;}
+#hubspot-sidebar .contact-email-header .email-link {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#hubspot-sidebar .contact-actions {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;width:100%;justify-content:stretch;margin-top:12px;overflow:visible;}
+#hubspot-sidebar .contact-actions > .action-btn,
+#hubspot-sidebar .contact-actions > .more-actions-wrapper > .action-btn {width:100%;min-width:0;max-width:none;flex:none;border:0;background:transparent;padding:4px 0;}
+#hubspot-sidebar .contact-actions > .more-actions-wrapper {display:block;min-width:0;width:100%;}
+#hubspot-sidebar .action-btn span {display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;font-size:10px;}
 #hubspot-sidebar .contact-details {min-width:0;}
 #hubspot-sidebar .contact-name-section {min-width:0;}
 #hubspot-sidebar .email-link {color:var(--sidebar-text);overflow-wrap:anywhere;}

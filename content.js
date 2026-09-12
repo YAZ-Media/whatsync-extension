@@ -9706,11 +9706,15 @@ async function showWorkspaceAccess(root) {
   if (!root.isConnected) return;
   const access = response?.success ? response.data : null;
   let banner=root.querySelector('.ws-access-status');
+  // A healthy account does not need a technical billing banner above every
+  // contact. Keep this surface for actionable write restrictions only.
+  if (access?.canWrite) {
+    banner?.remove();
+    return;
+  }
   if (!banner) { banner=document.createElement('div'); banner.className='ws-access-status'; banner.setAttribute('role','status'); root.prepend(banner); }
   banner.textContent = access?.message || 'Subscription status is unavailable. Please refresh before making CRM changes.';
-  if (!access?.canWrite) {
-    const link=document.createElement('a'); link.href='https://whatsync.io/dashboard/billing'; link.target='_blank'; link.rel='noopener'; link.textContent=' Open billing'; banner.appendChild(link);
-  }
+  const link=document.createElement('a'); link.href='https://whatsync.io/dashboard/billing'; link.target='_blank'; link.rel='noopener'; link.textContent=' Open billing'; banner.appendChild(link);
 }
 
 function applySidebarOrder(root) {
@@ -11533,4 +11537,3 @@ const navigationCheckInterval = setInterval(() => {
     }, 1000);
   }
 }, 1000);
-

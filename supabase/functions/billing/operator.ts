@@ -1,6 +1,6 @@
 import Stripe from 'npm:stripe@18.5.0';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { PLAN_KEYS } from '../_shared/billing-policy.ts';
+import { PLAN_KEYS, planPriceEnvKey } from '../_shared/billing-policy.ts';
 import { isOperator } from '../_shared/operator.ts';
 const env=(key:string)=>Deno.env.get(key)||'';
 function checked<T extends {error:unknown}>(result:T):T { if(result.error) throw new Error('Internal account data is unavailable. Please retry.');return result; }
@@ -29,14 +29,14 @@ export async function operatorAction(action:string,data:Record<string,unknown>,u
   return {accounts:(users.data||[]).map(u=>({...u,isOperator:isOperator(u.user_id),connection:connections?.find(c=>c.user_id===u.user_id)||null})),total:users.count,page};
  }
  if(action==='getBillingHealth') {
-  const configured={apiKey:!!env('STRIPE_SECRET_KEY'),webhookSecret:!!env('STRIPE_WEBHOOK_SECRET'),portal:!!env('STRIPE_PORTAL_CONFIGURATION_ID'),prices:PLAN_KEYS.map(name=>({name,configured:!!env(`STRIPE_PRICE_${name.toUpperCase()}`)}))};
+  const configured={apiKey:!!env('STRIPE_SECRET_KEY'),webhookSecret:!!env('STRIPE_WEBHOOK_SECRET'),portal:!!env('STRIPE_PORTAL_CONFIGURATION_ID'),prices:PLAN_KEYS.map(name=>({name,configured:!!env(planPriceEnvKey(name))}))};
   const base={configured,salesEnabled:env('BILLING_SALES_ENABLED')==='true',requireLive:env('BILLING_REQUIRE_LIVE')==='true'};
   if(!configured.apiKey) return {...base,ready:false,mode:'unconfigured',message:'Connect Stripe to enable payment checks.'};
   try {
    const stripe=new Stripe(env('STRIPE_SECRET_KEY'),{httpClient:Stripe.createFetchHttpClient(),maxNetworkRetries:1});
    const account=await stripe.accounts.retrieve();
    const prices=await Promise.all(PLAN_KEYS.map(async name=>{
-    const id=env(`STRIPE_PRICE_${name.toUpperCase()}`);if(!id)return {name,valid:false,livemode:false};
+    const id=env(planPriceEnvKey(name));if(!id)return {name,valid:false,livemode:false};
     const p=await stripe.prices.retrieve(id);return {name,valid:p.active&&!!p.recurring&&p.unit_amount!==null,livemode:p.livemode,amount:p.unit_amount,currency:p.currency,interval:p.recurring?.interval};
    }));
    const hooks=await stripe.webhookEndpoints.list({limit:100});

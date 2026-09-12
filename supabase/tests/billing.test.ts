@@ -40,7 +40,7 @@ Deno.test('workspace owner cannot access global subscribers or spoof a userId',a
 });
 Deno.test('signed subscription event persists provider state, ignores forged snapshot, and retries failed storage',async()=>{
  const oldFetch=globalThis.fetch;let persisted:Record<string,unknown>|null=null;let fail=false;
- Deno.env.set('STRIPE_PRICE_STARTER','price_fixture');
+ Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');
  globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);
   if(url.includes('/billing_customers'))return new Response(JSON.stringify({account_id:'org-fixture'}),{headers:{'content-type':'application/json'}});
@@ -57,13 +57,13 @@ Deno.test('signed subscription event persists provider state, ignores forged sna
  } finally {globalThis.fetch=oldFetch;}
 });
 Deno.test('checkout uses the server price and blocks legacy card submissions',async()=>{
- const oldFetch=globalThis.fetch;let checkoutBody='';let checkoutKey='';Deno.env.set('BILLING_SALES_ENABLED','true');Deno.env.set('STRIPE_PRICE_STARTER','price_fixture');
+ const oldFetch=globalThis.fetch;let checkoutBody='';let checkoutKey='';Deno.env.set('BILLING_SALES_ENABLED','true');Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');
  globalThis.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
  const url=String(input);let result:unknown;
  if(url.includes('/auth/v1/user'))result={id:'user-1'};
  else if(url.includes('/user_profiles'))result={role:'Owner',status:'Active',organization_id:'org-1',email:'owner@example.com'};
  else if(url.includes('/billing_customers'))result={stripe_customer_id:'cus_fixture'};
- else if(url.includes('/rpc/reserve_billing_checkout'))result={attempt_id:'stable-attempt',plan_name:'Starter',expires_at:2000000000};
+ else if(url.includes('/rpc/reserve_billing_checkout'))result={attempt_id:'stable-attempt',plan_name:'Pro Monthly',seats:3,expires_at:2000000000};
  else if(url.includes('api.stripe.com/v1/subscriptions'))result={data:[]};
  else if(url.includes('api.stripe.com/v1/checkout/sessions')){checkoutBody=String(init?.body);checkoutKey=new Headers(init?.headers).get('Idempotency-Key')||'';result={url:'https://checkout.stripe.com/c/pay/fixture'};}
  else throw new Error('Unexpected request: '+url);
@@ -71,19 +71,19 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  };
  try {
  const auth={Authorization:'Bearer fixture'};
- equal((await handleBilling(request('createCheckoutSession',{planName:'Starter',amount:1,price:'evil_price'},auth))).status,200);
- const encoded=new URLSearchParams(checkoutBody);equal(encoded.get('line_items[0][price]'),'price_fixture');equal(encoded.get('line_items[0][quantity]'),'1');
+ equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3,amount:1,price:'evil_price'},auth))).status,200);
+ const encoded=new URLSearchParams(checkoutBody);equal(encoded.get('line_items[0][price]'),'price_fixture');equal(encoded.get('line_items[0][quantity]'),'3');equal(encoded.get('line_items[0][adjustable_quantity][minimum]'),'1');
  equal(checkoutKey,'checkout-stable-attempt');equal(encoded.get('expires_at'),'2000000000');
  const originalNow=Date.now;
  try {
   Date.now=()=>originalNow()+1800001;
-  equal((await handleBilling(request('createCheckoutSession',{planName:'Starter'},auth))).status,200);
+  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3},auth))).status,200);
   equal(checkoutKey,'checkout-stable-attempt');equal(new URLSearchParams(checkoutBody).get('expires_at'),'2000000000');
  } finally {Date.now=originalNow;}
  equal((await handleBilling(request('processPayment',{cardNumber:'fixture-card'},auth))).status,410);
  equal((await handleBilling(request('createCheckoutSession',{planName:'Free'},auth))).status,400);
- Deno.env.set('STRIPE_PRICE_TEAM','price_team');
- equal((await handleBilling(request('createCheckoutSession',{planName:'Team'},auth))).status,409);
+ Deno.env.set('STRIPE_PRICE_PRO_ANNUAL','price_annual');
+ equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Annual',seats:3},auth))).status,409);
  } finally {globalThis.fetch=oldFetch;Deno.env.set('BILLING_SALES_ENABLED','false');}
 });
 Deno.test('live workspace enforcement denies no-plan, expired, overdue, suspended and read-only writes',async()=>{

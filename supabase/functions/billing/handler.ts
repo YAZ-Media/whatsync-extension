@@ -3,12 +3,12 @@ import { isOperator } from '../_shared/operator.ts';
 import Stripe from 'npm:stripe@18.5.0';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { authenticateRequest } from '../_shared/auth.ts';
-import { PLAN_KEYS, isPlan, canManageBilling } from '../_shared/billing-policy.ts';
+import { PLAN_KEYS, isPlan, canManageBilling, planPriceEnvKey, type PlanKey } from '../_shared/billing-policy.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info, stripe-signature' };
 const json = (body: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 const env = (key: string) => Deno.env.get(key) || '';
-const priceId = (plan: string) => env(`STRIPE_PRICE_${plan.toUpperCase()}`);
+const priceId = (plan: PlanKey) => env(planPriceEnvKey(plan));
 const salesEnabled = () => env('BILLING_SALES_ENABLED') === 'true';
 const stripeClient = () => {
   if (!env('STRIPE_SECRET_KEY')) throw new Error('Billing provider is not configured.');
@@ -62,6 +62,7 @@ export async function handleBilling(req: Request): Promise<Response> {
       const snapshot = {
         stripe_subscription_id: subscription.id, account_id: account.account_id, plan_name: plan,
         status: subscription.status, currency: item.price.currency, unit_amount: item.price.unit_amount,
+        quantity: item.quantity || 1, billing_interval: item.price.recurring?.interval || null,
         current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
         cancel_at_period_end: subscription.cancel_at_period_end, livemode: subscription.livemode,
       };
@@ -102,7 +103,7 @@ export async function handleBilling(req: Request): Promise<Response> {
       if (!operator) return json({ error: 'Operator access required.' }, 403);
       const page = Math.max(0, Math.min(Number(data.page) || 0, 10000));
       const filter = ['active','trialing','past_due','canceled','unpaid','incomplete','incomplete_expired','paused'].includes(data.status) ? data.status : null;
-      let query = ext.from('billing_subscriptions').select('account_id,plan_name,status,currency,unit_amount,current_period_end,cancel_at_period_end,updated_at,livemode,billing_customers(billing_email)', { count: 'exact' }).order('updated_at',{ascending:false}).order('account_id');
+      let query = ext.from('billing_subscriptions').select('account_id,plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at,livemode,billing_customers(billing_email)', { count: 'exact' }).order('updated_at',{ascending:false}).order('account_id');
       if (filter) query = query.eq('status', filter);
       const rows = must(await query.range(page * 50, page * 50 + 49));
       return json({ subscribers: rows.data?.map(row => ({...row, billing_email: (row.billing_customers as unknown as {billing_email?:string})?.billing_email || null})), total: rows.count, page });
@@ -110,7 +111,7 @@ export async function handleBilling(req: Request): Promise<Response> {
     if (!['Owner','Admin','Billing','Read-only'].includes(profile.role)) return json({ error: 'Billing access required.' },403);
     const customer = must(await ext.from('billing_customers').select('stripe_customer_id').eq('account_id', accountId).maybeSingle()).data;
     if (action === 'getBillingData') {
-      const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
+      const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
       return json({ subscription, hasCustomer: !!customer, salesEnabled: salesEnabled(), internalAccess: operator });
     }
     if (!canManageBilling(profile.role, profile.status)) return json({ error: 'Only a workspace owner or billing manager can manage this subscription.' },403);
@@ -124,6 +125,12 @@ export async function handleBilling(req: Request): Promise<Response> {
     if (action === 'createCheckoutSession') {
       if (!salesEnabled()) return json({ error:'Subscriptions are not open yet.' },503);
       if (!isPlan(data.planName) || !priceId(data.planName)) return json({ error:'Choose a configured subscription plan.' },400);
+      const requestedSeats = Number(data.seats);
+      const seats = Number.isInteger(requestedSeats) ? requestedSeats : 1;
+      if (seats < 1 || seats > 250) return json({ error:'Choose between 1 and 250 syncing users.' },400);
+      const billable = must(await ext.from('user_profiles').select('user_id',{count:'exact',head:true}).eq('organization_id',accountId).eq('status','Active').in('role',['Owner','Admin','Member']));
+      const minimumSeats = Math.max(1, billable.count || 0);
+      if (seats < minimumSeats) return json({ error:`This workspace currently needs at least ${minimumSeats} syncing seats.` },400);
       let customerId = customer?.stripe_customer_id;
       if (!customerId) {
         const created = await stripe.customers.create({email:profile.email,metadata:{account_id:accountId}}, {idempotencyKey:`whatsync-customer-${accountId}`});
@@ -132,9 +139,9 @@ export async function handleBilling(req: Request): Promise<Response> {
       }
       const subscriptions = await stripe.subscriptions.list({customer:customerId,status:'all',limit:100});
       if (subscriptions.data.some(s => !['canceled','incomplete_expired'].includes(s.status))) return json({error:'This workspace already has a subscription. Use Manage billing to change it.'},409);
-      const attempt = must(await ext.rpc('reserve_billing_checkout', {p_account_id:accountId,p_plan_name:data.planName})).data;
+      const attempt = must(await ext.rpc('reserve_billing_checkout', {p_account_id:accountId,p_plan_name:data.planName,p_seats:seats})).data;
       if (!attempt?.attempt_id || !attempt.expires_at) throw new Error('Unable to reserve checkout. Please retry.');
-      if (attempt.plan_name !== data.planName) return json({error:`A ${attempt.plan_name} checkout is already reserved for this workspace. Resume that plan, or choose another after ${new Date(attempt.expires_at * 1000).toISOString()}.`},409);
+      if (attempt.plan_name !== data.planName || Number(attempt.seats) !== seats) return json({error:`A ${attempt.plan_name} checkout for ${attempt.seats} seat(s) is already reserved for this workspace. Resume it, or make a new choice after ${new Date(attempt.expires_at * 1000).toISOString()}.`},409);
       // Persisted ID and expiry are identical across tabs and time boundaries.
       // Stripe expires the old session before the database issues another ID.
       // If an initial provider call was never made and retry occurs with less
@@ -142,7 +149,7 @@ export async function handleBilling(req: Request): Promise<Response> {
       const session = await stripe.checkout.sessions.create({
         mode:'subscription',customer:customerId,client_reference_id:accountId,
         expires_at:attempt.expires_at,
-        line_items:[{price:priceId(data.planName),quantity:1}],
+        line_items:[{price:priceId(data.planName),quantity:seats,adjustable_quantity:{enabled:true,minimum:minimumSeats,maximum:250}}],
         success_url:`${origin()}/dashboard/billing?checkout=returned`,cancel_url:`${origin()}/dashboard/billing?checkout=canceled`,
         subscription_data:{metadata:{account_id:accountId}},allow_promotion_codes:true,
       }, {idempotencyKey:`checkout-${attempt.attempt_id}`});

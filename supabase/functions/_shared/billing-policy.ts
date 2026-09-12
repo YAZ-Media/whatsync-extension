@@ -1,5 +1,8 @@
-export const PLAN_KEYS = ['Starter', 'Team', 'Business'] as const;
+export const PLAN_KEYS = ['Pro Monthly', 'Pro Annual'] as const;
 export type PlanKey = typeof PLAN_KEYS[number];
+export const planPriceEnvKey = (plan: PlanKey) => plan === 'Pro Monthly'
+  ? 'STRIPE_PRICE_PRO_MONTHLY'
+  : 'STRIPE_PRICE_PRO_ANNUAL';
 export function isPlan(value: unknown): value is PlanKey {
   return typeof value === 'string' && (PLAN_KEYS as readonly string[]).includes(value);
 }

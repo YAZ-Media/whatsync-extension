@@ -43,7 +43,9 @@ export async function operatorAction(action:string,data:Record<string,unknown>,u
    const endpoint=hooks.data.find(h=>h.url==='https://ogsvchujqpayuckxuwdf.supabase.co/functions/v1/billing');
    const required=['customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','invoice.paid','invoice.payment_failed','checkout.session.completed'];
    const webhookValid=endpoint?.status==='enabled' && required.every(e=>endpoint.enabled_events.includes('*') || (endpoint.enabled_events as string[]).includes(e));
-   const portal=configured.portal?await stripe.billingPortal.configurations.retrieve(env('STRIPE_PORTAL_CONFIGURATION_ID')):null;
+   const portal=configured.portal
+    ? await stripe.billingPortal.configurations.retrieve(env('STRIPE_PORTAL_CONFIGURATION_ID'))
+    : (await stripe.billingPortal.configurations.list({limit:100})).data.find(configuration=>configuration.active&&configuration.is_default) || null;
    const accountMatches=account.id===env('STRIPE_ACCOUNT_ID');
    const ready=accountMatches&&!!account.charges_enabled&&!!account.details_submitted&&prices.every(p=>p.valid&&p.livemode)&&!!webhookValid&&!!endpoint?.livemode&&configured.webhookSecret&&!!portal?.active&&base.requireLive;
    return {...base,ready,mode:prices.some(p=>p.livemode)?'live':'test',account:{id:account.id,matchesExpected:accountMatches,chargesEnabled:account.charges_enabled,payoutsEnabled:account.payouts_enabled,detailsSubmitted:account.details_submitted},prices,webhook:{registered:!!endpoint,eventsConfigured:!!webhookValid,livemode:endpoint?.livemode||false},portalReady:!!portal?.active,message:ready?'Configuration checks passed. Complete a real sandbox checkout and cancellation before opening sales.':'Payment setup is incomplete or in test mode.'};

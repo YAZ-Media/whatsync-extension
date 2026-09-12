@@ -4,6 +4,10 @@ import { PLAN_KEYS, planPriceEnvKey } from '../_shared/billing-policy.ts';
 import { isOperator } from '../_shared/operator.ts';
 const env=(key:string)=>Deno.env.get(key)||'';
 function checked<T extends {error:unknown}>(result:T):T { if(result.error) throw new Error('Internal account data is unavailable. Please retry.');return result; }
+export function selectActivePortalConfiguration<T extends {active?:boolean;is_default?:boolean}>(configurations:T[]):T|null {
+ const active=configurations.filter(configuration=>configuration.active);
+ return active.find(configuration=>configuration.is_default) || active[0] || null;
+}
 export async function operatorAction(action:string,data:Record<string,unknown>,userId:string,db:SupabaseClient) {
  if (!isOperator(userId)) throw new Error('Operator access required.');
  if(action==='getOperatorOverview') {
@@ -45,10 +49,10 @@ export async function operatorAction(action:string,data:Record<string,unknown>,u
    const webhookValid=endpoint?.status==='enabled' && required.every(e=>endpoint.enabled_events.includes('*') || (endpoint.enabled_events as string[]).includes(e));
    const portal=configured.portal
     ? await stripe.billingPortal.configurations.retrieve(env('STRIPE_PORTAL_CONFIGURATION_ID'))
-    : (await stripe.billingPortal.configurations.list({limit:100})).data.find(configuration=>configuration.active&&configuration.is_default) || null;
+    : selectActivePortalConfiguration((await stripe.billingPortal.configurations.list({limit:100})).data);
    const accountMatches=account.id===env('STRIPE_ACCOUNT_ID');
    const ready=accountMatches&&!!account.charges_enabled&&!!account.details_submitted&&prices.every(p=>p.valid&&p.livemode)&&!!webhookValid&&!!endpoint?.livemode&&configured.webhookSecret&&!!portal?.active&&base.requireLive;
-   return {...base,ready,mode:prices.some(p=>p.livemode)?'live':'test',account:{id:account.id,matchesExpected:accountMatches,chargesEnabled:account.charges_enabled,payoutsEnabled:account.payouts_enabled,detailsSubmitted:account.details_submitted},prices,webhook:{registered:!!endpoint,eventsConfigured:!!webhookValid,livemode:endpoint?.livemode||false},portalReady:!!portal?.active,message:ready?'Configuration checks passed. Complete a real sandbox checkout and cancellation before opening sales.':'Payment setup is incomplete or in test mode.'};
+   return {...base,ready,mode:prices.some(p=>p.livemode)?'live':'test',account:{id:account.id,matchesExpected:accountMatches,chargesEnabled:account.charges_enabled,payoutsEnabled:account.payouts_enabled,detailsSubmitted:account.details_submitted},prices,webhook:{registered:!!endpoint,eventsConfigured:!!webhookValid,livemode:endpoint?.livemode||false},portalReady:!!portal?.active,message:ready?'Configuration checks passed. Complete one controlled live checkout and cancellation before opening sales.':'Payment setup is incomplete or in test mode.'};
   } catch {return {...base,ready:false,mode:'unknown',message:'Stripe could not be verified. Check the key, permissions, account and configured prices.'};}
  }
  throw new Error('Unknown operator action');

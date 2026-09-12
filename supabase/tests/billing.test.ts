@@ -1,6 +1,7 @@
 import { handleBilling } from '../functions/billing/handler.ts';
 import { canManageBilling,hasPaidAccess,canMutateCrm,isPlan } from '../functions/_shared/billing-policy.ts';
 import Stripe from 'npm:stripe@18.5.0';
+import { selectActivePortalConfiguration } from '../functions/billing/operator.ts';
 const equal=(actual:unknown,expected:unknown)=>{if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)};
 Deno.env.set('BILLING_SALES_ENABLED','false');
 Deno.env.set('EXTERNAL_SUPABASE_URL','https://test-project.supabase.co');
@@ -10,6 +11,10 @@ Deno.env.set('STRIPE_WEBHOOK_SECRET','whsec_fixture');
 const request=(action:string,data:Record<string,unknown>={},headers:Record<string,string>={})=>new Request('https://test.local/billing',{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify({action,data})});
 Deno.test('sales remain closed unless explicitly configured',async()=>{
  const r=await handleBilling(request('getPlans'));equal(r.status,200);equal(await r.json(),{salesEnabled:false,plans:[]});
+});
+Deno.test('billing health accepts Stripe active portal when the list omits a default marker',()=>{
+ equal(selectActivePortalConfiguration([{id:'inactive',active:false},{id:'active',active:true}]),{id:'active',active:true});
+ equal(selectActivePortalConfiguration([]),null);
 });
 Deno.test('CORS preflight has no body and methods are bounded',async()=>{
  const r=await handleBilling(new Request('https://test.local/billing',{method:'OPTIONS'}));equal(r.status,204);equal(await r.text(),'');equal((await handleBilling(new Request('https://test.local/billing'))).status,405);

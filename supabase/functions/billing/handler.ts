@@ -10,6 +10,10 @@ const json = (body: unknown, status = 200) => new Response(status === 204 ? null
 const env = (key: string) => Deno.env.get(key) || '';
 const priceId = (plan: PlanKey) => env(planPriceEnvKey(plan));
 const salesEnabled = () => env('BILLING_SALES_ENABLED') === 'true';
+const acceptanceCheckoutEnabled = (email: string | null | undefined) => {
+  const allowed = env('BILLING_ACCEPTANCE_EMAILS').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+  return !!email && allowed.includes(email.trim().toLowerCase());
+};
 const stripeClient = () => {
   if (!env('STRIPE_SECRET_KEY')) throw new Error('Billing provider is not configured.');
   return new Stripe(env('STRIPE_SECRET_KEY'), { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2 });
@@ -23,6 +27,16 @@ const origin = () => {
   if (url.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(url.hostname)) throw new Error('Invalid application URL.');
   return url.origin;
 };
+async function planCatalog() {
+  const stripe = stripeClient();
+  const plans = await Promise.all(PLAN_KEYS.map(async name => {
+    if (!priceId(name)) throw new Error('A subscription price is not configured.');
+    const price = await stripe.prices.retrieve(priceId(name));
+    if (!price.active || !price.recurring || price.unit_amount === null) throw new Error('Invalid subscription price configuration.');
+    return { name, amount: price.unit_amount, currency: price.currency, interval: price.recurring.interval, intervalCount: price.recurring.interval_count };
+  }));
+  return { salesEnabled: true, plans };
+}
 function must<T extends { error: unknown }>(result: T): T {
   if (result.error) throw new Error('Billing data is temporarily unavailable. Please retry.');
   return result;
@@ -78,14 +92,7 @@ export async function handleBilling(req: Request): Promise<Response> {
     const { action, data = {} } = await req.json();
     if (action === 'getPlans') {
       if (!salesEnabled()) return json({ salesEnabled: false, plans: [] });
-      const stripe = stripeClient();
-      const plans = await Promise.all(PLAN_KEYS.map(async name => {
-        if (!priceId(name)) throw new Error('A subscription price is not configured.');
-        const price = await stripe.prices.retrieve(priceId(name));
-        if (!price.active || !price.recurring || price.unit_amount === null) throw new Error('Invalid subscription price configuration.');
-        return { name, amount: price.unit_amount, currency: price.currency, interval: price.recurring.interval, intervalCount: price.recurring.interval_count };
-      }));
-      return json({ salesEnabled: true, plans });
+      return json(await planCatalog());
     }
     const auth = await authenticateRequest(req, data.userId || null);
     if (!auth.ok) return json({ error: auth.error }, auth.status);
@@ -94,6 +101,7 @@ export async function handleBilling(req: Request): Promise<Response> {
     if (!profile || profile.status !== 'Active') return json({ error: 'An active workspace account is required.' }, 403);
     const accountId = profile.organization_id || auth.userId;
     const operator = isOperator(auth.userId);
+    const checkoutEnabled = salesEnabled() || acceptanceCheckoutEnabled(profile.email);
     if (action === 'getAdminAccess') return json({ isOperator: operator });
     if (['getOperatorOverview','listOperatorAccounts','getBillingHealth'].includes(action)) {
       if (!operator) return json({error:'Operator access required.'},403);
@@ -112,7 +120,10 @@ export async function handleBilling(req: Request): Promise<Response> {
     const customer = must(await ext.from('billing_customers').select('stripe_customer_id').eq('account_id', accountId).maybeSingle()).data;
     if (action === 'getBillingData') {
       const subscription = must(await ext.from('billing_subscriptions').select('plan_name,status,currency,unit_amount,quantity,billing_interval,current_period_end,cancel_at_period_end,updated_at').eq('account_id',accountId).order('updated_at',{ascending:false}).limit(1).maybeSingle()).data;
-      return json({ subscription, hasCustomer: !!customer, salesEnabled: salesEnabled(), internalAccess: operator });
+      return json({ subscription, hasCustomer: !!customer, salesEnabled: checkoutEnabled, internalAccess: operator });
+    }
+    if (action === 'getWorkspacePlans') {
+      return checkoutEnabled ? json(await planCatalog()) : json({ salesEnabled: false, plans: [] });
     }
     if (!canManageBilling(profile.role, profile.status)) return json({ error: 'Only a workspace owner or billing manager can manage this subscription.' },403);
     if (['savePaymentMethod','processPayment','changePlan','deletePaymentMethod','setDefaultPaymentMethod'].includes(action)) return json({ error: 'Use secure hosted checkout or the billing portal. Card details are not accepted here.' },410);
@@ -164,7 +175,7 @@ export async function handleBilling(req: Request): Promise<Response> {
       });
     }
     if (action === 'createCheckoutSession') {
-      if (!salesEnabled()) return json({ error:'Subscriptions are not open yet.' },503);
+      if (!checkoutEnabled) return json({ error:'Subscriptions are not open yet.' },503);
       if (!isPlan(data.planName) || !priceId(data.planName)) return json({ error:'Choose a configured subscription plan.' },400);
       if (data.termsAccepted !== true) return json({ error:'Accept the subscription terms before checkout.' },400);
       const requestedSeats = Number(data.seats);

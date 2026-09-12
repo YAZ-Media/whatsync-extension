@@ -80,6 +80,9 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3,termsAccepted:true,amount:1,price:'evil_price'},auth))).status,200);
  const encoded=new URLSearchParams(checkoutBody);equal(encoded.get('line_items[0][price]'),'price_fixture');equal(encoded.get('line_items[0][quantity]'),'3');equal(encoded.get('line_items[0][adjustable_quantity][minimum]'),'1');
  equal(checkoutKey,'checkout-stable-attempt');equal(encoded.get('expires_at'),'2000000000');
+ Deno.env.set('BILLING_SALES_ENABLED','false');Deno.env.set('BILLING_ACCEPTANCE_EMAILS','owner@example.com');
+ equal(await (await handleBilling(request('getPlans'))).json(),{salesEnabled:false,plans:[]});
+ equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Monthly',seats:3,termsAccepted:true},auth))).status,200);
  const originalNow=Date.now;
  try {
   Date.now=()=>originalNow()+1800001;
@@ -90,7 +93,7 @@ Deno.test('checkout uses the server price and blocks legacy card submissions',as
  equal((await handleBilling(request('createCheckoutSession',{planName:'Free'},auth))).status,400);
  Deno.env.set('STRIPE_PRICE_PRO_ANNUAL','price_annual');
  equal((await handleBilling(request('createCheckoutSession',{planName:'Pro Annual',seats:3,termsAccepted:true},auth))).status,409);
- } finally {globalThis.fetch=oldFetch;Deno.env.set('BILLING_SALES_ENABLED','false');}
+ } finally {globalThis.fetch=oldFetch;Deno.env.set('BILLING_SALES_ENABLED','false');Deno.env.delete('BILLING_ACCEPTANCE_EMAILS');}
 });
 Deno.test('seat changes enforce active members and use Stripe pending updates with proration',async()=>{
  const oldFetch=globalThis.fetch;let stripeBody='';Deno.env.set('STRIPE_PRICE_PRO_MONTHLY','price_fixture');Deno.env.set('BILLING_REQUIRE_LIVE','true');

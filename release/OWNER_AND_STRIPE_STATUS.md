@@ -1,4 +1,4 @@
-# Owner access and Stripe readiness — September 12, 2026
+# Owner access and Stripe readiness — September 21, 2026
 
 ## Verified
 
@@ -19,13 +19,13 @@ It does not expose API keys, OAuth tokens, chat bodies or raw error messages. Ac
 
 ## Connection status
 
-The Supabase and Stripe sessions are connected. The live Stripe API key, account ID, prices and webhook signing secret are configured against the correct WhatSync backend (`ogsvchujqpayuckxuwdf`). Public sales remain deliberately closed.
+The Supabase and Stripe sessions are connected. The live Stripe API key, account ID, prices and webhook signing secret are configured against the correct WhatSync backend (`ogsvchujqpayuckxuwdf`). The public catalog is open and returns the approved live plans.
 
 No live WhatSync checkout, renewal, failure recovery, cancellation or refund has yet been completed. Automated tests verify the integration rules but do not prove the full merchant lifecycle.
 
 ## Still required for paid launch
 
-1. Publish the latest website main commit; the live auth page still contains the superseded $10 sentence.
-2. Run one authorized live checkout and verify webhook persistence, CRM entitlement, seat proration, cancellation and refund, including tenant isolation.
-3. Complete authenticated CRM read-back acceptance, publish extension 1.5.2 through the Chrome Web Store, obtain legal/tax review and establish recoverable database backups.
-4. Only then set `BILLING_SALES_ENABLED=true`. No public paid-launch green light is warranted before these checks.
+1. Change the Namecheap nameservers so `whatsync.io` reaches the deployed DigitalOcean build through Cloudflare.
+2. Run one controlled non-operator checkout and verify webhook persistence, CRM entitlement, seat proration, cancellation and refund, including tenant isolation.
+3. Complete Chrome publisher identity verification, wait for the submitted 1.5.3 review, and obtain the third qualifying HubSpot install.
+4. Complete authenticated CRM read-back acceptance, obtain legal/tax review and establish recoverable database backups.

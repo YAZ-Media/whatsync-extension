@@ -1,4 +1,4 @@
-# Launch execution — do not open sales until the acceptance gates pass
+# Launch execution — production is deployed; finish the external gates
 
 ## Files and ownership
 
@@ -8,17 +8,19 @@
 - Auth, database and deployed functions: WhatSync `ogsvchujqpayuckxuwdf`.
 - `website/src/lib/backend.ts` and extension `config.js` contain only public anonymous keys. Privileged secrets belong only in Supabase secrets/merchant dashboards.
 
-## Deployment status — 12 September 2026
+## Deployment status — 21 September 2026
 
-- Complete: live WhatSync schema/permissions inspected; existing function source downloaded; billing and profile-privilege migrations rehearsed then applied with migration records; tested checkout reservation migration applied; HubSpot, billing and external-auth deployed to ogsvchujqpayuckxuwdf; sales explicitly closed.
-- Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns salesEnabled=false. Live Stripe credentials, prices and signed webhook are configured on the correct backend.
+- Complete: live WhatSync schema/permissions inspected; billing and profile-privilege migrations applied; HubSpot, billing, OAuth, settings and external-auth deployed to `ogsvchujqpayuckxuwdf`.
+- Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns the live USD 19 monthly and USD 180 annual plans. Stripe credentials, prices, signed webhook and portal are configured on the correct backend.
 - Complete: live Stripe product and prices, live signed webhook, default customer portal, subscription terms acceptance, paid-role seat enforcement and prorated self-service seat changes.
-- Remaining: publish the latest website main commit, complete one authorized live purchase/cancel/refund lifecycle, run authenticated CRM and tenant acceptance, obtain qualified legal/tax review, complete extension store rollout, and establish recoverable backups. No physical backups were listed by the project.
+- Complete: HubSpot's signed privacy-deletion webhook is deployed and configured to purge stored activity for the deleted contact across the connected workspace.
+- Complete: DigitalOcean deployed website commit `32008c4`; Chrome Web Store version 1.5.3 is submitted and pending review.
+- Remaining: change the Namecheap nameservers, complete Google publisher identity verification, obtain a third qualifying HubSpot install, complete one controlled purchase/cancel/refund lifecycle, obtain qualified legal/tax review, and establish recoverable backups.
 - The database's historical schema existed with an empty migration journal. Only the four reviewed September migrations are recorded. **Do not run blanket db push until historical migrations are reconciled.** The commands below describe future releases and must not be used to replay the old baseline on this database.
 
-September 12: deployed HubSpot and hubspot-oauth fixes, added `20260912000000_sidebar_defaults.sql` (lead default and sort order). CRM-write subscription enforcement is now mandatory, independent of the legacy BILLING_ENFORCE_ACCESS flag. Sales remain closed; this means an account without a valid subscription can set up and read, but cannot write to HubSpot. Stripe trials are respected; a no-card trial is not implemented.
+CRM-write subscription enforcement is mandatory, independent of the legacy BILLING_ENFORCE_ACCESS flag. An account without a valid subscription can set up and read but cannot write to HubSpot. Stripe trials are respected; a no-card trial is not implemented.
 
-Reload the extension from the main folder to use v1.5.2, then refresh WhatsApp Web and whatsync.io. Publish the latest website main commit from YAZ-Media/whatsync-website; Lovable Cloud function deployments still target the wrong database and are not the deployment path for backend changes.
+Reload the extension from the main folder to use v1.5.3, then refresh WhatsApp Web. Lovable Cloud function deployments still target the wrong database and are not the deployment path for backend changes.
 
 ## 1. Validate the candidate locally
 
@@ -71,7 +73,7 @@ Lovable Cloud cannot be repointed merely by editing supabase/config.toml. GitHub
 
 ## 3. Verify production subscriptions
 
-Keep `BILLING_SALES_ENABLED=false` until the authorized live acceptance transaction passes. Required server secrets:
+Production currently has `BILLING_SALES_ENABLED=true`. Set it to `false` immediately if merchant acceptance exposes a billing defect. Required server secrets:
 
 | Setting | Purpose |
 | --- | --- |
@@ -97,7 +99,7 @@ Live merchant keys, price IDs, webhook secret and `BILLING_REQUIRE_LIVE=true` ar
 
 Build/publish from `YAZ-Media/whatsync-website`. Confirm that the published assets target `ogsvchujqpayuckxuwdf`. The release ZIP includes static website assets; configure the host to serve index.html for client routes such as `/auth/hubspot/callback` and `/dashboard/billing`. Keep browser-server secrets out of the build.
 
-Upload the extension-only ZIP to Chrome Web Store. Its manifest version is 1.5.2; this bundle remains a candidate until accepted. Add the approved listing URL through `VITE_CHROME_STORE_URL`, rebuild the site, and verify the Setup page's Install button. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Publishing the website does not update an unpacked extension.
+Chrome Web Store version 1.5.3 is submitted and pending review. Keep the approved listing URL in `VITE_CHROME_STORE_URL` and verify the Setup page's Install button after publication. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Publishing the website does not update an unpacked extension.
 
 Before accepting money, publish approved Terms, billing/refund policy and the updated privacy policy; confirm support works and every public URL resolves. Conduct a clean-device install and full purchase→connect→create→read-back flow.
 

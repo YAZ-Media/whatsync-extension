@@ -15,6 +15,9 @@ for text in [config,backend]:
 for p in (root/'supabase/functions').rglob('*.ts'):
  other=website/p.relative_to(root)
  assert other.exists() and p.read_bytes()==other.read_bytes(), f'Backend source drift: {p.relative_to(root)}'
+for p in (website/'supabase/functions').rglob('*.ts'):
+ other=root/p.relative_to(website)
+ assert other.exists() and p.read_bytes()==other.read_bytes(), f'Backend source drift: {p.relative_to(website)}'
 assert (website/'dist/index.html').exists(), 'Build website first'
 for p in (website/'dist/assets').glob('*.js'):
  assert b'dizxmubrpwwfrjepcttb' not in p.read_bytes(), 'Website build targets old backend'

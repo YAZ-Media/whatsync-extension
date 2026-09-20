@@ -41,6 +41,23 @@ function err(msg: string) {
   return ok({ error: msg });
 }
 
+async function schedulerAuthorized(req: Request): Promise<boolean> {
+  const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  const creds = getExternalSupabaseCredentials();
+  const schedulerSecret = Deno.env.get("WHATSYNC_SCHEDULER_SECRET") || "";
+  if (!token || !creds) return false;
+  if (token === creds.serviceKey || (!!schedulerSecret && token === schedulerSecret)) return true;
+  if (!token.startsWith("sb_secret_")) return false;
+  try {
+    const response = await fetch(`${creds.url}/auth/v1/admin/users?page=1&per_page=1`, {
+      headers: { apikey: token, Authorization: `Bearer ${token}` },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 function getExternalClient() {
   const creds = getExternalSupabaseCredentials();
   if (!creds) return null;
@@ -257,7 +274,7 @@ async function runWeeklyDigestForUser(userId: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
   const sendResult = await sendResendEmail({
     to: email,
@@ -483,9 +500,7 @@ Deno.serve(async (req) => {
         // Fleet-wide digest is for the scheduler only: the bearer must be the
         // service-role key (a public anon key must not be able to trigger
         // emails to every user).
-        const bearer = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
-        const creds = getExternalSupabaseCredentials();
-        if (!creds || !bearer || bearer !== creds.serviceKey) {
+        if (!(await schedulerAuthorized(req))) {
           return new Response(JSON.stringify({ error: "Forbidden" }), {
             status: 403,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -500,6 +515,26 @@ Deno.serve(async (req) => {
           results.push({
             user_id: row.user_id,
             ...(await runWeeklyDigestForUser(row.user_id)),
+          });
+        }
+        return ok({ success: true, results });
+      }
+
+      case "runRetentionSweepAll": {
+        if (!(await schedulerAuthorized(req))) {
+          return new Response(JSON.stringify({ error: "Forbidden" }), {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        const settings = await ext.from("workspace_settings").select("user_id,retention_days");
+        if (settings.error) throw new Error(settings.error.message);
+        const results = [];
+        for (const row of settings.data || []) {
+          const retentionDays = Math.max(1, Math.min(Number(row.retention_days) || 365, 99999));
+          results.push({
+            user_id: row.user_id,
+            ...(await purgeExpiredActivityLogs(row.user_id, retentionDays)),
           });
         }
         return ok({ success: true, results });

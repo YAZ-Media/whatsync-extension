@@ -23,6 +23,7 @@ import { assertWorkspaceAccess, getWorkspaceAccess } from '../_shared/entitlemen
 import { sendResendEmail } from '../_shared/notifications.ts';
 import { signInviteToken } from '../_shared/invites.ts';
 import { assertSeatCapacity, consumesPaidSeat } from '../_shared/seats.ts';
+import { decryptHubSpotToken, encryptHubSpotToken } from '../_shared/hubspotTokenCrypto.ts';
 
 const EXTERNAL_SUPABASE_URL = Deno.env.get('EXTERNAL_SUPABASE_URL') ?? '';
 const SERVICE_ROLE_KEY = Deno.env.get('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -72,6 +73,26 @@ async function getAuthenticatedUserId(req: Request): Promise<string> {
   if (!user?.id) throw new HttpError(401, 'Invalid session');
 
   return user.id as string;
+}
+
+async function schedulerAuthorized(req: Request): Promise<boolean> {
+  const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  if (!token) return false;
+  const schedulerSecret = Deno.env.get('WHATSYNC_SCHEDULER_SECRET') || '';
+  if (token === SERVICE_ROLE_KEY || (!!schedulerSecret && token === schedulerSecret)) return true;
+
+  // Supabase Cron can inject a managed `sb_secret_…` project key without
+  // exposing it in source or Vault queries. Validate that key with Auth's
+  // admin endpoint before allowing a fleet-wide task.
+  if (!token.startsWith('sb_secret_')) return false;
+  try {
+    const response = await fetch(`${EXTERNAL_SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=1`, {
+      headers: { apikey: token, Authorization: `Bearer ${token}` },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 async function db(path: string, init: RequestInit = {}): Promise<Response> {
@@ -139,24 +160,28 @@ async function getHubSpotToken(userId: string): Promise<string> {
     throw new HttpError(403, 'HubSpot account is not connected');
   }
 
+  const accessToken = await decryptHubSpotToken(conn.access_token);
+  const refreshToken = await decryptHubSpotToken(conn.refresh_token);
+  if (!accessToken) throw new HttpError(403, 'HubSpot account is not connected');
+
   const expiresAt = conn.expires_at ? new Date(conn.expires_at).getTime() : 0;
   if (expiresAt - Date.now() > TOKEN_REFRESH_LEEWAY_MS) {
-    return conn.access_token;
+    return accessToken;
   }
 
   // Token expired (or about to) — refresh it
-  if (!conn.refresh_token) {
+  if (!refreshToken) {
     throw new HttpError(403, 'HubSpot session expired — please reconnect your account');
   }
 
-  const refreshRes = await fetch(`${HUBSPOT_API}/oauth/v1/token`, {
+  const refreshRes = await fetch(`${HUBSPOT_API}/oauth/2026-03/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: HUBSPOT_CLIENT_ID,
       client_secret: HUBSPOT_CLIENT_SECRET,
-      refresh_token: conn.refresh_token,
+      refresh_token: refreshToken,
     }),
   });
 
@@ -175,8 +200,8 @@ async function getHubSpotToken(userId: string): Promise<string> {
   await db(`hubspot_connections?id=eq.${conn.id}`, {
     method: 'PATCH',
     body: JSON.stringify({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token ?? conn.refresh_token,
+      access_token: await encryptHubSpotToken(tokens.access_token),
+      refresh_token: await encryptHubSpotToken(tokens.refresh_token ?? refreshToken),
       expires_at: newExpiresAt,
       // 'active' is the value hubspot-oauth's connection gate expects; writing
       // 'connected' here used to flip every hubspot-oauth action (pipelines,
@@ -375,7 +400,7 @@ async function getSidebarFields(userId: string): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 const TEAM_PROFILE_COLUMNS =
-  'id,user_id,first_name,last_name,email,company,role,status,last_active,extension_version,enforce_2fa,organization_id,created_at,updated_at';
+  'id,user_id,first_name,last_name,email,company,role,status,last_active,extension_version,organization_id,created_at,updated_at';
 
 interface TeamProfile {
   id: string;
@@ -466,9 +491,6 @@ async function updateTeamMember(userId: string, data: Record<string, unknown>): 
       throw new HttpError(400, 'You cannot suspend yourself');
     }
     patch.status = status;
-  }
-  if (data.enforce_2fa !== undefined) {
-    patch.enforce_2fa = Boolean(data.enforce_2fa);
   }
   if (Object.keys(patch).length === 1) {
     throw new HttpError(400, 'No valid updates provided');
@@ -1665,7 +1687,7 @@ async function handleAction(
 // an enabled automation with trigger='inactivity' in the dashboard, and it
 // runs THAT automation's actions. The idle-day threshold comes from an
 // optional "idle_days" condition on the automation (default 3). Runs daily
-// via CI cron (service-key gated at the entry point).
+// via Supabase Cron (managed server-key gated at the entry point).
 // ---------------------------------------------------------------------------
 
 const DEFAULT_INACTIVITY_DAYS = 3;
@@ -1808,8 +1830,7 @@ Deno.serve(async (req) => {
     // Scheduler-only action: authenticated by the service-role key (it acts
     // across users, so no user session applies). Hard 403 otherwise.
     if (action === 'runFollowUpSweep') {
-      const bearer = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
-      if (!bearer || bearer !== SERVICE_ROLE_KEY) {
+      if (!(await schedulerAuthorized(req))) {
         return json({ error: 'Forbidden' }, 403);
       }
       return json(await runFollowUpSweep());

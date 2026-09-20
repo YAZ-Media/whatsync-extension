@@ -1,6 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { authenticateRequest } from "../_shared/auth.ts";
 import { signStatePayload, verifyStatePayload } from "../_shared/invites.ts";
+import {
+  decryptHubSpotToken,
+  encryptHubSpotToken,
+  isEncryptedHubSpotToken,
+} from "../_shared/hubspotTokenCrypto.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -168,14 +173,18 @@ async function refreshTokensIfNeeded(userId: string): Promise<{ accessToken: str
   // lookups after the first token refresh.
   if (!['active', 'connected'].includes(String(conn.status)) || !conn.access_token || !conn.refresh_token) return null;
 
+  const accessToken = await decryptHubSpotToken(conn.access_token);
+  const refreshToken = await decryptHubSpotToken(conn.refresh_token);
+  if (!accessToken || !refreshToken) return null;
+
   const expiresAt = new Date(conn.expires_at);
   const now = new Date();
   
   // If token expires in more than 5 minutes, return existing token
   if (expiresAt.getTime() - now.getTime() > 5 * 60 * 1000) {
     return {
-      accessToken: conn.access_token,
-      refreshToken: conn.refresh_token,
+      accessToken,
+      refreshToken,
       expiresAt,
     };
   }
@@ -190,14 +199,14 @@ async function refreshTokensIfNeeded(userId: string): Promise<{ accessToken: str
     throw new Error('HubSpot OAuth not configured');
   }
 
-  const tokenRes = await fetch('https://api.hubapi.com/oauth/v1/token', {
+  const tokenRes = await fetch('https://api.hubapi.com/oauth/2026-03/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: clientId,
       client_secret: clientSecret,
-      refresh_token: conn.refresh_token,
+      refresh_token: refreshToken,
     }),
   });
 
@@ -221,8 +230,8 @@ async function refreshTokensIfNeeded(userId: string): Promise<{ accessToken: str
   await externalQuery('hubspot_connections', 'PATCH', {
     filters: { user_id: `eq.${userId}` },
     body: {
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
+      access_token: await encryptHubSpotToken(tokens.access_token),
+      refresh_token: await encryptHubSpotToken(tokens.refresh_token || refreshToken),
       expires_at: newExpiresAt.toISOString(),
       updated_at: new Date().toISOString(),
     },
@@ -323,6 +332,42 @@ serve(async (req) => {
   try {
     const { action, data } = await req.json();
     console.log(`hubspot-oauth action: ${action}`);
+
+    // One-time operational migration. It is authenticated with a temporary
+    // high-entropy secret and removed immediately after all existing rows
+    // have been encrypted. It is intentionally not exposed to the client.
+    if (action === 'encryptStoredTokens') {
+      const migrationSecret = Deno.env.get('HUBSPOT_TOKEN_MIGRATION_KEY') || '';
+      const bearer = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
+      if (!migrationSecret || bearer !== migrationSecret) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const rows = await externalQuery('hubspot_connections', 'GET', {
+        select: 'user_id,access_token,refresh_token',
+      });
+      if (!rows.ok || !Array.isArray(rows.data)) throw new Error('Unable to load token records');
+      let migrated = 0;
+      for (const row of rows.data) {
+        if (!row.access_token && !row.refresh_token) continue;
+        if (isEncryptedHubSpotToken(row.access_token) && isEncryptedHubSpotToken(row.refresh_token)) continue;
+        const update = await externalQuery('hubspot_connections', 'PATCH', {
+          filters: { user_id: `eq.${row.user_id}` },
+          body: {
+            access_token: await encryptHubSpotToken(row.access_token),
+            refresh_token: await encryptHubSpotToken(row.refresh_token),
+            updated_at: new Date().toISOString(),
+          },
+        });
+        if (!update.ok) throw new Error('Unable to encrypt a HubSpot token record');
+        migrated += 1;
+      }
+      return new Response(JSON.stringify({ success: true, migrated }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     // Every action requires a valid session. When the body carries a userId it
     // must match the authenticated token subject.
@@ -440,7 +485,7 @@ serve(async (req) => {
 
         const requestedScopes = decodedScopes
           .replace(/\+/g, ' ')
-          .replace(/[\[\],]/g, ' ')
+          .replace(/[[\],]/g, ' ')
           .replace(/^scope=/i, ' ')
           .split(/\s+/)
           .filter(Boolean);
@@ -515,7 +560,7 @@ serve(async (req) => {
         }
 
         // Exchange code for tokens
-        const tokenRes = await fetch('https://api.hubapi.com/oauth/v1/token', {
+        const tokenRes = await fetch('https://api.hubapi.com/oauth/2026-03/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
@@ -539,16 +584,24 @@ serve(async (req) => {
         const tokens = await tokenRes.json();
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-        // Get portal/account info
-        let portalId = null;
-        try {
-          const infoRes = await fetch('https://api.hubapi.com/oauth/v1/access-tokens/' + tokens.access_token);
-          if (infoRes.ok) {
-            const info = await infoRes.json();
-            portalId = info.hub_id?.toString() || null;
+        // The 2026-03 token response contains the portal id. If an older app
+        // response omits it, use the body-based introspection endpoint so the
+        // access token never appears in a URL or request log.
+        let portalId = tokens.hub_id?.toString() || null;
+        if (!portalId) {
+          try {
+            const infoRes = await fetch('https://api.hubapi.com/oauth/2026-03/token/introspect', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({ token: tokens.access_token }),
+            });
+            if (infoRes.ok) {
+              const info = await infoRes.json();
+              portalId = info.hub_id?.toString() || null;
+            }
+          } catch (e) {
+            console.error('Failed to get portal info:', e);
           }
-        } catch (e) {
-          console.error('Failed to get portal info:', e);
         }
 
         // Upsert connection
@@ -556,10 +609,10 @@ serve(async (req) => {
           user_id: stateData.userId,
           portal_id: portalId,
           status: 'active',
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
+          access_token: await encryptHubSpotToken(tokens.access_token),
+          refresh_token: await encryptHubSpotToken(tokens.refresh_token),
           expires_at: expiresAt.toISOString(),
-          scopes: tokens.scope?.split(' ') || [],
+          scopes: Array.isArray(tokens.scopes) ? tokens.scopes : tokens.scope?.split(' ') || [],
           connected_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -632,6 +685,22 @@ serve(async (req) => {
       // ===== disconnect =====
       case 'disconnect': {
         const userId = authedUserId;
+
+        const connection = await refreshTokensIfNeeded(userId);
+        if (connection?.accessToken) {
+          const uninstall = await fetch(`${HUBSPOT_API_BASE}/appinstalls/v3/external-install`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${connection.accessToken}` },
+          });
+          if (!uninstall.ok && ![401, 404, 410].includes(uninstall.status)) {
+            const detail = await uninstall.text();
+            console.error('HubSpot uninstall failed:', uninstall.status, detail.slice(0, 300));
+            return new Response(
+              JSON.stringify({ error: 'HubSpot could not complete the disconnect. Please retry.' }),
+              { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+            );
+          }
+        }
 
         await externalQuery('hubspot_connections', 'PATCH', {
           filters: { user_id: `eq.${userId}` },

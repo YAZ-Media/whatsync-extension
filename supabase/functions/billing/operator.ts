@@ -52,7 +52,7 @@ export async function operatorAction(action:string,data:Record<string,unknown>,u
     : selectActivePortalConfiguration((await stripe.billingPortal.configurations.list({limit:100})).data);
    const accountMatches=account.id===env('STRIPE_ACCOUNT_ID');
    const ready=accountMatches&&!!account.charges_enabled&&!!account.details_submitted&&prices.every(p=>p.valid&&p.livemode)&&!!webhookValid&&!!endpoint?.livemode&&configured.webhookSecret&&!!portal?.active&&base.requireLive;
-   return {...base,ready,mode:prices.some(p=>p.livemode)?'live':'test',account:{id:account.id,matchesExpected:accountMatches,chargesEnabled:account.charges_enabled,payoutsEnabled:account.payouts_enabled,detailsSubmitted:account.details_submitted},prices,webhook:{registered:!!endpoint,eventsConfigured:!!webhookValid,livemode:endpoint?.livemode||false},portalReady:!!portal?.active,message:ready?'Configuration checks passed. Complete one controlled live checkout and cancellation before opening sales.':'Payment setup is incomplete or in test mode.'};
+   return {...base,ready,mode:prices.some(p=>p.livemode)?'live':'test',account:{id:account.id,matchesExpected:accountMatches,chargesEnabled:account.charges_enabled,payoutsEnabled:account.payouts_enabled,detailsSubmitted:account.details_submitted},prices,webhook:{registered:!!endpoint,eventsConfigured:!!webhookValid,livemode:endpoint?.livemode||false},portalReady:!!portal?.active,message:ready?'Stripe is connected and the live billing configuration is ready.':'Payment setup is incomplete or in test mode.'};
   } catch {return {...base,ready:false,mode:'unknown',message:'Stripe could not be verified. Check the key, permissions, account and configured prices.'};}
  }
  throw new Error('Unknown operator action');

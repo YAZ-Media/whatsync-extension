@@ -24,6 +24,7 @@ import { sendResendEmail } from '../_shared/notifications.ts';
 import { signInviteToken } from '../_shared/invites.ts';
 import { assertSeatCapacity, consumesPaidSeat } from '../_shared/seats.ts';
 import { decryptHubSpotToken, encryptHubSpotToken } from '../_shared/hubspotTokenCrypto.ts';
+import { handleHubSpotWebhook, isHubSpotWebhookRequest } from '../_shared/hubspotWebhook.ts';
 
 const EXTERNAL_SUPABASE_URL = Deno.env.get('EXTERNAL_SUPABASE_URL') ?? '';
 const SERVICE_ROLE_KEY = Deno.env.get('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -1818,6 +1819,12 @@ Deno.serve(async (req) => {
   if (!EXTERNAL_SUPABASE_URL || !SERVICE_ROLE_KEY) {
     console.error('Edge function misconfigured: EXTERNAL_SUPABASE_URL / SERVICE_ROLE_KEY missing');
     return json({ error: 'Service is not configured' }, 500);
+  }
+
+  // HubSpot sends privacy-deletion webhooks without a user JWT. Authenticate
+  // those requests with the app's v3 HMAC signature before reading the body.
+  if (isHubSpotWebhookRequest(req)) {
+    return handleHubSpotWebhook(req, HUBSPOT_CLIENT_SECRET, db);
   }
 
   try {

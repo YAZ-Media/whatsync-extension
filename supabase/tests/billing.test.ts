@@ -131,7 +131,7 @@ Deno.test('acceptance checkout uses isolated test Stripe resources without chang
   else if(url.includes('/user_profiles')&&url.includes('select=role'))result={role:'Owner',status:'Active',organization_id:'acceptance-org',email:'acceptance@example.com'};
   else if(url.includes('/user_profiles'))return new Response(null,{headers:{'content-range':'0-0/1'}});
   else if(url.includes('/billing_customers')&&init?.method==='POST'){customerWrite=JSON.parse(String(init.body));result=customerWrite;}
-  else if(url.includes('/billing_customers'))result={stripe_customer_id:'cus_live_old',livemode:true};
+  else if(url.includes('/billing_customers'))result=url.includes('livemode=eq.false')?null:{stripe_customer_id:'cus_live_old',livemode:true};
   else if(url.includes('/rpc/reserve_billing_checkout'))result={attempt_id:'acceptance-attempt',plan_name:'Pro Monthly',seats:1,expires_at:2000000000};
   else if(url.includes('api.stripe.com/v1/customers'))result={id:'cus_test_acceptance'};
   else if(url.includes('api.stripe.com/v1/subscriptions'))result={data:[]};

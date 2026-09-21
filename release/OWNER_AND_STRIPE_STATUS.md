@@ -25,7 +25,7 @@ No live WhatSync checkout, renewal, failure recovery, cancellation or refund has
 
 ## Still required for paid launch
 
-1. Change the Namecheap nameservers so `whatsync.io` reaches the deployed DigitalOcean build through Cloudflare.
+1. Wait for the saved Namecheap → Cloudflare nameserver change to propagate, then verify `whatsync.io` serves the deployed DigitalOcean build over HTTPS.
 2. Run one controlled non-operator checkout and verify webhook persistence, CRM entitlement, seat proration, cancellation and refund, including tenant isolation.
-3. Complete Chrome publisher identity verification, wait for the submitted 1.5.3 review, and obtain the third qualifying HubSpot install.
+3. Wait for Google trader verification and obtain the third qualifying HubSpot install. Chrome Web Store version 1.5.3 is already public.
 4. Complete authenticated CRM read-back acceptance, obtain legal/tax review and establish recoverable database backups.

@@ -14,8 +14,9 @@
 - Verified: browser role/workspace changes denied; OAuth token reads restricted; private/scheduler endpoints reject unauthorized requests. Pricing returns the live USD 19 monthly and USD 180 annual plans. Stripe credentials, prices, signed webhook and portal are configured on the correct backend.
 - Complete: live Stripe product and prices, live signed webhook, default customer portal, subscription terms acceptance, paid-role seat enforcement and prorated self-service seat changes.
 - Complete: HubSpot's signed privacy-deletion webhook is deployed and configured to purge stored activity for the deleted contact across the connected workspace.
-- Complete: DigitalOcean deployed website commit `32008c4`; Chrome Web Store version 1.5.3 is submitted and pending review.
-- Remaining: change the Namecheap nameservers, complete Google publisher identity verification, obtain a third qualifying HubSpot install, complete one controlled purchase/cancel/refund lifecycle, obtain qualified legal/tax review, and establish recoverable backups.
+- Complete: DigitalOcean deployed website commit `32008c4`; Chrome Web Store version 1.5.3 is public.
+- In progress: Namecheap now uses Cloudflare nameservers and Cloudflare has started its verification cycle. Until `.io` delegation propagates, the public domain continues serving the previous deployment.
+- Remaining: verify the completed DNS cutover, wait for Google trader verification, obtain a third qualifying HubSpot install, complete one controlled purchase/cancel/refund lifecycle, obtain qualified legal/tax review, and establish recoverable backups.
 - The database's historical schema existed with an empty migration journal. Only the four reviewed September migrations are recorded. **Do not run blanket db push until historical migrations are reconciled.** The commands below describe future releases and must not be used to replay the old baseline on this database.
 
 CRM-write subscription enforcement is mandatory, independent of the legacy BILLING_ENFORCE_ACCESS flag. An account without a valid subscription can set up and read but cannot write to HubSpot. Stripe trials are respected; a no-card trial is not implemented.
@@ -99,7 +100,7 @@ Live merchant keys, price IDs, webhook secret and `BILLING_REQUIRE_LIVE=true` ar
 
 Build/publish from `YAZ-Media/whatsync-website`. Confirm that the published assets target `ogsvchujqpayuckxuwdf`. The release ZIP includes static website assets; configure the host to serve index.html for client routes such as `/auth/hubspot/callback` and `/dashboard/billing`. Keep browser-server secrets out of the build.
 
-Chrome Web Store version 1.5.3 is submitted and pending review. Keep the approved listing URL in `VITE_CHROME_STORE_URL` and verify the Setup page's Install button after publication. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Publishing the website does not update an unpacked extension.
+Chrome Web Store version 1.5.3 is public. Keep the approved listing URL in `VITE_CHROME_STORE_URL` and verify the Setup page's Install button after the DNS cutover. Google trader verification remains pending, so the public listing temporarily carries Google's non-trader label. For local acceptance, use Chrome Extensions → Developer mode → Load unpacked → this main folder, then reload WhatsApp Web. Publishing the website does not update an unpacked extension.
 
 Before accepting money, publish approved Terms, billing/refund policy and the updated privacy policy; confirm support works and every public URL resolves. Conduct a clean-device install and full purchase→connect→create→read-back flow.
 

@@ -15,7 +15,7 @@ Reviewed 21 September 2026. No zero-bug guarantee is possible. Passing automated
 
 ## Changes delivered
 
-- Sidebar Appearance now uses direct drag-and-drop ordering and no longer reads CRM data for an inaccurate preview. Companies, related Contacts, Lead Stage Tracker and Attachments are configurable, lazy-loaded extension sections backed by the connected HubSpot portal.
+- Sidebar Appearance now uses direct drag-and-drop ordering and a functional fictional-data preview that mirrors enabled fields, quick actions and sections without reading customer CRM data. Companies, related Contacts, Lead Stage Tracker and Attachments are configurable, lazy-loaded extension sections backed by the connected HubSpot portal.
 - Coral/apricot/navy brand, new original icons, redesigned marketing pages, dashboard navigation, extension sidebar and popup styling; public setup guide.
 - Conservative chat suggestions with source evidence and review; corrected template-variable substitution and quote/sender extraction. Company/job/name are no longer guessed from article headlines or arbitrary URLs.
 - Immediate chat-switch loading state, stale-response rejection, short metadata caching, removal of redundant contact requests.

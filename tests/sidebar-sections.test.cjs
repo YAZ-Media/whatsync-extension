@@ -20,9 +20,12 @@ test('all configurable relationship sections have a real extension and API path'
   assert.match(hubspot, /case 'getSidebarSection'/);
 });
 
-test('sidebar appearance is a drag editor without the obsolete live preview', () => {
+test('sidebar appearance has drag ordering and a functional fictional-data preview', () => {
   const designer = read('website/src/pages/dashboard/SidebarDesigner.tsx');
   assert.match(designer, /draggable=\{canManage\}/);
   assert.match(designer, /reorderField\(sourceKey, targetKey\)/);
-  assert.doesNotMatch(designer, /WhatsApp Sidebar Preview|DEMO_SAMPLE|previewMode|moveField/);
+  assert.match(designer, /previewMode/);
+  assert.match(designer, /Preview sidebar/);
+  assert.match(designer, /Aisha Rahman/);
+  assert.doesNotMatch(designer, /fetchEdgeFunction|DEMO_SAMPLE|moveField/);
 });

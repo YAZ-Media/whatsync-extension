@@ -928,7 +928,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, results: result?.results || [] });
       } catch (error) {
         console.error('[Background] getSidebarSection failed:', error);
-        sendResponse({ success: false, error: error.message, results: [] });
+        const unavailable = /Unknown action:\s*getSidebarSection/i.test(String(error?.message || ''));
+        sendResponse({
+          success: false,
+          code: unavailable ? 'SIDEBAR_SECTION_UNAVAILABLE' : 'SIDEBAR_SECTION_FAILED',
+          error: unavailable
+            ? 'This HubSpot section is temporarily unavailable.'
+            : 'We could not load this HubSpot data.',
+          results: [],
+        });
       }
     })();
     return true;

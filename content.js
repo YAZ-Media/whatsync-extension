@@ -4624,6 +4624,7 @@ async function loadRelatedSidebarSection(section) {
   const count = section.querySelector('.ws-related-count');
   if (!contactId || !sectionName || !list) return;
 
+  if (count) count.textContent = '…';
   list.innerHTML = '<div class="activity-skeleton"></div>'.repeat(2);
   try {
     const response = await sendExtensionMessage({
@@ -4631,20 +4632,40 @@ async function loadRelatedSidebarSection(section) {
       contactId,
       section: sectionName,
     });
-    if (!response?.success) throw new Error(response?.error || 'Could not load this section');
+    if (!response?.success) {
+      const loadError = new Error('We could not load this HubSpot data.');
+      loadError.code = response?.code || 'SIDEBAR_SECTION_FAILED';
+      throw loadError;
+    }
     const results = Array.isArray(response.results) ? response.results : [];
     if (count) count.textContent = String(
       sectionName === 'attachments'
         ? results.reduce((total, item) => total + (Number(item.count) || 0), 0)
         : results.length
     );
+    const emptyMessages = {
+      companies: 'No associated companies.',
+      contacts: 'No other contacts are associated with this company.',
+      lead_tracker: 'No lifecycle or lead status changes yet.',
+      attachments: 'No attachments were found in HubSpot notes.',
+    };
     list.innerHTML = results.length
       ? results.map((item) => formatRelatedSectionItem(sectionName, item, contactId)).join('')
-      : '<div class="ws-related-empty">No associated records found.</div>';
+      : `<div class="ws-related-empty">${escapeHtml(emptyMessages[sectionName] || 'No records found.')}</div>`;
     section.dataset.loaded = 'true';
   } catch (error) {
     console.warn(`[Content] Could not load ${sectionName} section:`, error);
-    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(error?.message || 'Could not load this section.')}</div>`;
+    if (count) count.textContent = '—';
+    delete section.dataset.loaded;
+    const message = error?.code === 'SIDEBAR_SECTION_UNAVAILABLE'
+      ? 'This section needs the latest WhatSync connection. Refresh WhatsApp Web and try again.'
+      : 'We could not load this HubSpot data. Check your connection and try again.';
+    list.innerHTML = `
+      <div class="ws-related-error" role="status">
+        <p>${escapeHtml(message)}</p>
+        <button type="button" class="ws-related-retry">Try again</button>
+      </div>`;
+    list.querySelector('.ws-related-retry')?.addEventListener('click', () => loadRelatedSidebarSection(section), { once: true });
   }
 }
 
@@ -10598,7 +10619,7 @@ function relatedSidebarSectionMarkup(key, title, contactId) {
           <svg class="chevron-icon ws-related-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
-          <span>${escapeHtml(title)} (<span class="ws-related-count">0</span>)</span>
+          <span>${escapeHtml(title)} (<span class="ws-related-count">…</span>)</span>
         </span>
       </button>
       <div class="ws-related-content" hidden>

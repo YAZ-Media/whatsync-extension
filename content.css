@@ -841,6 +841,33 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     font-size: 13px;
 }
 
+#hubspot-sidebar .ws-related-error {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 0;
+}
+
+#hubspot-sidebar .ws-related-error p {
+    margin: 0;
+    color: var(--sidebar-text-secondary, #667781);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+#hubspot-sidebar .ws-related-retry {
+    padding: 7px 11px;
+    border: 1px solid var(--sidebar-border, #e0e0e0);
+    border-radius: 7px;
+    background: var(--sidebar-hover-bg, #f0f4f8);
+    color: var(--sidebar-text, #1a1a1a);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
 /* Vertical connector line for the timeline */
 #hubspot-sidebar .activity-item {
     display: flex;
@@ -5343,3 +5370,36 @@ body.whatsapp-theme-dark #hubspot-sidebar {
 #hubspot-sidebar .ws-suggestions:empty {display:none;}
 
 #hubspot-sidebar .ws-access-status { margin:12px 16px; padding:10px; font-size:12px; line-height:1.5; border:1px solid var(--sidebar-border, #52616b); border-radius:8px; }
+
+/* Every CRM collection uses one hierarchy and the same full-width section rhythm. */
+#hubspot-sidebar .activities-section,
+#hubspot-sidebar .ws-related-section {
+  margin-top:0;
+  padding:0;
+  border-top:1px solid var(--sidebar-border);
+  border-bottom:0;
+  background:transparent;
+}
+#hubspot-sidebar .activities-header,
+#hubspot-sidebar .ws-related-header {
+  width:100%;
+  min-height:58px;
+  margin:0;
+  padding:16px 0;
+  border:0;
+  border-bottom:1px solid var(--sidebar-border);
+  border-radius:8px;
+  background:transparent;
+}
+#hubspot-sidebar .activities-title,
+#hubspot-sidebar .ws-related-title {
+  flex:1;
+  color:var(--sidebar-text);
+  font-size:14px;
+  font-weight:600;
+}
+#hubspot-sidebar .activities-content,
+#hubspot-sidebar .ws-related-content {
+  margin:0;
+  padding:12px 0;
+}

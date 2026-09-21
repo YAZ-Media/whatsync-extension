@@ -4260,22 +4260,80 @@ function requestHubSpotRequiredValues(definitions) {
 async function runHubSpotConditionalWrite({ objectType, properties, write }) {
   let combined = { ...properties };
   const requested = new Set();
+  const conditionalDefinitions = [];
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       const response = await write(combined);
       if (!response?.success) throw hubSpotResponseError(response);
+      // Return the exact values accepted by HubSpot together with the dependent
+      // field definitions. Contact callers use this to update the open sidebar
+      // immediately, without waiting for HubSpot's search index to catch up.
+      response.whatsyncSubmittedProperties = { ...combined };
+      response.whatsyncConditionalFields = conditionalDefinitions.map((definition) => ({
+        ...definition,
+        value: combined[definition.name],
+      }));
       return response;
     } catch (error) {
-      const required = requiredHubSpotProperties(error).filter((name) => !requested.has(name));
+      // HubSpot's validation context can include both the missing dependent
+      // property and the controlling property that was already submitted.
+      // Never ask for a value the user just selected in the sidebar.
+      const required = requiredHubSpotProperties(error).filter((name) => (
+        !requested.has(name) &&
+        (!Object.prototype.hasOwnProperty.call(combined, name) || combined[name] === '' || combined[name] == null)
+      ));
       if (!required.length) throw error;
       required.forEach((name) => requested.add(name));
       const definitions = await fetchHubSpotPropertyDefinitions(objectType, required);
       if (definitions.length !== required.length) throw new Error('HubSpot requires another field, but its definition could not be loaded. Open the record in HubSpot to complete this change.');
+      conditionalDefinitions.push(...definitions.filter((definition) => (
+        definition?.name && !conditionalDefinitions.some((known) => known.name === definition.name)
+      )));
       const values = await requestHubSpotRequiredValues(definitions);
       combined = { ...combined, ...values };
     }
   }
   throw new Error('HubSpot requires additional fields that could not be completed here. Open the record in HubSpot to finish this change.');
+}
+
+const conditionalContactFieldsById = new Map();
+
+function contactRecordId(contact) {
+  return String(contact?.id || contact?.hs_object_id || contact?.properties?.hs_object_id || '');
+}
+
+function rememberConditionalContactFields(contact, fields = []) {
+  const id = contactRecordId(contact);
+  if (!id || !Array.isArray(fields) || !fields.length) return;
+  const previous = conditionalContactFieldsById.get(id) || [];
+  const merged = new Map(previous.map((field) => [field.name, field]));
+  fields.forEach((field) => { if (field?.name) merged.set(field.name, field); });
+  const value = [...merged.values()];
+  conditionalContactFieldsById.set(id, value);
+  contact.whatsyncConditionalFields = value;
+}
+
+function hydrateConditionalContactFields(contact) {
+  const remembered = conditionalContactFieldsById.get(contactRecordId(contact));
+  if (remembered?.length) contact.whatsyncConditionalFields = remembered;
+  return contact;
+}
+
+function conditionalContactFieldValue(field) {
+  const raw = field?.value;
+  if (raw === undefined || raw === null || raw === '') return '--';
+  const options = Array.isArray(field.options) ? field.options : [];
+  const values = String(raw).split(';').filter(Boolean);
+  if (options.length) {
+    return values.map((value) => options.find((option) => String(option.value) === value)?.label || value).join(', ');
+  }
+  if (String(field.type).toLowerCase() === 'bool' || String(field.fieldType).toLowerCase() === 'booleancheckbox') {
+    return String(raw) === 'true' ? 'Yes' : String(raw) === 'false' ? 'No' : String(raw);
+  }
+  if (String(field.type).toLowerCase() === 'date' || String(field.type).toLowerCase() === 'datetime') {
+    return formatDateValue(raw);
+  }
+  return String(raw);
 }
 
 // Turn the lifecycle-stage / lead-status <select>s in the About section into live
@@ -4326,7 +4384,14 @@ function setupEditableContactFields() {
           setTimeout(() => select.classList.remove('edit-saved'), 1500);
           // Keep cached contact data in sync so a soft refresh shows the new value.
           if (currentContactData && currentContactData.properties) {
-            Object.assign(currentContactData.properties, resp.data?.properties || {}, { [property]: newValue });
+            Object.assign(
+              currentContactData.properties,
+              resp.data?.properties || {},
+              resp.whatsyncSubmittedProperties || {},
+              { [property]: newValue },
+            );
+            rememberConditionalContactFields(currentContactData, resp.whatsyncConditionalFields);
+            await refreshAboutSection();
           }
         } else {
           throw new Error(resp?.error || 'Update failed');
@@ -9449,6 +9514,8 @@ function setupCreateContactForm(phoneNumber) {
       });
       const createdContact = createResponse.data;
       if (!createdContact?.id) throw new Error('HubSpot did not confirm a contact record.');
+      Object.assign(createdContact.properties || (createdContact.properties = {}), createResponse.whatsyncSubmittedProperties || {});
+      rememberConditionalContactFields(createdContact, createResponse.whatsyncConditionalFields);
       if (submittedChat !== getCurrentChatHeaderKey() || !form.isConnected) return;
 
       // Success: swap the form for a clean confirmation card, then open the
@@ -10098,7 +10165,7 @@ async function renderAboutSection(contact, userId, privacyOverride = null) {
       return renderDefaultAboutSection(props, privacy);
     }
 
-    const fieldsHtml = contactFields.map((field, index) => {
+    const regularFieldsHtml = contactFields.map((field, index) => {
       const property = field.hubspot_property || field.field_key;
       const label = fieldLabels[property] || property.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       let value;
@@ -10164,6 +10231,18 @@ async function renderAboutSection(contact, userId, privacyOverride = null) {
         ${index < contactFields.length - 1 ? '<div class="info-divider"></div>' : ''}
       `;
     }).join('');
+
+    const conditionalFields = isSidebarFieldEnabled('conditional_properties')
+      ? (Array.isArray(contact.whatsyncConditionalFields) ? contact.whatsyncConditionalFields : [])
+      : [];
+    const conditionalFieldsHtml = conditionalFields.map((field) => `
+      <div class="info-divider"></div>
+      <div class="info-row conditional-info-row" data-property="${escapeHtml(String(field.name || ''))}">
+        <div class="info-label-text">${escapeHtml(String(field.label || field.name || 'HubSpot field'))}</div>
+        <div class="info-value">${escapeHtml(conditionalContactFieldValue(field))}</div>
+      </div>
+    `).join('');
+    const fieldsHtml = `${regularFieldsHtml}${conditionalFieldsHtml}`;
 
     // Always surface Contact Owner, even if it isn't in the enabled-fields config.
     const hasOwnerField = contactFields.some(
@@ -10409,7 +10488,7 @@ function stopSidebarFieldsPolling() {
 async function formatContactDetails(contacts, phoneNumber) {
   // Store contact data for soft re-render
   if (contacts && contacts.length > 0) {
-    currentContactData = contacts[0];
+    currentContactData = hydrateConditionalContactFields(contacts[0]);
     currentPhoneNumber = phoneNumber;
   } else {
     currentContactData = null;

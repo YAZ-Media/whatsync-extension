@@ -23,9 +23,13 @@ test('sidebar recognizes HubSpot conditional required property errors', () => {
 
 test('conditional write retries atomically with the required values', async () => {
   let attempts = 0;
+  let requestedDefinitions = [];
   const ctx = vm.createContext({
     requiredHubSpotProperties: (error) => error.details?.requiredProperties || [],
-    fetchHubSpotPropertyDefinitions: async (_, names) => names.map((name) => ({ name })),
+    fetchHubSpotPropertyDefinitions: async (_, names) => {
+      requestedDefinitions = names;
+      return names.map((name) => ({ name }));
+    },
     requestHubSpotRequiredValues: async () => ({ lead_tier: 'tier_1' }),
     hubSpotResponseError: (response) => Object.assign(new Error(response.error), { details: response.details }),
   });
@@ -35,11 +39,16 @@ test('conditional write retries atomically with the required values', async () =
     properties: { hs_lead_status: 'QUALIFIED' },
     write: async (properties) => {
       attempts += 1;
-      if (attempts === 1) return { success: false, error: 'Required', details: { requiredProperties: ['lead_tier'] } };
+      if (attempts === 1) return { success: false, error: 'Required', details: { requiredProperties: ['lead_tier', 'hs_lead_status'] } };
       return { success: true, data: { properties } };
     },
   });
   assert.equal(attempts, 2);
+  assert.deepEqual(requestedDefinitions, ['lead_tier']);
   assert.equal(response.data.properties.hs_lead_status, 'QUALIFIED');
   assert.equal(response.data.properties.lead_tier, 'tier_1');
+  assert.equal(response.whatsyncSubmittedProperties.hs_lead_status, 'QUALIFIED');
+  assert.equal(response.whatsyncConditionalFields.length, 1);
+  assert.equal(response.whatsyncConditionalFields[0].name, 'lead_tier');
+  assert.equal(response.whatsyncConditionalFields[0].value, 'tier_1');
 });

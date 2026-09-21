@@ -21,7 +21,7 @@
 
 CRM-write subscription enforcement is mandatory, independent of the legacy BILLING_ENFORCE_ACCESS flag. An account without a valid subscription can set up and read but cannot write to HubSpot. Stripe trials are respected; a no-card trial is not implemented.
 
-Reload the extension from the main folder to use v1.5.4, then refresh WhatsApp Web. Lovable Cloud function deployments still target the wrong database and are not the deployment path for backend changes.
+Reload the extension from the main folder to use v1.5.5, then refresh WhatsApp Web. Lovable Cloud function deployments still target the wrong database and are not the deployment path for backend changes.
 
 ## 1. Validate the candidate locally
 

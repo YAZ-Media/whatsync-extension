@@ -2831,6 +2831,22 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
     color: #1f2d3d;
     font: inherit;
     font-weight: 500;
+    color-scheme: light;
+}
+
+#hubspot-required-fields-modal .hubspot-required-field input,
+#hubspot-required-fields-modal .hubspot-required-field select,
+#hubspot-required-fields-modal .hubspot-required-field textarea,
+#hubspot-required-fields-modal .hubspot-required-field select:focus,
+#hubspot-required-fields-modal .hubspot-required-field select:hover {
+    background-color: #ffffff !important;
+    color: #1f2d3d !important;
+    -webkit-text-fill-color: #1f2d3d !important;
+}
+
+#hubspot-required-fields-modal .hubspot-required-field select option {
+    background: #ffffff !important;
+    color: #1f2d3d !important;
 }
 
 .hubspot-required-field textarea { resize: vertical; }

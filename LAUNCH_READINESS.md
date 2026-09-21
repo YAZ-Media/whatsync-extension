@@ -1,4 +1,4 @@
-# WhatSync 1.5.4 — production deployment, launch blockers tracked
+# WhatSync 1.5.5 — production deployment, launch blockers tracked
 
 Reviewed 21 September 2026. No zero-bug guarantee is possible. Passing automated tests is not proof that every third-party integration will remain available, but all known release defects have been addressed and the remaining external launch gates are listed below.
 

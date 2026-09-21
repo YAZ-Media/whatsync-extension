@@ -355,6 +355,7 @@ const SIDEBAR_CATALOG: SidebarCatalogEntry[] = [
   { field_key: 'lifecyclestage', field_label: 'Lifecycle Stage', field_type: 'contact_info', is_locked: false },
   { field_key: 'hs_lead_status', field_label: 'Lead Status', field_type: 'contact_info', is_locked: false },
   { field_key: 'createdate', field_label: 'Create Date', field_type: 'contact_info', is_locked: false },
+  { field_key: 'conditional_properties', field_label: 'HubSpot Rule Fields', field_type: 'contact_info', is_locked: false },
   // Quick actions
   { field_key: 'action_note', field_label: 'Note', field_type: 'action', is_locked: false },
   { field_key: 'action_email', field_label: 'Email', field_type: 'action', is_locked: false },

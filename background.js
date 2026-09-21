@@ -914,6 +914,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  // Lazy-load the optional HubSpot sections configured in Sidebar Appearance.
+  if (request.action === 'getSidebarSection') {
+    const contactId = request.contactId || request.data?.contactId || null;
+    const section = request.section || request.data?.section || null;
+    (async () => {
+      try {
+        if (!contactId || !section) {
+          sendResponse({ success: false, error: 'Contact and section are required', results: [] });
+          return;
+        }
+        const result = await callHubSpotEdgeFunction('getSidebarSection', { contactId, section });
+        sendResponse({ success: true, results: result?.results || [] });
+      } catch (error) {
+        console.error('[Background] getSidebarSection failed:', error);
+        sendResponse({ success: false, error: error.message, results: [] });
+      }
+    })();
+    return true;
+  }
+
   if (request.action === 'getDealPipelines') {
     chrome.storage.local.get(['userId'], async (storageData) => {
       const userId = storageData.userId || null;

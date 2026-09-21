@@ -4561,6 +4561,110 @@ async function loadRecentActivities(contactId, section) {
   }
 }
 
+function formatRelatedSectionItem(sectionName, item, contactId) {
+  const properties = item?.properties || {};
+  if (sectionName === 'companies') {
+    const name = properties.name || 'Company';
+    const meta = [properties.domain, properties.industry, properties.city, properties.country]
+      .filter(Boolean)
+      .join(' · ');
+    return `
+      <div class="ws-related-item">
+        <div class="ws-related-item-body">
+          <strong>${escapeHtml(name)}</strong>
+          ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
+        </div>
+        ${hubSpotOpenLink('company', item.id, 'Open company in HubSpot')}
+      </div>`;
+  }
+  if (sectionName === 'contacts') {
+    const name = [properties.firstname, properties.lastname].filter(Boolean).join(' ') || properties.email || 'Contact';
+    const meta = [properties.jobtitle, properties.email].filter(Boolean).join(' · ');
+    return `
+      <div class="ws-related-item">
+        <div class="ws-related-item-body">
+          <strong>${escapeHtml(name)}</strong>
+          ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
+        </div>
+        ${hubSpotOpenLink('contact', item.id, 'Open contact in HubSpot')}
+      </div>`;
+  }
+  if (sectionName === 'lead_tracker') {
+    const relative = activityRelativeTime(item.timestamp);
+    return `
+      <div class="ws-related-item ws-stage-history-item">
+        <span class="ws-stage-dot" aria-hidden="true"></span>
+        <div class="ws-related-item-body">
+          <strong>${escapeHtml(item.propertyLabel || 'Stage')} · ${escapeHtml(item.label || item.value || 'Updated')}</strong>
+          ${relative ? `<span>${escapeHtml(relative)}</span>` : ''}
+        </div>
+      </div>`;
+  }
+  if (sectionName === 'attachments') {
+    const count = Number(item.count) || (Array.isArray(item.attachmentIds) ? item.attachmentIds.length : 0);
+    const label = `${count} attachment${count === 1 ? '' : 's'}`;
+    const meta = item.notePreview || activityRelativeTime(item.timestamp) || 'Attached to a HubSpot note';
+    return `
+      <div class="ws-related-item">
+        <div class="ws-related-item-icon" aria-hidden="true">↗</div>
+        <div class="ws-related-item-body">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(meta)}</span>
+        </div>
+        ${hubSpotOpenLink('contact', contactId, 'Open attachments on the contact timeline')}
+      </div>`;
+  }
+  return '';
+}
+
+async function loadRelatedSidebarSection(section) {
+  const contactId = section.getAttribute('data-contact-id');
+  const sectionName = section.getAttribute('data-section');
+  const list = section.querySelector('.ws-related-list');
+  const count = section.querySelector('.ws-related-count');
+  if (!contactId || !sectionName || !list) return;
+
+  list.innerHTML = '<div class="activity-skeleton"></div>'.repeat(2);
+  try {
+    const response = await sendExtensionMessage({
+      action: 'getSidebarSection',
+      contactId,
+      section: sectionName,
+    });
+    if (!response?.success) throw new Error(response?.error || 'Could not load this section');
+    const results = Array.isArray(response.results) ? response.results : [];
+    if (count) count.textContent = String(
+      sectionName === 'attachments'
+        ? results.reduce((total, item) => total + (Number(item.count) || 0), 0)
+        : results.length
+    );
+    list.innerHTML = results.length
+      ? results.map((item) => formatRelatedSectionItem(sectionName, item, contactId)).join('')
+      : '<div class="ws-related-empty">No associated records found.</div>';
+    section.dataset.loaded = 'true';
+  } catch (error) {
+    console.warn(`[Content] Could not load ${sectionName} section:`, error);
+    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(error?.message || 'Could not load this section.')}</div>`;
+  }
+}
+
+function setupRelatedSidebarSections() {
+  document.querySelectorAll('#hubspot-sidebar .ws-related-section').forEach((section) => {
+    const header = section.querySelector('.ws-related-header');
+    const content = section.querySelector('.ws-related-content');
+    const chevron = section.querySelector('.ws-related-chevron');
+    if (!header || !content || header.dataset.bound === 'true') return;
+    header.dataset.bound = 'true';
+    header.addEventListener('click', () => {
+      const willExpand = content.hidden;
+      content.hidden = !willExpand;
+      header.setAttribute('aria-expanded', String(willExpand));
+      if (chevron) chevron.style.transform = willExpand ? 'rotate(180deg)' : 'rotate(0deg)';
+      if (willExpand && section.dataset.loaded !== 'true') loadRelatedSidebarSection(section);
+    });
+  });
+}
+
 // Set up the Recent activity section: collapsible header + initial load. Expanded by default.
 function setupActivitiesSection() {
   const section = document.querySelector('.activities-section');
@@ -9992,7 +10096,7 @@ function applySidebarOrder(root) {
   }
   const groups = [
     [['action_note','#create-note-btn'],['action_email','#create-email-btn'],['action_log_whatsapp','#log-whatsapp-message-btn'],['action_task','#create-task-btn'],['action_meeting','#schedule-meeting-btn'],['action_ticket','#more-create-ticket-option'],['send_template','.more-actions-wrapper']],
-    [['section_activity','.activities-section'],['section_deals','.deals-section'],['section_notes','.notes-section'],['section_tickets','.tickets-section'],['section_tasks','.tasks-section']]
+    [['section_activity','.activities-section'],['section_companies','.companies-section'],['section_contacts','.contacts-section'],['section_lead_tracker','.lead-tracker-section'],['section_attachments','.attachments-section'],['section_deals','.deals-section'],['section_notes','.notes-section'],['section_tickets','.tickets-section'],['section_tasks','.tasks-section']]
   ];
   for (const group of groups) {
     const nodes = group.map(([key,selector]) => ({key,node:root.querySelector(selector)})).filter(item => item.node);
@@ -10485,6 +10589,24 @@ function stopSidebarFieldsPolling() {
 // ==================== End Dynamic Sidebar Fields ====================
 
 // Function to format contact details HTML
+function relatedSidebarSectionMarkup(key, title, contactId) {
+  if (!isSidebarFieldEnabled(`section_${key}`)) return '';
+  return `
+    <div class="ws-related-section ${key.replace(/_/g, '-')}-section" data-section="${escapeHtml(key)}" data-contact-id="${escapeHtml(contactId)}">
+      <button type="button" class="ws-related-header" aria-expanded="false">
+        <span class="ws-related-title">
+          <svg class="chevron-icon ws-related-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span>${escapeHtml(title)} (<span class="ws-related-count">0</span>)</span>
+        </span>
+      </button>
+      <div class="ws-related-content" hidden>
+        <div class="ws-related-list"></div>
+      </div>
+    </div>`;
+}
+
 async function formatContactDetails(contacts, phoneNumber) {
   // Store contact data for soft re-render
   if (contacts && contacts.length > 0) {
@@ -10687,6 +10809,10 @@ async function formatContactDetails(contacts, phoneNumber) {
         </div>
       <section class="ws-suggestions" aria-label="Missing contact details"></section>
       ${await renderAboutSection(contact, userId, headerPrivacy)}
+      ${relatedSidebarSectionMarkup('companies', 'Companies', hubspotContactId)}
+      ${relatedSidebarSectionMarkup('contacts', 'Contacts', hubspotContactId)}
+      ${relatedSidebarSectionMarkup('lead_tracker', 'Lead Stage Tracker', hubspotContactId)}
+      ${relatedSidebarSectionMarkup('attachments', 'Attachments', hubspotContactId)}
       ${!isSidebarFieldEnabled('section_activity') ? '' : `
       <div class="activities-section" data-contact-id="${hubspotContactId}">
         <div class="activities-header">
@@ -11053,6 +11179,7 @@ async function updateSidebarContent(known = null) {
           setupEditableContactFields();
           setupOwnerNameResolution();
           setupContactSuggestions(sidebarContent, contacts[0]);
+          setupRelatedSidebarSections();
           // Recent activity timeline
           setupActivitiesSection();
           // Setup notes section
@@ -11138,6 +11265,7 @@ async function updateSidebarContent(known = null) {
                 setupAboutCollapsible();
                 setupEditableContactFields();
                 setupOwnerNameResolution();
+                setupRelatedSidebarSections();
                 setupActivitiesSection();
                 setupNotesSection();
                 setupTicketsSection();
@@ -11319,6 +11447,7 @@ let hubspotPortalId = null;
 // HubSpot CRM object type ids used in record deep links.
 const HUBSPOT_OBJECT_TYPE_IDS = {
   contact: '0-1',
+  company: '0-2',
   deal: '0-3',
   ticket: '0-5',
   note: '0-46',

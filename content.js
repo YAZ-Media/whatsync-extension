@@ -1368,7 +1368,7 @@ async function createHubSpotContact(contactData) {
         return response.data;
       } else if (response.error) {
         console.error('[Content] ❌ HubSpot Create Contact Error:', response.error);
-        throw new Error(response.error);
+        throw hubSpotResponseError(response, 'HubSpot could not create the contact');
       }
     }
     
@@ -4160,6 +4160,124 @@ async function updateHubSpotContact(contactId, properties) {
   return sendExtensionMessage({ action: 'updateContact', contactId, properties });
 }
 
+function hubSpotResponseError(response, fallback = 'HubSpot could not save this record') {
+  const error = new Error(response?.error || response?.message || fallback);
+  error.status = response?.status;
+  error.details = response?.details;
+  return error;
+}
+
+function requiredHubSpotProperties(error) {
+  const names = new Set(Array.isArray(error?.details?.requiredProperties) ? error.details.requiredProperties : []);
+  const message = String(error?.message || '');
+  for (const match of message.matchAll(/Property\s+['"`]([A-Za-z0-9_]+)['"`]\s+is required\b/gi)) names.add(match[1]);
+  return [...names].filter((name) => /^[A-Za-z0-9_]+$/.test(String(name)));
+}
+
+async function fetchHubSpotPropertyDefinitions(objectType, properties) {
+  const response = await sendExtensionMessage({ action: 'getPropertyDefinitions', objectType, properties });
+  if (!response?.success) throw hubSpotResponseError(response, 'Could not load the fields required by HubSpot');
+  return response.properties || [];
+}
+
+function hubSpotPropertyInput(definition) {
+  const name = escapeHtml(definition.name);
+  const label = escapeHtml(definition.label || definition.name);
+  const description = definition.description ? `<small>${escapeHtml(definition.description)}</small>` : '';
+  const options = Array.isArray(definition.options) ? definition.options : [];
+  const fieldType = String(definition.fieldType || '').toLowerCase();
+  const type = String(definition.type || '').toLowerCase();
+  let control;
+  if (options.length) {
+    const multiple = fieldType === 'checkbox';
+    control = `<select name="${name}" ${multiple ? 'multiple data-hubspot-type="multiple"' : ''} required>${multiple ? '' : `<option value="">Select ${label}</option>`}${options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label || option.value)}</option>`).join('')}</select>`;
+  } else if (type === 'bool' || fieldType === 'booleancheckbox') {
+    control = `<select name="${name}" required><option value="">Select ${label}</option><option value="true">Yes</option><option value="false">No</option></select>`;
+  } else if (type === 'date' || fieldType === 'date') {
+    control = `<input name="${name}" type="date" data-hubspot-type="date" required>`;
+  } else if (type === 'datetime') {
+    control = `<input name="${name}" type="datetime-local" data-hubspot-type="datetime" required>`;
+  } else if (type === 'number') {
+    control = `<input name="${name}" type="number" step="any" required>`;
+  } else if (fieldType === 'textarea') {
+    control = `<textarea name="${name}" rows="3" required></textarea>`;
+  } else {
+    control = `<input name="${name}" type="text" required>`;
+  }
+  return `<label class="hubspot-required-field"><span>${label}<b aria-hidden="true">*</b></span>${control}${description}</label>`;
+}
+
+function requestHubSpotRequiredValues(definitions) {
+  return new Promise((resolve, reject) => {
+    document.getElementById('hubspot-required-fields-modal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'hubspot-required-fields-modal';
+    overlay.className = 'hubspot-required-overlay';
+    overlay.innerHTML = `<form class="hubspot-required-dialog" aria-labelledby="hubspot-required-title">
+      <div class="hubspot-required-header">
+        <div><span class="ws-eyebrow">HubSpot property rules</span><h3 id="hubspot-required-title">More information is required</h3></div>
+        <button type="button" class="hubspot-required-close" aria-label="Cancel">&times;</button>
+      </div>
+      <p>HubSpot requires these fields for this change. Nothing has been saved yet.</p>
+      <div class="hubspot-required-fields">${definitions.map(hubSpotPropertyInput).join('')}</div>
+      <div class="hubspot-required-error" role="alert" hidden></div>
+      <div class="hubspot-required-actions"><button type="button" class="hubspot-required-cancel">Cancel</button><button type="submit" class="hubspot-required-save">Complete &amp; save</button></div>
+    </form>`;
+    document.body.appendChild(overlay);
+    const form = overlay.querySelector('form');
+    const cancel = () => {
+      overlay.remove();
+      const error = new Error('HubSpot update cancelled');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    overlay.querySelector('.hubspot-required-close').onclick = cancel;
+    overlay.querySelector('.hubspot-required-cancel').onclick = cancel;
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) cancel(); });
+    const onKey = (event) => { if (event.key === 'Escape') { document.removeEventListener('keydown', onKey); cancel(); } };
+    document.addEventListener('keydown', onKey);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const values = {};
+      for (const field of form.elements) {
+        if (!field.name) continue;
+        let value = field.dataset.hubspotType === 'multiple'
+          ? [...field.selectedOptions].map((option) => option.value).join(';')
+          : field.value;
+        if (field.dataset.hubspotType === 'date') value = String(new Date(`${value}T00:00:00.000Z`).getTime());
+        if (field.dataset.hubspotType === 'datetime') value = String(new Date(value).getTime());
+        values[field.name] = value;
+      }
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(values);
+    });
+    form.querySelector('select, input, textarea')?.focus();
+  });
+}
+
+async function runHubSpotConditionalWrite({ objectType, properties, write }) {
+  let combined = { ...properties };
+  const requested = new Set();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const response = await write(combined);
+      if (!response?.success) throw hubSpotResponseError(response);
+      return response;
+    } catch (error) {
+      const required = requiredHubSpotProperties(error).filter((name) => !requested.has(name));
+      if (!required.length) throw error;
+      required.forEach((name) => requested.add(name));
+      const definitions = await fetchHubSpotPropertyDefinitions(objectType, required);
+      if (definitions.length !== required.length) throw new Error('HubSpot requires another field, but its definition could not be loaded. Open the record in HubSpot to complete this change.');
+      const values = await requestHubSpotRequiredValues(definitions);
+      combined = { ...combined, ...values };
+    }
+  }
+  throw new Error('HubSpot requires additional fields that could not be completed here. Open the record in HubSpot to finish this change.');
+}
+
 // Turn the lifecycle-stage / lead-status <select>s in the About section into live
 // editors: populate their options from HubSpot and PATCH the contact on change.
 function setupEditableContactFields() {
@@ -4197,14 +4315,18 @@ function setupEditableContactFields() {
       select.disabled = true;
       select.classList.remove('edit-saved', 'edit-error');
       try {
-        const resp = await updateHubSpotContact(contactId, { [property]: newValue });
+        const resp = await runHubSpotConditionalWrite({
+          objectType: 'contacts',
+          properties: { [property]: newValue },
+          write: (properties) => updateHubSpotContact(contactId, properties),
+        });
         if (resp && resp.success) {
           select.setAttribute('data-current', newValue);
           select.classList.add('edit-saved');
           setTimeout(() => select.classList.remove('edit-saved'), 1500);
           // Keep cached contact data in sync so a soft refresh shows the new value.
           if (currentContactData && currentContactData.properties) {
-            currentContactData.properties[property] = newValue;
+            Object.assign(currentContactData.properties, resp.data?.properties || {}, { [property]: newValue });
           }
         } else {
           throw new Error(resp?.error || 'Update failed');
@@ -4212,8 +4334,11 @@ function setupEditableContactFields() {
       } catch (e) {
         console.error('[Content] Failed to update contact property:', e);
         select.value = previous; // revert on failure
-        select.classList.add('edit-error');
-        setTimeout(() => select.classList.remove('edit-error'), 2000);
+        if (e?.name !== 'AbortError') {
+          select.classList.add('edit-error');
+          setTimeout(() => select.classList.remove('edit-error'), 2000);
+          showWhatsyncToast(e.message || 'HubSpot could not save this change', 'error');
+        }
       } finally {
         select.disabled = false;
       }
@@ -7864,9 +7989,13 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
     whatsyncDebug('[Content] Task payload:', taskPayload);
     
     // Call edge function to create task
-    const response = await sendExtensionMessage({
-      action: 'createHubSpotTask',
-      data: taskPayload
+    const response = await runHubSpotConditionalWrite({
+      objectType: 'tasks',
+      properties: {},
+      write: (properties) => sendExtensionMessage({
+        action: 'createHubSpotTask',
+        data: { ...taskPayload, properties },
+      }),
     });
     
     whatsyncDebug('[Content] Task creation response:', response);
@@ -7879,7 +8008,7 @@ async function createHubSpotTask(taskData, contactId, dateValue, timeValue) {
     } else {
       const errorMessage = response?.error || response?.message || 'Failed to create task';
       console.error('[Content] ❌ Task creation failed:', errorMessage);
-      throw new Error(errorMessage);
+      throw hubSpotResponseError(response, errorMessage);
     }
   } catch (error) {
     console.error('[Content] ❌ Error in createHubSpotTask');
@@ -7953,10 +8082,14 @@ async function createHubSpotTicket(ticketData, contactId) {
     
     whatsyncDebug('[Content] Sending ticket creation request to background...');
 
-    const response = await sendExtensionMessage({
-      action: 'createHubSpotTicket',
-      ticketData: ticketPayload,
-      contactId: contactId // Pass contactId for logging
+    const response = await runHubSpotConditionalWrite({
+      objectType: 'tickets',
+      properties,
+      write: (requiredProperties) => sendExtensionMessage({
+        action: 'createHubSpotTicket',
+        ticketData: { ...ticketPayload, properties: requiredProperties },
+        contactId: contactId,
+      }),
     });
     
     whatsyncDebug('[Content] Response received from background script');
@@ -7990,7 +8123,7 @@ async function createHubSpotTicket(ticketData, contactId) {
     } else {
       const errorMsg = response.error || 'Failed to create ticket';
       console.error('[Content] ❌ Ticket creation failed:', errorMsg);
-      throw new Error(errorMsg);
+      throw hubSpotResponseError(response, errorMsg);
     }
   } catch (error) {
     console.error('[Content] ❌ Error in createHubSpotTicket');
@@ -8110,16 +8243,20 @@ async function createHubSpotDeal(dealData, contactId) {
     // Route through the background script so the request carries the user's
     // session (auth headers, token refresh, timeout) like every other edge call.
     // A raw fetch from here used to go out unauthenticated and always failed.
-    const response = await sendExtensionMessage({
-      action: 'createHubSpotDeal',
-      data: dealPayload
+    const response = await runHubSpotConditionalWrite({
+      objectType: 'deals',
+      properties,
+      write: (requiredProperties) => sendExtensionMessage({
+        action: 'createHubSpotDeal',
+        data: { ...dealPayload, properties: requiredProperties },
+      }),
     });
 
     if (!response) {
       throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
     }
     if (!response.success) {
-      throw new Error(response.error || 'Failed to create deal');
+      throw hubSpotResponseError(response, 'Failed to create deal');
     }
     const result = response.data;
 
@@ -9159,8 +9296,11 @@ function setupContactSuggestions(form, contact = null) {
         button.disabled = true;
         button.textContent = 'Saving…';
         try {
-          const response = await sendExtensionMessage({ action: 'updateContact', contactId: contact.id, properties: { [props[suggestion.field]]: suggestion.value } });
-          if (!response?.success) throw new Error(response?.error || 'HubSpot could not save this detail.');
+          const response = await runHubSpotConditionalWrite({
+            objectType: 'contacts',
+            properties: { [props[suggestion.field]]: suggestion.value },
+            write: (properties) => updateHubSpotContact(contact.id, properties),
+          });
           if (chatKey !== getCurrentChatHeaderKey()) return;
           await updateSidebarContent();
         } catch (error) {
@@ -9299,7 +9439,15 @@ function setupCreateContactForm(phoneNumber) {
     };
     
     try {
-      const createdContact = await createHubSpotContact(contactData);
+      const createResponse = await runHubSpotConditionalWrite({
+        objectType: 'contacts',
+        properties: contactData.properties,
+        write: async (properties) => ({
+          success: true,
+          data: await createHubSpotContact({ ...contactData, properties }),
+        }),
+      });
+      const createdContact = createResponse.data;
       if (!createdContact?.id) throw new Error('HubSpot did not confirm a contact record.');
       if (submittedChat !== getCurrentChatHeaderKey() || !form.isConnected) return;
 
@@ -9353,14 +9501,18 @@ function setupCreateContactForm(phoneNumber) {
 async function logWhatsAppConversation(contactId, body, createTodo = false, followUpType = null, followUpDate = null) {
   const numericContactId = typeof contactId === 'string' ? parseInt(contactId, 10) : contactId;
   if (isNaN(numericContactId)) throw new Error('Invalid contact ID format');
-  const response = await sendExtensionMessage({
-    action: 'logHubSpotWhatsAppMessage',
-    data: { contactId: numericContactId, body, createTodo, followUpType, followUpDate },
+  const response = await runHubSpotConditionalWrite({
+    objectType: 'communications',
+    properties: {},
+    write: (properties) => sendExtensionMessage({
+      action: 'logHubSpotWhatsAppMessage',
+      data: { contactId: numericContactId, body, createTodo, followUpType, followUpDate, properties },
+    }),
   });
   if (!response) {
     throw new Error('No response from the extension. Please reload WhatsApp Web and try again.');
   }
-  if (!response.success) throw new Error(response.error || 'Failed to log WhatsApp message');
+  if (!response.success) throw hubSpotResponseError(response, 'Failed to log WhatsApp message');
   return response;
 }
 
@@ -9404,7 +9556,14 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, foll
 
   try {
     whatsyncDebug('[Content] Sending message to background script...');
-    const response = await sendExtensionMessage(messagePayload);
+    const response = await runHubSpotConditionalWrite({
+      objectType: 'notes',
+      properties: {},
+      write: (properties) => sendExtensionMessage({
+        ...messagePayload,
+        data: { ...messagePayload.data, properties },
+      }),
+    });
 
     whatsyncDebug('[Content] Response received from background script');
     whatsyncDebug('[Content] Response success:', response?.success);
@@ -9421,7 +9580,7 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, foll
     } else {
       const errorMsg = response.error || 'Failed to create note';
       console.error('[Content] ❌ Note creation failed:', errorMsg);
-      throw new Error(errorMsg);
+      throw hubSpotResponseError(response, errorMsg);
     }
   } catch (error) {
     console.error('[Content] ❌ Error in createHubSpotNote');

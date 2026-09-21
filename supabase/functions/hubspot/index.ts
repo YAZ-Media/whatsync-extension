@@ -25,6 +25,7 @@ import { signInviteToken } from '../_shared/invites.ts';
 import { assertSeatCapacity, consumesPaidSeat } from '../_shared/seats.ts';
 import { decryptHubSpotToken, encryptHubSpotToken } from '../_shared/hubspotTokenCrypto.ts';
 import { handleHubSpotWebhook, isHubSpotWebhookRequest } from '../_shared/hubspotWebhook.ts';
+import { buildHubSpotValidationDetails, type HubSpotValidationDetails } from '../_shared/hubspotValidation.ts';
 
 const EXTERNAL_SUPABASE_URL = Deno.env.get('EXTERNAL_SUPABASE_URL') ?? '';
 const SERVICE_ROLE_KEY = Deno.env.get('EXTERNAL_SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -32,6 +33,7 @@ const HUBSPOT_CLIENT_ID = Deno.env.get('HUBSPOT_CLIENT_ID') ?? '';
 const HUBSPOT_CLIENT_SECRET = Deno.env.get('HUBSPOT_CLIENT_SECRET') ?? '';
 
 const HUBSPOT_API = 'https://api.hubapi.com';
+const HUBSPOT_CRM_WRITE_VERSION = '2026-09';
 const TOKEN_REFRESH_LEEWAY_MS = 2 * 60 * 1000; // refresh when <2 min left
 
 const CORS_HEADERS = {
@@ -49,10 +51,21 @@ function json(body: unknown, status = 200): Response {
 
 class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  details?: HubSpotValidationDetails;
+  constructor(status: number, message: string, details?: HubSpotValidationDetails) {
     super(message);
     this.status = status;
+    this.details = details;
   }
+}
+
+function crmObjectWritePath(objectType: string, objectId?: string | number): string {
+  const base = `/crm/objects/${HUBSPOT_CRM_WRITE_VERSION}/${encodeURIComponent(objectType)}`;
+  return objectId === undefined ? base : `${base}/${encodeURIComponent(String(objectId))}`;
+}
+
+function crmPropertyPath(objectType: string, property: string): string {
+  return `/crm/properties/${HUBSPOT_CRM_WRITE_VERSION}/${encodeURIComponent(objectType)}/${encodeURIComponent(property)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +258,7 @@ async function hubspot(
   if (!res.ok) {
     const message =
       (parsed as { message?: string })?.message ?? `HubSpot API error (${res.status})`;
-    throw new HttpError(res.status, message);
+    throw new HttpError(res.status, message, buildHubSpotValidationDetails(parsed, path));
   }
 
   return parsed;
@@ -833,7 +846,7 @@ async function executeAutomationAction(
   switch (act.type) {
     case 'create_task': {
       const dueDays = Number(cfg.dueInDays ?? 0) || 0;
-      await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
+      await hubspot(token, 'POST', crmObjectWritePath('tasks'), {
         properties: {
           hs_task_subject: str('subject', 'Follow up'),
           hs_task_body: str('body'),
@@ -846,7 +859,7 @@ async function executeAutomationAction(
       break;
     }
     case 'create_note': {
-      await hubspot(token, 'POST', '/crm/v3/objects/notes', {
+      await hubspot(token, 'POST', crmObjectWritePath('notes'), {
         properties: { hs_note_body: str('body'), hs_timestamp: Date.now() },
         associations: assoc(202),
       });
@@ -855,7 +868,7 @@ async function executeAutomationAction(
     case 'update_property': {
       const property = str('property');
       if (property && contactId) {
-        await hubspot(token, 'PATCH', `/crm/v3/objects/contacts/${contactId}`, {
+        await hubspot(token, 'PATCH', crmObjectWritePath('contacts', contactId), {
           properties: { [property]: str('value') },
         });
       }
@@ -866,11 +879,11 @@ async function executeAutomationAction(
       if (cfg.amount) props.amount = str('amount');
       if (cfg.pipeline) props.pipeline = str('pipeline');
       if (cfg.stage) props.dealstage = str('stage');
-      await hubspot(token, 'POST', '/crm/v3/objects/deals', { properties: props, associations: assoc(3) });
+      await hubspot(token, 'POST', crmObjectWritePath('deals'), { properties: props, associations: assoc(3) });
       break;
     }
     case 'create_ticket': {
-      await hubspot(token, 'POST', '/crm/v3/objects/tickets', {
+      await hubspot(token, 'POST', crmObjectWritePath('tickets'), {
         properties: {
           subject: str('subject', 'New ticket'),
           content: str('content'),
@@ -1149,7 +1162,7 @@ async function handleAction(
     // ----- Contacts -----
 
     case 'createContact':
-      return hubspot(token, 'POST', '/crm/v3/objects/contacts', {
+      return hubspot(token, 'POST', crmObjectWritePath('contacts'), {
         properties: (data.properties as Record<string, unknown>) ?? data,
       });
 
@@ -1192,7 +1205,7 @@ async function handleAction(
         patch[key] = value;
       }
       if (Object.keys(patch).length === 0) throw new HttpError(400, 'No writable properties provided');
-      return hubspot(token, 'PATCH', `/crm/v3/objects/contacts/${contactId}`, { properties: patch });
+      return hubspot(token, 'PATCH', crmObjectWritePath('contacts', contactId), { properties: patch });
     }
 
     // ----- Companies -----
@@ -1219,7 +1232,7 @@ async function handleAction(
     }
 
     case 'createCompany':
-      return hubspot(token, 'POST', '/crm/v3/objects/companies', {
+      return hubspot(token, 'POST', crmObjectWritePath('companies'), {
         properties: (data.properties as Record<string, unknown>) ?? data,
       });
 
@@ -1232,8 +1245,9 @@ async function handleAction(
       if (!contactId) throw new HttpError(400, 'Missing required field: contactId');
       if (!noteText) throw new HttpError(400, 'Missing required field: note text');
 
-      const result = await hubspot(token, 'POST', '/crm/v3/objects/notes', {
+      const result = await hubspot(token, 'POST', crmObjectWritePath('notes'), {
         properties: {
+          ...sanitizeProperties((data.properties as Record<string, unknown>) ?? {}),
           hs_note_body: noteText,
           hs_timestamp: timestamp ?? Date.now(),
         },
@@ -1252,7 +1266,7 @@ async function handleAction(
         try {
           const dueMs = followUpDate ? new Date(String(followUpDate)).getTime() : NaN;
           const fallbackDue = Date.now() + 3 * 24 * 60 * 60 * 1000; // ~3 days out
-          followUpTask = await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
+          followUpTask = await hubspot(token, 'POST', crmObjectWritePath('tasks'), {
             properties: buildTaskProperties({
               subject: 'Follow up on WhatsApp note',
               body: noteText.slice(0, 500),
@@ -1290,8 +1304,9 @@ async function handleAction(
       let result: unknown;
       let loggedAs = 'whatsapp';
       try {
-        result = await hubspot(token, 'POST', '/crm/v3/objects/communications', {
+        result = await hubspot(token, 'POST', crmObjectWritePath('communications'), {
           properties: {
+            ...sanitizeProperties((data.properties as Record<string, unknown>) ?? {}),
             hs_communication_channel_type: 'WHATS_APP',
             hs_communication_logged_from: 'CRM',
             hs_communication_body: text,
@@ -1305,9 +1320,13 @@ async function handleAction(
           ],
         });
       } catch (e) {
+        // A conditional-property failure must reach the extension so it can
+        // collect the required field. Falling back here would bypass the
+        // portal's communication rules by silently creating a different object.
+        if (e instanceof HttpError && e.details?.validation) throw e;
         console.warn('[hubspot] WhatsApp communication failed, falling back to note:', (e as Error)?.message);
         loggedAs = 'note';
-        result = await hubspot(token, 'POST', '/crm/v3/objects/notes', {
+        result = await hubspot(token, 'POST', crmObjectWritePath('notes'), {
           properties: { hs_note_body: text, hs_timestamp: ts },
           associations: [
             {
@@ -1324,7 +1343,7 @@ async function handleAction(
         try {
           const dueMs = followUpDate ? new Date(String(followUpDate)).getTime() : NaN;
           const fallbackDue = Date.now() + 3 * 24 * 60 * 60 * 1000;
-          followUpTask = await hubspot(token, 'POST', '/crm/v3/objects/tasks', {
+          followUpTask = await hubspot(token, 'POST', crmObjectWritePath('tasks'), {
             properties: buildTaskProperties({
               subject: 'Follow up on WhatsApp conversation',
               body: text.slice(0, 500),
@@ -1396,7 +1415,7 @@ async function handleAction(
         ];
       }
 
-      return hubspot(token, 'POST', '/crm/v3/objects/tickets', payload);
+      return hubspot(token, 'POST', crmObjectWritePath('tickets'), payload);
     }
 
     case 'associateTickets':
@@ -1444,7 +1463,7 @@ async function handleAction(
           },
         ];
       }
-      return hubspot(token, 'POST', '/crm/v3/objects/deals', payload);
+      return hubspot(token, 'POST', crmObjectWritePath('deals'), payload);
     }
 
     case 'associateDeals':
@@ -1469,7 +1488,10 @@ async function handleAction(
     case 'createTask': {
       // Map the extension's flat payload to real hs_task_* property names —
       // HubSpot rejects unknown property names, so a raw pass-through failed.
-      const properties = buildTaskProperties(data);
+      const properties = {
+        ...buildTaskProperties(data),
+        ...sanitizeProperties((data.properties as Record<string, unknown>) ?? {}),
+      };
       if (!properties.hs_task_subject) throw new HttpError(400, 'Missing required field: task subject');
       const contactId = data.contactId ? String(data.contactId) : null;
       const payload: Record<string, unknown> = { properties };
@@ -1483,7 +1505,7 @@ async function handleAction(
         ];
       }
 
-      return hubspot(token, 'POST', '/crm/v3/objects/tasks', payload);
+      return hubspot(token, 'POST', crmObjectWritePath('tasks'), payload);
     }
 
     case 'getContactTasks': {
@@ -1555,13 +1577,53 @@ async function handleAction(
       const prop = (await hubspot(
         token,
         'GET',
-        `/crm/v3/properties/${encodeURIComponent(objectType)}/${encodeURIComponent(property)}`,
-      )) as { options?: Array<{ label: string; value: string; hidden?: boolean }> };
+        crmPropertyPath(objectType, property),
+      )) as { label?: string; type?: string; fieldType?: string; options?: Array<{ label: string; value: string; hidden?: boolean }> };
       // HubSpot returns options already in display order; just drop hidden ones.
       const options = (prop.options || [])
         .filter((o) => o && o.hidden !== true)
         .map((o) => ({ value: o.value, label: o.label }));
-      return { options };
+      return { options, property: { name: property, label: prop.label || property, type: prop.type, fieldType: prop.fieldType } };
+    }
+
+    // Fetch the account's real definitions for fields HubSpot has declared
+    // required by its create form or conditional property logic. This action
+    // is intentionally name-scoped: the extension never downloads an entire
+    // portal schema merely to complete one rejected write.
+    case 'getPropertyDefinitions': {
+      const objectType = String((data as { objectType?: string }).objectType || 'contacts');
+      const requested = Array.isArray(data.properties) ? data.properties : [];
+      const names = [...new Set(requested.map((name) => String(name)).filter((name) => /^[A-Za-z0-9_]+$/.test(name)))].slice(0, 25);
+      const properties = await Promise.all(names.map(async (name) => {
+        const prop = (await hubspot(token, 'GET', crmPropertyPath(objectType, name))) as Record<string, unknown>;
+        let options = Array.isArray(prop.options)
+          ? (prop.options as Array<Record<string, unknown>>)
+            .filter((option) => option && option.hidden !== true)
+            .map((option) => ({ value: String(option.value ?? ''), label: String(option.label ?? option.value ?? '') }))
+          : [];
+        const referencedObjectType = typeof prop.referencedObjectType === 'string' ? prop.referencedObjectType : '';
+        if (!options.length && prop.externalOptions === true && referencedObjectType.toUpperCase() === 'OWNER') {
+          const owners = (await hubspot(token, 'GET', '/crm/v3/owners?limit=100')) as { results?: Array<Record<string, unknown>> };
+          options = (owners.results || [])
+            .filter((owner) => owner.archived !== true)
+            .map((owner) => ({
+              value: String(owner.id ?? ''),
+              label: [owner.firstName, owner.lastName].filter(Boolean).join(' ') || String(owner.email || owner.id || ''),
+            }));
+        }
+        return {
+          name,
+          label: String(prop.label || name),
+          description: typeof prop.description === 'string' ? prop.description : '',
+          type: typeof prop.type === 'string' ? prop.type : 'string',
+          fieldType: typeof prop.fieldType === 'string' ? prop.fieldType : 'text',
+          options,
+          externalOptions: prop.externalOptions === true,
+          referencedObjectType,
+          readOnly: Boolean((prop.modificationMetadata as Record<string, unknown> | undefined)?.readOnlyValue),
+        };
+      }));
+      return { properties: properties.filter((property) => !property.readOnly) };
     }
 
     // ----- Dashboard aggregates -----
@@ -1854,7 +1916,12 @@ Deno.serve(async (req) => {
   } catch (error) {
     if (error instanceof HttpError) {
       // Return 200 with error in body so supabase-js doesn't treat it as a non-2xx failure
-      return json({ error: error.message, status: error.status, notConnected: error.status === 403 }, 200);
+      return json({
+        error: error.message,
+        status: error.status,
+        notConnected: error.status === 403,
+        ...(error.details ? { details: error.details } : {}),
+      }, 200);
     }
 
     console.error('Edge function error:', error);

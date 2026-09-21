@@ -145,7 +145,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = EDGE_FUNCTION_TIM
 const hubspotReadCache = new Map();
 const hubspotReadsInFlight = new Map();
 async function callHubSpotEdgeFunction(action, data = {}) {
-  const cacheable = ['getPropertyOptions', 'getOwners', 'getOwnerById', 'getSidebarFields'].includes(action);
+  const cacheable = ['getPropertyOptions', 'getPropertyDefinitions', 'getOwners', 'getOwnerById', 'getSidebarFields'].includes(action);
   if (!cacheable) {
     if (/^(create|update|delete|save)/i.test(action)) hubspotReadCache.clear();
     return requestHubSpotEdgeFunction(action, data);
@@ -240,6 +240,7 @@ async function requestHubSpotEdgeFunction(action, data = {}) {
       const err = new Error(body.error);
       err.status = body.status;
       err.notConnected = body.notConnected === true;
+      err.details = body.details;
       throw err;
     }
     return body;
@@ -256,6 +257,15 @@ async function requestHubSpotEdgeFunction(action, data = {}) {
     }
     throw error;
   }
+}
+
+function hubSpotErrorResponse(error, fallback = 'HubSpot request failed') {
+  return {
+    success: false,
+    error: error?.message || fallback,
+    ...(error?.status ? { status: error.status } : {}),
+    ...(error?.details ? { details: error.details } : {}),
+  };
 }
 
 // Listen for messages from content script
@@ -520,7 +530,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })
         .catch(error => {
           console.error('[Background] HubSpot create contact failed:', error);
-          sendResponse({ success: false, error: error.message });
+          sendResponse(hubSpotErrorResponse(error, 'HubSpot could not create the contact'));
         });
     });
 
@@ -631,7 +641,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           console.error('[Background] ❌ HubSpot create ticket failed!');
           console.error('[Background] Error message:', error.message);
           console.error('[Background] Error stack:', error.stack);
-          sendResponse({ success: false, error: error.message });
+          sendResponse(hubSpotErrorResponse(error, 'HubSpot could not create the ticket'));
         });
     });
 
@@ -669,7 +679,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           console.error('[Background] ❌ HubSpot create note failed!');
           console.error('[Background] Error message:', error.message);
           console.error('[Background] Error stack:', error.stack);
-          sendResponse({ success: false, error: error.message });
+          sendResponse(hubSpotErrorResponse(error, 'HubSpot could not create the note'));
         });
     });
 
@@ -765,14 +775,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'logHubSpotWhatsAppMessage') {
     (async () => {
       try {
-        const { contactId, body, createTodo, followUpType, followUpDate } = request.data || {};
+        const { contactId, body, createTodo, followUpType, followUpDate, properties } = request.data || {};
         const result = await callHubSpotEdgeFunction('logWhatsAppMessage', {
-          contactId, body, createTodo, followUpType, followUpDate,
+          contactId, body, createTodo, followUpType, followUpDate, properties,
         });
         sendResponse({ success: true, loggedAs: result?.loggedAs || 'whatsapp', data: result?.data });
       } catch (error) {
         console.error('[Background] logWhatsAppMessage failed:', error);
-        sendResponse({ success: false, error: error.message });
+        sendResponse(hubSpotErrorResponse(error, 'HubSpot could not log the WhatsApp conversation'));
       }
     })();
     return true; // Keep channel open for async response
@@ -799,6 +809,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  if (request.action === 'getPropertyDefinitions') {
+    const objectType = request.objectType || request.data?.objectType || 'contacts';
+    const properties = request.properties || request.data?.properties || [];
+    (async () => {
+      try {
+        const result = await callHubSpotEdgeFunction('getPropertyDefinitions', { objectType, properties });
+        sendResponse({ success: true, properties: result?.properties || [] });
+      } catch (error) {
+        console.error('[Background] getPropertyDefinitions failed:', error);
+        sendResponse(hubSpotErrorResponse(error, 'Could not load the required HubSpot fields'));
+      }
+    })();
+    return true;
+  }
+
   // Patch a contact's properties (inline edits from the sidebar, e.g. lifecycle/lead status).
   if (request.action === 'updateContact') {
     const contactId = request.contactId || request.data?.contactId || null;
@@ -813,7 +838,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, data: result });
       } catch (error) {
         console.error('[Background] updateContact failed:', error);
-        sendResponse({ success: false, error: error.message });
+        sendResponse(hubSpotErrorResponse(error, 'HubSpot could not update the contact'));
       }
     })();
     return true; // Keep channel open for async response
@@ -941,7 +966,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, data: result });
       } catch (error) {
         console.error('[Background] createHubSpotDeal failed:', error);
-        sendResponse({ success: false, error: error.message });
+        sendResponse(hubSpotErrorResponse(error, 'HubSpot could not create the deal'));
       }
     })();
     return true;
@@ -1023,7 +1048,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           console.error('[Background] ❌ HubSpot create task failed!');
           console.error('[Background] Error message:', error.message);
           console.error('[Background] Error stack:', error.stack);
-          sendResponse({ success: false, error: error.message });
+          sendResponse(hubSpotErrorResponse(error, 'HubSpot could not create the task'));
         });
     });
 
@@ -1519,7 +1544,7 @@ async function createHubSpotTaskViaEdgeFunction(taskData, userId, accessToken) {
 async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
   whatsyncDebug('[Background] ===== CREATE NOTE VIA EDGE FUNCTION =====');
 
-  const { contactId, noteText, noteHtml, createTodo, followUpType, followUpDate } = noteData;
+  const { contactId, noteText, noteHtml, createTodo, followUpType, followUpDate, properties } = noteData;
 
   whatsyncDebug('[Background] Extracted values:');
   whatsyncDebug('[Background]   - contactId:', contactId, '(Type:', typeof contactId + ')');
@@ -1600,7 +1625,8 @@ async function createHubSpotNoteViaEdgeFunction(noteData, userId, accessToken) {
       // Optional follow-up task (the note modal's "Create a ... task to follow up")
       createTodo: createTodo || false,
       followUpType: followUpType || null,   // 'To-do' | 'Call' | 'Email'
-      followUpDate: followUpDate || null    // ISO date string for the task due date
+      followUpDate: followUpDate || null,   // ISO date string for the task due date
+      properties: properties || {},
     };
 
     whatsyncDebug('[Background] Contact ID validation:');

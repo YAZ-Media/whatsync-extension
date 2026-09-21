@@ -2766,6 +2766,94 @@ body.whatsapp-theme-light #ws-inline-log-toolbar {
     gap: 4px;
 }
 
+/* HubSpot conditional-property completion */
+.hubspot-required-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000020;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(8, 20, 27, 0.66);
+    backdrop-filter: blur(4px);
+}
+
+.hubspot-required-dialog {
+    width: min(460px, calc(100vw - 32px));
+    max-height: min(720px, calc(100vh - 40px));
+    overflow-y: auto;
+    padding: 22px;
+    border: 1px solid rgba(255, 122, 89, 0.34);
+    border-radius: 18px;
+    background: #fff;
+    color: #1f2d3d;
+    box-shadow: 0 24px 70px rgba(8, 20, 27, 0.32);
+}
+
+.hubspot-required-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.hubspot-required-header h3 { margin: 3px 0 0; font-size: 21px; line-height: 1.25; }
+.hubspot-required-dialog > p { margin: 10px 0 18px; color: #52616b; font-size: 14px; line-height: 1.5; }
+
+.hubspot-required-close {
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: 10px;
+    background: #f2f5f6;
+    color: #33475b;
+    font-size: 25px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.hubspot-required-fields { display: grid; gap: 14px; }
+.hubspot-required-field { display: grid; gap: 7px; color: #33475b; font-size: 13px; font-weight: 650; }
+.hubspot-required-field b { color: #e85d3f; margin-left: 3px; }
+.hubspot-required-field small { color: #6f7f89; font-weight: 400; line-height: 1.4; }
+
+.hubspot-required-field input,
+.hubspot-required-field select,
+.hubspot-required-field textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    border: 1px solid #cbd6dc;
+    border-radius: 10px;
+    background: #fff;
+    color: #1f2d3d;
+    font: inherit;
+    font-weight: 500;
+}
+
+.hubspot-required-field textarea { resize: vertical; }
+.hubspot-required-field :is(input, select, textarea):focus { outline: 3px solid rgba(255, 122, 89, 0.18); border-color: #ff7a59; }
+.hubspot-required-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+.hubspot-required-actions button {
+    min-height: 42px;
+    padding: 9px 16px;
+    border: 1px solid #cbd6dc;
+    border-radius: 10px;
+    background: #fff;
+    color: #33475b;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.hubspot-required-actions .hubspot-required-save {
+    border-color: #ff7a59;
+    background: linear-gradient(135deg, #ff7a59, #e85d3f);
+    color: #fff;
+}
+
 /* Note Modal Styles */
 .note-modal-overlay {
     position: fixed;

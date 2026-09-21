@@ -24,8 +24,8 @@ test('sidebar appearance has drag ordering and a functional fictional-data previ
   const designer = read('website/src/pages/dashboard/SidebarDesigner.tsx');
   assert.match(designer, /draggable=\{canManage\}/);
   assert.match(designer, /reorderField\(sourceKey, targetKey\)/);
-  assert.match(designer, /previewMode/);
-  assert.match(designer, /Preview sidebar/);
+  assert.match(designer, /lg:grid-cols-\[minmax\(0,1fr\)_minmax\(360px,420px\)\]/);
+  assert.match(designer, /lg:sticky lg:top-6/);
   assert.match(designer, /Aisha Rahman/);
-  assert.doesNotMatch(designer, /fetchEdgeFunction|DEMO_SAMPLE|moveField/);
+  assert.doesNotMatch(designer, /fetchEdgeFunction|DEMO_SAMPLE|moveField|previewMode|Preview sidebar/);
 });

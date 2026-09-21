@@ -4168,9 +4168,50 @@ function hubSpotResponseError(response, fallback = 'HubSpot could not save this 
 }
 
 function requiredHubSpotProperties(error) {
-  const names = new Set(Array.isArray(error?.details?.requiredProperties) ? error.details.requiredProperties : []);
-  const message = String(error?.message || '');
-  for (const match of message.matchAll(/Property\s+['"`]([A-Za-z0-9_]+)['"`]\s+is required\b/gi)) names.add(match[1]);
+  const names = new Set();
+  const add = (value) => {
+    const name = String(value ?? '').trim();
+    if (/^[A-Za-z0-9_]+$/.test(name)) names.add(name);
+  };
+  const scanMessage = (value) => {
+    if (typeof value !== 'string') return;
+    const patterns = [
+      /Property\s+['"`]([A-Za-z0-9_]+)['"`]\s+is required\b/gi,
+      /\b([A-Za-z][A-Za-z0-9_]*)\s+is required because of a conditional property rule\b/gi,
+      /A value for\s+['"`]?([A-Za-z][A-Za-z0-9_]*)['"`]?\s+must be provided\b/gi,
+    ];
+    patterns.forEach((pattern) => {
+      for (const match of value.matchAll(pattern)) add(match[1]);
+    });
+  };
+  const visit = (value, depth = 0) => {
+    if (value == null || depth > 6) return;
+    if (typeof value === 'string') {
+      scanMessage(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    if (typeof value !== 'object') return;
+    ['requiredProperties', 'missingRequiredProperties'].forEach((key) => {
+      const required = value[key];
+      if (Array.isArray(required)) required.forEach(add);
+      else add(required);
+    });
+    const requiredSignal = [value.category, value.subCategory, value.code, value.error, value.message]
+      .some((entry) => /required/i.test(String(entry ?? '')));
+    if (requiredSignal) {
+      add(value.propertyName);
+      add(value.property);
+      const contextNames = value.context?.propertyName;
+      if (Array.isArray(contextNames)) contextNames.forEach(add);
+      else add(contextNames);
+    }
+    Object.values(value).forEach((child) => visit(child, depth + 1));
+  };
+  visit(error);
   return [...names].filter((name) => /^[A-Za-z0-9_]+$/.test(String(name)));
 }
 
@@ -4561,42 +4602,82 @@ async function loadRecentActivities(contactId, section) {
   }
 }
 
+function formatSidebarDateTime(value) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return new Intl.DateTimeFormat(undefined, {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(date);
+}
+
+function elapsedLeadStageTime(value) {
+  if (!value) return '';
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return '';
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 60) return `for ${Math.max(1, minutes)} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `for ${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.floor(hours / 24);
+  return `for ${days} day${days === 1 ? '' : 's'}`;
+}
+
+function associationBadges(item) {
+  const association = item?.whatsyncAssociation || {};
+  const labels = Array.isArray(association.labels) ? association.labels : [];
+  const badges = association.isPrimary && !labels.some((label) => /^primary$/i.test(label))
+    ? ['Primary', ...labels]
+    : labels;
+  return badges.map((label) => `<span class="ws-association-badge">${escapeHtml(label)}</span>`).join('');
+}
+
 function formatRelatedSectionItem(sectionName, item, contactId) {
   const properties = item?.properties || {};
   if (sectionName === 'companies') {
     const name = properties.name || 'Company';
-    const meta = [properties.domain, properties.industry, properties.city, properties.country]
-      .filter(Boolean)
-      .join(' · ');
     return `
-      <div class="ws-related-item">
+      <div class="ws-related-item ws-association-card">
+        <span class="ws-association-icon" aria-hidden="true">⌂</span>
         <div class="ws-related-item-body">
-          <strong>${escapeHtml(name)}</strong>
-          ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
+          <div class="ws-association-heading"><strong>${escapeHtml(name)}</strong>${associationBadges(item)}</div>
+          ${properties.domain ? `<span>Company domain: <b>${escapeHtml(properties.domain)}</b></span>` : ''}
+          ${properties.industry ? `<span>Industry: <b>${escapeHtml(properties.industry)}</b></span>` : ''}
         </div>
         ${hubSpotOpenLink('company', item.id, 'Open company in HubSpot')}
       </div>`;
   }
   if (sectionName === 'contacts') {
     const name = [properties.firstname, properties.lastname].filter(Boolean).join(' ') || properties.email || 'Contact';
-    const meta = [properties.jobtitle, properties.email].filter(Boolean).join(' · ');
     return `
-      <div class="ws-related-item">
+      <div class="ws-related-item ws-association-card">
+        <span class="ws-association-icon" aria-hidden="true">○</span>
         <div class="ws-related-item-body">
-          <strong>${escapeHtml(name)}</strong>
-          ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
+          <div class="ws-association-heading"><strong>${escapeHtml(name)}</strong>${associationBadges(item)}</div>
+          ${properties.jobtitle ? `<span>${escapeHtml(properties.jobtitle)}</span>` : ''}
+          ${properties.email ? `<span>Email: <b>${escapeHtml(properties.email)}</b></span>` : ''}
         </div>
         ${hubSpotOpenLink('contact', item.id, 'Open contact in HubSpot')}
       </div>`;
   }
   if (sectionName === 'lead_tracker') {
-    const relative = activityRelativeTime(item.timestamp);
+    const lead = item?.whatsyncLead || {};
+    const stage = lead.stageLabel || properties.hs_pipeline_stage || 'No stage';
+    const pipeline = lead.pipelineLabel || properties.hs_pipeline || '';
+    const stages = Array.isArray(lead.stages) ? lead.stages : [];
+    const currentIndex = Number.isInteger(lead.stageIndex) ? lead.stageIndex : -1;
+    const stageTime = elapsedLeadStageTime(lead.stageEnteredAt);
+    const leadUrl = hubSpotRecordUrl('lead', item.id);
     return `
-      <div class="ws-related-item ws-stage-history-item">
-        <span class="ws-stage-dot" aria-hidden="true"></span>
-        <div class="ws-related-item-body">
-          <strong>${escapeHtml(item.propertyLabel || 'Stage')} · ${escapeHtml(item.label || item.value || 'Updated')}</strong>
-          ${relative ? `<span>${escapeHtml(relative)}</span>` : ''}
+      <div class="ws-lead-tracker-card">
+        <div class="ws-lead-property"><span>Owner:</span> <strong>${escapeHtml(lead.ownerLabel || 'Unassigned')}</strong>${hubSpotOpenLink('lead', item.id, 'Open lead in HubSpot')}</div>
+        <div class="ws-lead-property"><span>Lead type:</span> <strong>${escapeHtml(lead.leadTypeLabel || properties.hs_lead_type || '--')}</strong></div>
+        <div class="ws-lead-property"><span>Stage:</span> <strong>${escapeHtml(stage)}</strong>${pipeline ? ` <span>(${escapeHtml(pipeline)})</span>` : ''}${stageTime ? ` <span>${escapeHtml(stageTime)}</span>` : ''}</div>
+        <div class="ws-lead-created">Created on ${escapeHtml(formatSidebarDateTime(lead.createdAt || properties.hs_createdate || item.createdAt))}</div>
+        ${stages.length ? `<div class="ws-lead-progress" role="img" aria-label="${escapeHtml(`${stage} in ${pipeline || 'lead pipeline'}`)}">${stages.map((pipelineStage, index) => `<span class="${index < currentIndex ? 'complete' : ''}${index === currentIndex ? ' current' : ''}" title="${escapeHtml(pipelineStage.label)}"></span>`).join('')}</div>` : ''}
+        <div class="ws-lead-activity-grid">
+          <div><strong>Last activity</strong><span>${escapeHtml(formatSidebarDateTime(lead.lastActivityAt))}</span></div>
+          <div><strong>Next activity</strong>${lead.nextActivityAt ? `<span>${escapeHtml(formatSidebarDateTime(lead.nextActivityAt))}</span>` : leadUrl ? `<a href="${leadUrl}" target="_blank" rel="noopener noreferrer">Schedule in HubSpot</a>` : '<span>Not scheduled</span>'}</div>
         </div>
       </div>`;
   }
@@ -4617,15 +4698,84 @@ function formatRelatedSectionItem(sectionName, item, contactId) {
   return '';
 }
 
-async function loadRelatedSidebarSection(section) {
+function relatedSectionLoadingLabel(sectionName) {
+  return ({
+    companies: 'Loading companies...',
+    contacts: 'Loading contacts...',
+    lead_tracker: 'Loading HubSpot leads...',
+    attachments: 'Loading attachments...',
+  })[sectionName] || 'Loading HubSpot data...';
+}
+
+function showRelatedSectionLoading(section) {
+  const list = section.querySelector('.ws-related-list');
+  const sectionName = section.getAttribute('data-section');
+  if (!list) return;
+  list.innerHTML = `<div class="ws-related-loading" role="status"><div class="loading-spinner"></div><p>${escapeHtml(relatedSectionLoadingLabel(sectionName))}</p></div>`;
+}
+
+function renderRelatedSidebarSection(section, payload) {
   const contactId = section.getAttribute('data-contact-id');
   const sectionName = section.getAttribute('data-section');
   const list = section.querySelector('.ws-related-list');
   const count = section.querySelector('.ws-related-count');
   if (!contactId || !sectionName || !list) return;
 
-  if (count) count.textContent = '…';
-  list.innerHTML = '<div class="activity-skeleton"></div>'.repeat(2);
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  if (count) count.textContent = String(
+    sectionName === 'attachments'
+      ? results.reduce((total, item) => total + (Number(item.count) || 0), 0)
+      : (Number.isFinite(Number(payload?.total)) ? Number(payload.total) : results.length)
+  );
+  const emptyMessages = {
+    companies: 'No associated companies.',
+    contacts: 'No other contacts are associated with this company.',
+    lead_tracker: 'No HubSpot Lead records are associated with this contact.',
+    attachments: 'No attachments were found in HubSpot notes.',
+  };
+  if (payload?.unavailable) {
+    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}</div>`;
+  } else {
+    const recordUrl = ['companies', 'contacts'].includes(sectionName)
+      ? hubSpotRecordUrl('contact', contactId)
+      : null;
+    const viewAll = recordUrl && results.length
+      ? `<a class="ws-view-all-associations" href="${recordUrl}" target="_blank" rel="noopener noreferrer">View all associated ${sectionName === 'companies' ? 'Companies' : 'Contacts'} ↗</a>`
+      : '';
+    list.innerHTML = results.length
+      ? results.map((item) => formatRelatedSectionItem(sectionName, item, contactId)).join('')
+      : `<div class="ws-related-empty">${escapeHtml(emptyMessages[sectionName] || 'No records found.')}</div>`;
+    list.insertAdjacentHTML('beforeend', viewAll);
+  }
+  section.dataset.loaded = 'true';
+  delete section.dataset.loading;
+}
+
+function renderRelatedSidebarSectionError(section, code) {
+  const list = section.querySelector('.ws-related-list');
+  const count = section.querySelector('.ws-related-count');
+  if (!list) return;
+  if (count) count.textContent = '0';
+  delete section.dataset.loaded;
+  delete section.dataset.loading;
+  const message = code === 'SIDEBAR_SECTION_UNAVAILABLE'
+    ? 'Refresh WhatsApp Web to load this section with the latest WhatSync connection.'
+    : 'We could not load this HubSpot data. Check your connection and try again.';
+  list.innerHTML = `
+    <div class="ws-related-error" role="status">
+      <p>${escapeHtml(message)}</p>
+      <button type="button" class="ws-related-retry">Try again</button>
+    </div>`;
+  list.querySelector('.ws-related-retry')?.addEventListener('click', () => loadRelatedSidebarSection(section), { once: true });
+}
+
+async function loadRelatedSidebarSection(section) {
+  const contactId = section.getAttribute('data-contact-id');
+  const sectionName = section.getAttribute('data-section');
+  if (!contactId || !sectionName || section.dataset.loading === 'true') return;
+
+  section.dataset.loading = 'true';
+  showRelatedSectionLoading(section);
   try {
     const response = await sendExtensionMessage({
       action: 'getSidebarSection',
@@ -4637,40 +4787,45 @@ async function loadRelatedSidebarSection(section) {
       loadError.code = response?.code || 'SIDEBAR_SECTION_FAILED';
       throw loadError;
     }
-    const results = Array.isArray(response.results) ? response.results : [];
-    if (count) count.textContent = String(
-      sectionName === 'attachments'
-        ? results.reduce((total, item) => total + (Number(item.count) || 0), 0)
-        : results.length
-    );
-    const emptyMessages = {
-      companies: 'No associated companies.',
-      contacts: 'No other contacts are associated with this company.',
-      lead_tracker: 'No lifecycle or lead status changes yet.',
-      attachments: 'No attachments were found in HubSpot notes.',
-    };
-    list.innerHTML = results.length
-      ? results.map((item) => formatRelatedSectionItem(sectionName, item, contactId)).join('')
-      : `<div class="ws-related-empty">${escapeHtml(emptyMessages[sectionName] || 'No records found.')}</div>`;
-    section.dataset.loaded = 'true';
+    renderRelatedSidebarSection(section, response);
   } catch (error) {
     console.warn(`[Content] Could not load ${sectionName} section:`, error);
-    if (count) count.textContent = '—';
-    delete section.dataset.loaded;
-    const message = error?.code === 'SIDEBAR_SECTION_UNAVAILABLE'
-      ? 'This section needs the latest WhatSync connection. Refresh WhatsApp Web and try again.'
-      : 'We could not load this HubSpot data. Check your connection and try again.';
-    list.innerHTML = `
-      <div class="ws-related-error" role="status">
-        <p>${escapeHtml(message)}</p>
-        <button type="button" class="ws-related-retry">Try again</button>
-      </div>`;
-    list.querySelector('.ws-related-retry')?.addEventListener('click', () => loadRelatedSidebarSection(section), { once: true });
+    renderRelatedSidebarSectionError(section, error?.code);
+  }
+}
+
+async function preloadRelatedSidebarSections(sections) {
+  const candidates = sections.filter((section) => section.dataset.loaded !== 'true' && section.dataset.loading !== 'true');
+  if (!candidates.length) return;
+  const contactId = candidates[0].getAttribute('data-contact-id');
+  if (!contactId) return;
+  candidates.forEach((section) => {
+    section.dataset.loading = 'true';
+    showRelatedSectionLoading(section);
+  });
+  try {
+    const requested = candidates.map((section) => section.getAttribute('data-section')).filter(Boolean);
+    const response = await sendExtensionMessage({ action: 'getSidebarSections', contactId, sections: requested });
+    if (!response?.success) {
+      const error = new Error(response?.error || 'Could not preload HubSpot sections');
+      error.code = response?.code;
+      throw error;
+    }
+    candidates.forEach((section) => {
+      const sectionName = section.getAttribute('data-section');
+      const payload = response.sections?.[sectionName];
+      if (payload?.error) renderRelatedSidebarSectionError(section, 'SIDEBAR_SECTION_FAILED');
+      else renderRelatedSidebarSection(section, payload || { results: [] });
+    });
+  } catch (error) {
+    candidates.forEach((section) => delete section.dataset.loading);
+    await Promise.all(candidates.map((section) => loadRelatedSidebarSection(section)));
   }
 }
 
 function setupRelatedSidebarSections() {
-  document.querySelectorAll('#hubspot-sidebar .ws-related-section').forEach((section) => {
+  const sections = [...document.querySelectorAll('#hubspot-sidebar .ws-related-section')];
+  sections.forEach((section) => {
     const header = section.querySelector('.ws-related-header');
     const content = section.querySelector('.ws-related-content');
     const chevron = section.querySelector('.ws-related-chevron');
@@ -4681,9 +4836,14 @@ function setupRelatedSidebarSections() {
       content.hidden = !willExpand;
       header.setAttribute('aria-expanded', String(willExpand));
       if (chevron) chevron.style.transform = willExpand ? 'rotate(180deg)' : 'rotate(0deg)';
-      if (willExpand && section.dataset.loaded !== 'true') loadRelatedSidebarSection(section);
+      if (willExpand && section.dataset.loaded !== 'true' && section.dataset.loading !== 'true') {
+        loadRelatedSidebarSection(section);
+      }
     });
   });
+  const preload = () => preloadRelatedSidebarSections(sections);
+  if ('requestIdleCallback' in window) window.requestIdleCallback(preload, { timeout: 600 });
+  else setTimeout(preload, 120);
 }
 
 // Set up the Recent activity section: collapsible header + initial load. Expanded by default.
@@ -10619,7 +10779,7 @@ function relatedSidebarSectionMarkup(key, title, contactId) {
           <svg class="chevron-icon ws-related-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
-          <span>${escapeHtml(title)} (<span class="ws-related-count">…</span>)</span>
+          <span>${escapeHtml(title)} (<span class="ws-related-count">0</span>)</span>
         </span>
       </button>
       <div class="ws-related-content" hidden>
@@ -11469,6 +11629,7 @@ let hubspotPortalId = null;
 const HUBSPOT_OBJECT_TYPE_IDS = {
   contact: '0-1',
   company: '0-2',
+  lead: '0-136',
   deal: '0-3',
   ticket: '0-5',
   note: '0-46',
@@ -11483,7 +11644,7 @@ const HUBSPOT_OBJECT_TYPE_IDS = {
 function hubSpotRecordUrl(objectType, objectId) {
   const typeId = HUBSPOT_OBJECT_TYPE_IDS[objectType];
   if (!hubspotPortalId || !typeId || !objectId) return null;
-  return `https://app.hubspot.com/contacts/${hubspotPortalId}/record/${typeId}/${objectId}`;
+  return `https://app.hubspot.com/contacts/${encodeURIComponent(hubspotPortalId)}/record/${encodeURIComponent(typeId)}/${encodeURIComponent(String(objectId))}`;
 }
 
 // Returns an "open in HubSpot" anchor (external-link icon) for a record card, or an

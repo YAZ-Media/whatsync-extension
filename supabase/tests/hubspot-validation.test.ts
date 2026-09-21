@@ -34,6 +34,13 @@ Deno.test('parses the current HubSpot conditional and create-form error shapes',
     message: 'A value for custom_contact_type must be provided',
     context: { propertyName: ['custom_contact_type'] },
   }] }), ['custom_contact_type']);
+  assertEquals(extractHubSpotRequiredProperties({
+    response: {
+      validation: {
+        missingRequiredProperties: ['disqualification_reason'],
+      },
+    },
+  }), ['disqualification_reason']);
 });
 
 Deno.test('builds safe validation metadata for the current object write path', () => {

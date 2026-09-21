@@ -17,8 +17,15 @@ test('all configurable relationship sections have a real extension and API path'
     assert.match(hubspot, new RegExp(`case '${key}'`));
   }
   assert.match(background, /request\.action === 'getSidebarSection'/);
+  assert.match(background, /request\.action === 'getSidebarSections'/);
   assert.match(background, /SIDEBAR_SECTION_UNAVAILABLE/);
   assert.match(hubspot, /case 'getSidebarSection'/);
+  assert.match(hubspot, /case 'getSidebarSections'/);
+  assert.match(hubspot, /getAllAssociationIds\(token, 'contacts', contactId, 'leads'\)/);
+  assert.doesNotMatch(hubspot, /getContactStageHistory/);
+  assert.match(content, /preloadRelatedSidebarSections/);
+  assert.match(content, /requestIdleCallback/);
+  assert.doesNotMatch(content, /ws-related-count">…/);
 });
 
 test('HubSpot conditional rules use enforced writes and remain configurable', () => {
@@ -33,7 +40,7 @@ test('HubSpot conditional rules use enforced writes and remain configurable', ()
 test('related sections share the CRM hierarchy and hide technical backend errors', () => {
   const content = read('content.js');
   const css = read('content.css');
-  assert.match(content, /This section needs the latest WhatSync connection/);
+  assert.match(content, /Refresh WhatsApp Web to load this section with the latest WhatSync connection/);
   assert.doesNotMatch(content, /escapeHtml\(error\?\.message/);
   assert.match(css, /\.activities-section,\s*#hubspot-sidebar \.ws-related-section/);
   assert.match(css, /\.ws-related-retry/);

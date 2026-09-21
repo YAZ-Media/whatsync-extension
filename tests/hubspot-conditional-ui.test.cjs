@@ -21,6 +21,23 @@ test('sidebar recognizes HubSpot conditional required property errors', () => {
   assert.deepEqual([...result], ['lead_tier', 'custom_reason']);
 });
 
+test('sidebar recognizes nested HubSpot conditional validation payloads', () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functions(['requiredHubSpotProperties']), ctx);
+  const result = ctx.requiredHubSpotProperties({
+    details: {
+      response: {
+        errors: [{
+          code: 'MISSING_CONDITIONAL_REQUIRED_PROPERTY',
+          context: { missingRequiredProperties: ['disqualification_reason'] },
+          message: 'A value for lead_tier must be provided',
+        }],
+      },
+    },
+  });
+  assert.deepEqual([...result], ['disqualification_reason', 'lead_tier']);
+});
+
 test('conditional write retries atomically with the required values', async () => {
   let attempts = 0;
   let requestedDefinitions = [];

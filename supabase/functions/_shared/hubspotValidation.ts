@@ -47,6 +47,11 @@ export function extractHubSpotRequiredProperties(payload: unknown): string[] {
     }
     if (typeof value !== 'object') return;
     const record = value as Record<string, unknown>;
+    for (const key of ['requiredProperties', 'missingRequiredProperties']) {
+      const names = record[key];
+      if (Array.isArray(names)) names.forEach((name) => addProperty(found, name));
+      else addProperty(found, names);
+    }
     const requiredSignal = [record.category, record.subCategory, record.code, record.error]
       .some((entry) => /required/i.test(String(entry ?? ''))) || /required/i.test(String(record.message ?? ''));
     if (requiredSignal) {
@@ -60,9 +65,7 @@ export function extractHubSpotRequiredProperties(payload: unknown): string[] {
       if (Array.isArray(contextProperties)) contextProperties.forEach((name) => addProperty(found, name));
       else addProperty(found, contextProperties);
     }
-    for (const [key, child] of Object.entries(record)) {
-      if (['message', 'errors', 'context', 'details', 'error'].includes(key)) visit(child, depth + 1);
-    }
+    for (const child of Object.values(record)) visit(child, depth + 1);
   };
   visit(payload);
   return [...found];

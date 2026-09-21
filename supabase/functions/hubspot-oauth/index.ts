@@ -511,9 +511,9 @@ serve(async (req) => {
         authUrl.searchParams.set('redirect_uri', redirectUri);
         authUrl.searchParams.set('scope', finalScopes);
         // Optional scopes are granted when the portal/app supports them and
-        // skipped otherwise — sales-email-read lets the sidebar's Recent
-        // Activity timeline include logged sales emails.
-        authUrl.searchParams.set('optional_scope', 'sales-email-read');
+        // skipped otherwise — sales-email-read enriches Recent Activity and
+        // crm.objects.leads.read powers the real HubSpot Lead Stage Tracker.
+        authUrl.searchParams.set('optional_scope', 'sales-email-read crm.objects.leads.read');
         authUrl.searchParams.set('state', state);
         return new Response(
           JSON.stringify({ authUrl: authUrl.toString() }),

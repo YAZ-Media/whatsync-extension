@@ -293,6 +293,67 @@ async function getAllAssociationIds(
   return [...new Set(ids)];
 }
 
+type AssociationSummary = {
+  id: string;
+  labels: string[];
+  isPrimary: boolean;
+};
+
+async function getAllAssociationSummaries(
+  token: string,
+  fromObjectType: string,
+  fromObjectId: string,
+  toObjectType: string,
+): Promise<AssociationSummary[]> {
+  const associations = new Map<string, AssociationSummary>();
+  let after: string | null = null;
+  for (let page = 0; page < 20; page += 1) {
+    const query = after ? `?limit=500&after=${encodeURIComponent(after)}` : '?limit=500';
+    const response = await hubspot(
+      token,
+      'GET',
+      `/crm/v4/objects/${fromObjectType}/${fromObjectId}/associations/${toObjectType}${query}`,
+    ) as {
+      results?: Array<{
+        toObjectId?: number | string;
+        associationTypes?: Array<{ label?: string | null }>;
+      }>;
+      paging?: { next?: { after?: string | number } };
+    };
+    for (const result of response.results ?? []) {
+      const id = String(result.toObjectId ?? '');
+      if (!id) continue;
+      const labels = (result.associationTypes ?? [])
+        .map((type) => String(type.label ?? '').trim())
+        .filter(Boolean);
+      associations.set(id, {
+        id,
+        labels,
+        isPrimary: labels.some((label) => /^primary$/i.test(label)),
+      });
+    }
+    const next = response.paging?.next?.after;
+    if (next === undefined || next === null || next === '') break;
+    after = String(next);
+  }
+  return [...associations.values()];
+}
+
+async function getContactCompanies(
+  token: string,
+  contactId: string,
+): Promise<{ results: unknown[] }> {
+  const associations = await getAllAssociationSummaries(token, 'contacts', contactId, 'companies');
+  const companies = await batchReadObjects(token, 'companies', associations.map(({ id }) => id), COMPANY_PROPERTIES);
+  const byId = new Map(associations.map((association) => [association.id, association]));
+  return {
+    results: (companies as Array<Record<string, unknown>>).map((company) => ({
+      ...company,
+      whatsyncAssociation: byId.get(String(company.id ?? '')) ?? null,
+    })),
+  };
+}
+
 // Fetch objects associated with a contact (tickets, deals, notes, tasks)
 async function getContactAssociations(
   token: string,
@@ -345,69 +406,160 @@ async function getRelatedCompanyContacts(
   if (companyIds.length === 0) return { results: [] };
 
   const associatedIds = new Set<string>();
+  const associationByContactId = new Map<string, AssociationSummary>();
   await Promise.all(
     companyIds.map(async (companyId) => {
-      const contactIds = await getAllAssociationIds(token, 'companies', companyId, 'contacts');
-      for (const id of contactIds) {
-        if (id && id !== contactId) associatedIds.add(id);
+      const contacts = await getAllAssociationSummaries(token, 'companies', companyId, 'contacts');
+      for (const association of contacts) {
+        if (association.id && association.id !== contactId) {
+          associatedIds.add(association.id);
+          associationByContactId.set(association.id, association);
+        }
       }
     }),
   );
 
+  const contacts = await batchReadObjects(
+    token,
+    'contacts',
+    [...associatedIds],
+    RELATED_CONTACT_PROPERTIES,
+  );
   return {
-    results: await batchReadObjects(
-      token,
-      'contacts',
-      [...associatedIds],
-      RELATED_CONTACT_PROPERTIES,
-    ),
+    results: (contacts as Array<Record<string, unknown>>).map((contact) => ({
+      ...contact,
+      whatsyncAssociation: associationByContactId.get(String(contact.id ?? '')) ?? null,
+    })),
   };
 }
 
-async function getContactStageHistory(
+async function getContactLeads(
   token: string,
   contactId: string,
-): Promise<{ results: Array<Record<string, string>> }> {
-  const [contact, lifecycleProperty, leadStatusProperty] = await Promise.all([
-    hubspot(
-      token,
-      'GET',
-      `/crm/v3/objects/contacts/${contactId}?propertiesWithHistory=lifecyclestage,hs_lead_status`,
-    ) as Promise<{
-      propertiesWithHistory?: Record<string, Array<{ value?: string; timestamp?: string }>>;
+): Promise<{
+  results: unknown[];
+  total?: number;
+  unavailable?: boolean;
+  requiresReauthorization?: boolean;
+  message?: string;
+}> {
+  let leadIds: string[];
+  try {
+    leadIds = await getAllAssociationIds(token, 'contacts', contactId, 'leads');
+  } catch (error) {
+    if (error instanceof HttpError && [401, 403].includes(error.status)) {
+      return {
+        results: [],
+        unavailable: true,
+        requiresReauthorization: true,
+        message: 'Reconnect HubSpot to allow WhatSync to read Lead records.',
+      };
+    }
+    if (error instanceof HttpError && error.status === 404) {
+      return {
+        results: [],
+        unavailable: true,
+        message: 'HubSpot Leads is not available for this account.',
+      };
+    }
+    throw error;
+  }
+  if (leadIds.length === 0) return { results: [], total: 0 };
+
+  const activityProperties = [
+    'hs_lastactivitydate', 'notes_last_updated', 'hs_last_engagement_date',
+    'hs_next_activity_date', 'notes_next_activity_date',
+  ];
+  const [pipelineResponse, ownersResponse, leadTypeProperty, leadRecords] = await Promise.all([
+    hubspot(token, 'GET', '/crm/v3/pipelines/leads').catch(() => ({ results: [] })) as Promise<{
+      results?: Array<{
+        id: string;
+        label: string;
+        stages?: Array<{ id: string; label: string }>;
+      }>;
     }>,
-    hubspot(token, 'GET', '/crm/v3/properties/contacts/lifecyclestage').catch(() => null) as Promise<{
+    hubspot(token, 'GET', '/crm/v3/owners?limit=100').catch(() => ({ results: [] })) as Promise<{
+      results?: Array<{ id: string; firstName?: string; lastName?: string; email?: string }>;
+    }>,
+    hubspot(token, 'GET', '/crm/v3/properties/leads/hs_lead_type').catch(() => null) as Promise<{
       options?: Array<{ value: string; label: string }>;
     } | null>,
-    hubspot(token, 'GET', '/crm/v3/properties/contacts/hs_lead_status').catch(() => null) as Promise<{
-      options?: Array<{ value: string; label: string }>;
-    } | null>,
+    Promise.all(leadIds.slice(0, 20).map(async (leadId) => {
+      const readLead = (properties: string[]) => hubspot(
+        token,
+        'GET',
+        `/crm/v3/objects/leads/${encodeURIComponent(leadId)}?properties=${encodeURIComponent(properties.join(','))}&propertiesWithHistory=hs_pipeline_stage`,
+      ) as Promise<{
+        id?: string | number;
+        properties?: Record<string, string>;
+        propertiesWithHistory?: Record<string, Array<{ value?: string; timestamp?: string }>>;
+        createdAt?: string;
+        updatedAt?: string;
+      }>;
+      try {
+        return await readLead([...LEAD_PROPERTIES, ...activityProperties]);
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 400) return readLead(LEAD_PROPERTIES);
+        throw error;
+      }
+    })),
   ]);
 
-  const labelFor = (
-    property: { options?: Array<{ value: string; label: string }> } | null,
-    value: string,
-  ) => property?.options?.find((option) => String(option.value) === value)?.label || value;
-
-  const results: Array<Record<string, string>> = [];
-  const histories = contact.propertiesWithHistory ?? {};
-  for (const [propertyName, propertyLabel, property] of [
-    ['lifecyclestage', 'Lifecycle stage', lifecycleProperty],
-    ['hs_lead_status', 'Lead status', leadStatusProperty],
-  ] as const) {
-    for (const item of histories[propertyName] ?? []) {
-      if (!item.value || !item.timestamp) continue;
-      results.push({
-        property: propertyName,
-        propertyLabel,
-        value: item.value,
-        label: labelFor(property, item.value),
-        timestamp: item.timestamp,
-      });
+  const pipelineLabels = new Map<string, string>();
+  const stageLabels = new Map<string, string>();
+  for (const pipeline of pipelineResponse.results ?? []) {
+    pipelineLabels.set(String(pipeline.id), pipeline.label || String(pipeline.id));
+    for (const stage of pipeline.stages ?? []) {
+      stageLabels.set(`${pipeline.id}:${stage.id}`, stage.label || String(stage.id));
+      if (!stageLabels.has(String(stage.id))) stageLabels.set(String(stage.id), stage.label || String(stage.id));
     }
   }
-  results.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  return { results };
+  const ownerLabels = new Map(
+    (ownersResponse.results ?? []).map((owner) => {
+      const fullName = [owner.firstName, owner.lastName].filter(Boolean).join(' ');
+      return [String(owner.id), fullName || owner.email || 'HubSpot owner'];
+    }),
+  );
+  const leadTypeLabels = new Map(
+    (leadTypeProperty?.options ?? []).map((option) => [String(option.value), option.label || String(option.value)]),
+  );
+
+  const results = (leadRecords as Array<{
+    id?: string | number;
+    properties?: Record<string, string>;
+    propertiesWithHistory?: Record<string, Array<{ value?: string; timestamp?: string }>>;
+    createdAt?: string;
+    updatedAt?: string;
+  }>).map((lead) => {
+    const properties = lead.properties ?? {};
+    const pipelineId = String(properties.hs_pipeline ?? '');
+    const stageId = String(properties.hs_pipeline_stage ?? '');
+    const pipeline = (pipelineResponse.results ?? []).find((item) => String(item.id) === pipelineId);
+    const stages = pipeline?.stages ?? [];
+    const stageIndex = stages.findIndex((stage) => String(stage.id) === stageId);
+    const stageEnteredAt = (lead.propertiesWithHistory?.hs_pipeline_stage ?? [])
+      .filter((entry) => String(entry.value ?? '') === stageId && entry.timestamp)
+      .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime())[0]?.timestamp || '';
+    const firstProperty = (names: string[]) => names.map((name) => properties[name]).find(Boolean) || '';
+    const leadType = String(properties.hs_lead_type ?? '');
+    return {
+      ...lead,
+      whatsyncLead: {
+        pipelineLabel: pipelineLabels.get(pipelineId) || pipelineId,
+        stageLabel: stageLabels.get(`${pipelineId}:${stageId}`) || stageLabels.get(stageId) || stageId,
+        ownerLabel: ownerLabels.get(String(properties.hubspot_owner_id ?? '')) || '',
+        leadTypeLabel: leadTypeLabels.get(leadType) || leadType,
+        stageIndex,
+        stages: stages.map((stage) => ({ id: String(stage.id), label: stage.label || String(stage.id) })),
+        stageEnteredAt,
+        createdAt: properties.hs_createdate || lead.createdAt || '',
+        lastActivityAt: firstProperty(['hs_lastactivitydate', 'notes_last_updated', 'hs_last_engagement_date']),
+        nextActivityAt: firstProperty(['hs_next_activity_date', 'notes_next_activity_date']),
+      },
+    };
+  }).sort((a, b) => new Date(b.updatedAt ?? b.createdAt ?? 0).getTime() - new Date(a.updatedAt ?? a.createdAt ?? 0).getTime());
+
+  return { results, total: leadIds.length };
 }
 
 async function getContactAttachments(
@@ -443,6 +595,26 @@ async function getContactAttachments(
     new Date(String(b.timestamp ?? 0)).getTime() - new Date(String(a.timestamp ?? 0)).getTime()
   );
   return { results };
+}
+
+const SIDEBAR_SECTION_KEYS = ['companies', 'contacts', 'lead_tracker', 'attachments'] as const;
+type SidebarSectionKey = typeof SIDEBAR_SECTION_KEYS[number];
+
+async function getSidebarSectionData(
+  token: string,
+  contactId: string,
+  section: SidebarSectionKey,
+): Promise<Record<string, unknown>> {
+  switch (section) {
+    case 'companies':
+      return getContactCompanies(token, contactId);
+    case 'contacts':
+      return getRelatedCompanyContacts(token, contactId);
+    case 'lead_tracker':
+      return getContactLeads(token, contactId);
+    case 'attachments':
+      return getContactAttachments(token, contactId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -811,6 +983,11 @@ const TASK_PROPERTIES = ['hs_task_subject', 'hs_task_body', 'hs_task_status', 'h
 const NOTE_PROPERTIES = ['hs_note_body', 'hs_createdate', 'hs_lastmodifieddate', 'hs_attachment_ids'];
 const COMPANY_PROPERTIES = ['name', 'domain', 'industry', 'phone', 'city', 'country', 'lifecyclestage'];
 const RELATED_CONTACT_PROPERTIES = ['firstname', 'lastname', 'email', 'phone', 'mobilephone', 'jobtitle', 'company', 'lifecyclestage', 'hs_lead_status'];
+const LEAD_PROPERTIES = [
+  'hs_lead_name', 'hs_lead_type', 'hs_pipeline', 'hs_pipeline_stage', 'hs_lead_source',
+  'hs_primary_company_id', 'hs_primary_contact_id', 'hs_createdate', 'hs_lastmodifieddate',
+  'hubspot_owner_id',
+];
 
 // HubSpot calculated/read-only properties that must never be sent on create/update —
 // including any of them makes HubSpot reject the entire request (READ_ONLY_VALUE).
@@ -1353,18 +1530,32 @@ async function handleAction(
       const contactId = String(data.contactId ?? '');
       const section = String(data.section ?? '');
       if (!/^\d+$/.test(contactId)) throw new HttpError(400, 'A valid contact ID is required');
-      switch (section) {
-        case 'companies':
-          return getContactAssociations(token, contactId, 'companies', COMPANY_PROPERTIES);
-        case 'contacts':
-          return getRelatedCompanyContacts(token, contactId);
-        case 'lead_tracker':
-          return getContactStageHistory(token, contactId);
-        case 'attachments':
-          return getContactAttachments(token, contactId);
-        default:
-          throw new HttpError(400, 'Unknown sidebar section');
+      if (!SIDEBAR_SECTION_KEYS.includes(section as SidebarSectionKey)) {
+        throw new HttpError(400, 'Unknown sidebar section');
       }
+      return getSidebarSectionData(token, contactId, section as SidebarSectionKey);
+    }
+
+    case 'getSidebarSections': {
+      const contactId = String(data.contactId ?? '');
+      const requested = Array.isArray(data.sections)
+        ? data.sections.map(String).filter((section): section is SidebarSectionKey =>
+          SIDEBAR_SECTION_KEYS.includes(section as SidebarSectionKey)
+        )
+        : [...SIDEBAR_SECTION_KEYS];
+      if (!/^\d+$/.test(contactId)) throw new HttpError(400, 'A valid contact ID is required');
+      const entries = await Promise.all(requested.map(async (section) => {
+        try {
+          return [section, await getSidebarSectionData(token, contactId, section)] as const;
+        } catch {
+          return [section, {
+            results: [],
+            error: true,
+            message: 'We could not load this HubSpot data.',
+          }] as const;
+        }
+      }));
+      return { sections: Object.fromEntries(entries) };
     }
 
     case 'searchContacts': {
@@ -1714,13 +1905,13 @@ async function handleAction(
       }
     }
 
-    // ----- Pipelines (tickets / deals) -----
+    // ----- Pipelines (tickets / deals / leads) -----
     // Drives real pipeline + stage dropdowns in the create-ticket / create-deal
     // forms instead of hard-coded ids that don't exist in most portals.
     case 'getPipelines': {
       const objectType = String((data as { objectType?: string }).objectType ?? 'tickets');
-      if (!['tickets', 'deals'].includes(objectType)) {
-        throw new HttpError(400, 'objectType must be tickets or deals');
+      if (!['tickets', 'deals', 'leads'].includes(objectType)) {
+        throw new HttpError(400, 'objectType must be tickets, deals, or leads');
       }
       const res = (await hubspot(token, 'GET', `/crm/v3/pipelines/${objectType}`)) as {
         results?: Array<{ id: string; label: string; displayOrder?: number; stages?: Array<{ id: string; label: string; displayOrder?: number }> }>;

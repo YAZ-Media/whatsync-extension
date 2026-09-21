@@ -145,7 +145,10 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = EDGE_FUNCTION_TIM
 const hubspotReadCache = new Map();
 const hubspotReadsInFlight = new Map();
 async function callHubSpotEdgeFunction(action, data = {}) {
-  const cacheable = ['getPropertyOptions', 'getPropertyDefinitions', 'getOwners', 'getOwnerById', 'getSidebarFields'].includes(action);
+  const cacheable = [
+    'getPropertyOptions', 'getPropertyDefinitions', 'getOwners', 'getOwnerById',
+    'getSidebarFields', 'getSidebarSection', 'getSidebarSections',
+  ].includes(action);
   if (!cacheable) {
     if (/^(create|update|delete|save)/i.test(action)) hubspotReadCache.clear();
     return requestHubSpotEdgeFunction(action, data);
@@ -925,7 +928,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return;
         }
         const result = await callHubSpotEdgeFunction('getSidebarSection', { contactId, section });
-        sendResponse({ success: true, results: result?.results || [] });
+        sendResponse({
+          success: true,
+          results: result?.results || [],
+          unavailable: !!result?.unavailable,
+          requiresReauthorization: !!result?.requiresReauthorization,
+          message: result?.message || '',
+        });
       } catch (error) {
         console.error('[Background] getSidebarSection failed:', error);
         const unavailable = /Unknown action:\s*getSidebarSection/i.test(String(error?.message || ''));
@@ -936,6 +945,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             ? 'This HubSpot section is temporarily unavailable.'
             : 'We could not load this HubSpot data.',
           results: [],
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.action === 'getSidebarSections') {
+    const contactId = request.contactId || request.data?.contactId || null;
+    const sections = request.sections || request.data?.sections || null;
+    (async () => {
+      try {
+        if (!contactId) {
+          sendResponse({ success: false, error: 'Contact is required', sections: {} });
+          return;
+        }
+        const result = await callHubSpotEdgeFunction('getSidebarSections', { contactId, sections });
+        sendResponse({ success: true, sections: result?.sections || {} });
+      } catch (error) {
+        console.error('[Background] getSidebarSections failed:', error);
+        sendResponse({
+          success: false,
+          code: /Unknown action:\s*getSidebarSections/i.test(String(error?.message || ''))
+            ? 'SIDEBAR_SECTION_UNAVAILABLE'
+            : 'SIDEBAR_SECTION_FAILED',
+          error: 'We could not load this HubSpot data.',
+          sections: {},
         });
       }
     })();

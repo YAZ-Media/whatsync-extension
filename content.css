@@ -5403,3 +5403,132 @@ body.whatsapp-theme-dark #hubspot-sidebar {
   margin:0;
   padding:12px 0;
 }
+#hubspot-sidebar .ws-related-loading {
+  min-height:92px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  color:var(--sidebar-text-secondary, #667781);
+  font-size:13px;
+  text-align:center;
+}
+#hubspot-sidebar .ws-related-loading p { margin:0; }
+#hubspot-sidebar .ws-association-card {
+  align-items:flex-start;
+  padding:14px;
+  border-radius:14px;
+}
+#hubspot-sidebar .ws-association-icon {
+  width:28px;
+  height:28px;
+  flex:0 0 28px;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  background:var(--sidebar-hover-bg, #eef2f5);
+  color:var(--sidebar-text-secondary, #667781);
+  font-size:15px;
+}
+#hubspot-sidebar .ws-association-heading {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-bottom:3px;
+}
+#hubspot-sidebar .ws-association-heading strong {
+  color:var(--sidebar-accent, #ff7a59);
+  font-size:14px;
+}
+#hubspot-sidebar .ws-association-badge {
+  padding:2px 7px;
+  border:1px solid #16a34a;
+  border-radius:7px;
+  background:rgba(22,163,74,.09);
+  color:var(--sidebar-text, #1a1a1a);
+  font-size:10px;
+  font-weight:700;
+}
+#hubspot-sidebar .ws-association-card .ws-related-item-body > span {
+  white-space:normal;
+}
+#hubspot-sidebar .ws-association-card .ws-related-item-body > span b {
+  color:var(--sidebar-text, #1a1a1a);
+  font-weight:600;
+}
+#hubspot-sidebar .ws-view-all-associations {
+  display:inline-flex;
+  margin:4px 2px 2px;
+  color:var(--sidebar-accent, #ff7a59);
+  font-size:12px;
+  font-weight:700;
+  text-decoration:none;
+}
+#hubspot-sidebar .ws-view-all-associations:hover { text-decoration:underline; }
+#hubspot-sidebar .ws-lead-tracker-card {
+  display:flex;
+  flex-direction:column;
+  gap:13px;
+  padding:4px 2px 14px;
+  border-bottom:1px solid var(--sidebar-border);
+  color:var(--sidebar-text, #1a1a1a);
+}
+#hubspot-sidebar .ws-lead-tracker-card:last-child { border-bottom:0; }
+#hubspot-sidebar .ws-lead-property {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:4px;
+  font-size:13px;
+}
+#hubspot-sidebar .ws-lead-property strong { font-weight:700; }
+#hubspot-sidebar .ws-lead-property .hs-open-link { margin-left:auto; }
+#hubspot-sidebar .ws-lead-created {
+  color:var(--sidebar-text-secondary, #667781);
+  font-size:12px;
+}
+#hubspot-sidebar .ws-lead-progress {
+  display:grid;
+  grid-auto-flow:column;
+  grid-auto-columns:1fr;
+  gap:4px;
+}
+#hubspot-sidebar .ws-lead-progress span {
+  height:9px;
+  border-radius:2px;
+  background:var(--sidebar-border, #d8dee3);
+}
+#hubspot-sidebar .ws-lead-progress span.complete { background:rgba(255,122,89,.48); }
+#hubspot-sidebar .ws-lead-progress span.current {
+  background:#ff7a59;
+  box-shadow:0 0 0 2px var(--sidebar-content-bg, #fff), 0 0 0 3px #ff7a59;
+}
+#hubspot-sidebar .ws-lead-activity-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+#hubspot-sidebar .ws-lead-activity-grid > div {
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:7px;
+  text-align:center;
+}
+#hubspot-sidebar .ws-lead-activity-grid strong {
+  color:var(--sidebar-text-secondary, #667781);
+  font-size:10px;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+#hubspot-sidebar .ws-lead-activity-grid span,
+#hubspot-sidebar .ws-lead-activity-grid a {
+  color:var(--sidebar-text, #1a1a1a);
+  font-size:12px;
+  font-weight:600;
+  text-decoration:none;
+}
+#hubspot-sidebar .ws-lead-activity-grid a { color:var(--sidebar-accent, #ff7a59); }

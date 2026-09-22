@@ -5548,12 +5548,12 @@ body.whatsapp-theme-dark #hubspot-sidebar {
 }
 #hubspot-sidebar .ws-lead-activity-grid a { color:var(--sidebar-accent, #ff7a59); }
 
-/* Canonical CRM section layout. Keep the same density and hierarchy HubSpot
-   users already know: flat section headers, inset content, bordered cards. */
+/* Compact CRM section layout. The sidebar has much less horizontal space than
+   HubSpot's record page, so preserve its hierarchy with tighter dimensions. */
 #hubspot-sidebar {
-  --ws-section-x: 18px;
-  --ws-section-header-height: 62px;
-  --ws-card-radius: 14px;
+  --ws-section-x: 14px;
+  --ws-section-header-height: 50px;
+  --ws-card-radius: 12px;
 }
 #hubspot-sidebar :is(
   .about-section,
@@ -5583,7 +5583,7 @@ body.whatsapp-theme-dark #hubspot-sidebar {
   width: 100%;
   min-height: var(--ws-section-header-height);
   margin: 0;
-  padding: 15px var(--ws-section-x);
+  padding: 10px var(--ws-section-x);
   border: 0;
   border-bottom: 1px solid var(--sidebar-border);
   border-radius: 0;
@@ -5606,9 +5606,9 @@ body.whatsapp-theme-dark #hubspot-sidebar {
   .tickets-title,
   .tasks-title
 ) {
-  gap: 10px;
+  gap: 8px;
   color: var(--sidebar-text);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.35;
 }
@@ -5622,12 +5622,12 @@ body.whatsapp-theme-dark #hubspot-sidebar {
 ) {
   box-sizing: border-box;
   margin: 0;
-  padding: 16px var(--ws-section-x) 20px;
+  padding: 10px var(--ws-section-x) 14px;
 }
-#hubspot-sidebar .ws-related-list { gap: 12px; }
+#hubspot-sidebar .ws-related-list { gap: 8px; }
 #hubspot-sidebar .ws-related-item,
 #hubspot-sidebar .ws-association-card {
-  padding: 16px;
+  padding: 12px;
   border: 1px solid var(--sidebar-border);
   border-radius: var(--ws-card-radius);
   background: var(--sidebar-content-bg);
@@ -5638,7 +5638,7 @@ body.whatsapp-theme-dark #hubspot-sidebar {
   padding: 2px 0;
   color: var(--sidebar-text-secondary);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.45;
 }
 #hubspot-sidebar .ws-related-empty .ws-related-reconnect {
   width: fit-content;
@@ -5660,13 +5660,49 @@ body.whatsapp-theme-dark #hubspot-sidebar {
 }
 #hubspot-sidebar .ws-related-loading { display: none !important; }
 #hubspot-sidebar .ws-lead-tracker-card {
-  gap: 16px;
-  padding: 4px 0 8px;
+  gap: 11px;
+  padding: 2px 0 6px;
 }
-#hubspot-sidebar .ws-lead-property { font-size: 14px; line-height: 1.45; }
-#hubspot-sidebar .ws-lead-progress { gap: 5px; }
-#hubspot-sidebar .ws-lead-progress span { height: 12px; border-radius: 3px; }
-#hubspot-sidebar .ws-lead-activity-grid { padding-top: 4px; }
+#hubspot-sidebar .ws-lead-property { font-size: 13px; line-height: 1.4; }
+#hubspot-sidebar .ws-lead-progress { gap: 4px; }
+#hubspot-sidebar .ws-lead-progress span { height: 9px; border-radius: 3px; }
+#hubspot-sidebar .ws-lead-activity-grid { padding-top: 2px; }
+
+/* Keep contact details aligned with collection sections and remove the broad
+   whitespace introduced by WhatsApp's inherited form and list styles. */
+#hubspot-sidebar .contact-header {
+  padding: 16px 14px 14px;
+}
+#hubspot-sidebar .contact-header-row-1 { margin-bottom: 6px; }
+#hubspot-sidebar .contact-job-section { margin-bottom: 6px; }
+#hubspot-sidebar .contact-email-header { margin-bottom: 10px; }
+#hubspot-sidebar .contact-actions { margin-top: 10px; gap: 2px; }
+#hubspot-sidebar .contact-actions > .action-btn,
+#hubspot-sidebar .contact-actions > .more-actions-wrapper > .action-btn { padding: 2px 0; }
+#hubspot-sidebar .contact-info { padding: 0 var(--ws-section-x); }
+#hubspot-sidebar .info-row {
+  min-height: 0;
+  padding: 8px 0;
+}
+#hubspot-sidebar .info-label-text {
+  margin-bottom: 2px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+#hubspot-sidebar .info-value {
+  font-size: 14px;
+  line-height: 1.35;
+}
+#hubspot-sidebar .info-edit-select {
+  min-height: 32px;
+  height: 32px;
+  padding: 4px 9px;
+  font-size: 13px;
+}
+#hubspot-sidebar .contact-details > .ws-suggestions {
+  margin: 12px 14px;
+  padding: 12px;
+}
 
 /* HubSpot rule dialog always stays readable even when WhatsApp is dark. */
 #hubspot-required-fields-modal .hubspot-required-field :is(input,select,textarea) {

@@ -144,6 +144,82 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = EDGE_FUNCTION_TIM
 
 const hubspotReadCache = new Map();
 const hubspotReadsInFlight = new Map();
+const CONDITIONAL_PROPERTY_STORAGE_KEY = 'hubspotConditionalPropertyDefinitions';
+
+function sanitizeConditionalPropertyDefinition(definition) {
+  const name = String(definition?.name || '');
+  if (!/^[A-Za-z0-9_]+$/.test(name)) return null;
+  const controllingProperty = /^[A-Za-z0-9_]+$/.test(String(definition?.controllingProperty || ''))
+    ? String(definition.controllingProperty)
+    : '';
+  const options = Array.isArray(definition?.options)
+    ? definition.options.slice(0, 250).map((option) => ({
+      value: String(option?.value ?? ''),
+      label: String(option?.label ?? option?.value ?? ''),
+    }))
+    : [];
+  return {
+    name,
+    label: String(definition?.label || name).slice(0, 200),
+    description: String(definition?.description || '').slice(0, 1000),
+    type: String(definition?.type || 'string').slice(0, 40),
+    fieldType: String(definition?.fieldType || 'text').slice(0, 40),
+    options,
+    controllingProperty,
+    controllingValue: controllingProperty ? String(definition?.controllingValue ?? '').slice(0, 500) : '',
+  };
+}
+
+async function getKnownConditionalPropertyDefinitions(objectType = 'contacts') {
+  const { userId, [CONDITIONAL_PROPERTY_STORAGE_KEY]: stored = {} } = await chrome.storage.local.get([
+    'userId',
+    CONDITIONAL_PROPERTY_STORAGE_KEY,
+  ]);
+  if (!userId) return [];
+  const definitions = stored?.[userId]?.[objectType];
+  return Array.isArray(definitions) ? definitions.map(sanitizeConditionalPropertyDefinition).filter(Boolean) : [];
+}
+
+async function rememberConditionalPropertyDefinitions(objectType, definitions) {
+  const safeObjectType = String(objectType || 'contacts');
+  if (!/^[A-Za-z0-9_-]+$/.test(safeObjectType)) return [];
+  const sanitized = (Array.isArray(definitions) ? definitions : [])
+    .map(sanitizeConditionalPropertyDefinition)
+    .filter(Boolean);
+  if (!sanitized.length) return getKnownConditionalPropertyDefinitions(safeObjectType);
+  const { userId, [CONDITIONAL_PROPERTY_STORAGE_KEY]: stored = {} } = await chrome.storage.local.get([
+    'userId',
+    CONDITIONAL_PROPERTY_STORAGE_KEY,
+  ]);
+  if (!userId) throw new Error('Not authenticated');
+  const previous = Array.isArray(stored?.[userId]?.[safeObjectType]) ? stored[userId][safeObjectType] : [];
+  const merged = new Map(previous.map((definition) => [definition.name, definition]));
+  sanitized.forEach((definition) => merged.set(definition.name, { ...merged.get(definition.name), ...definition }));
+  const next = {
+    ...stored,
+    [userId]: {
+      ...(stored[userId] || {}),
+      [safeObjectType]: [...merged.values()].slice(-50),
+    },
+  };
+  await chrome.storage.local.set({ [CONDITIONAL_PROPERTY_STORAGE_KEY]: next });
+  hubspotReadCache.clear();
+  return next[userId][safeObjectType];
+}
+
+function attachKnownConditionalFields(contacts, definitions) {
+  if (!Array.isArray(contacts) || !Array.isArray(definitions) || !definitions.length) return contacts;
+  contacts.forEach((contact) => {
+    const properties = contact?.properties || {};
+    contact.whatsyncConditionalFields = definitions.filter((definition) => {
+      const value = properties[definition.name];
+      if (value === undefined || value === null || value === '') return false;
+      if (!definition.controllingProperty) return true;
+      return String(properties[definition.controllingProperty] ?? '') === String(definition.controllingValue ?? '');
+    }).map((definition) => ({ ...definition, value: properties[definition.name] }));
+  });
+  return contacts;
+}
 async function callHubSpotEdgeFunction(action, data = {}) {
   const cacheable = [
     'getPropertyOptions', 'getPropertyDefinitions', 'getOwners', 'getOwnerById',
@@ -824,6 +900,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse(hubSpotErrorResponse(error, 'Could not load the required HubSpot fields'));
       }
     })();
+    return true;
+  }
+
+  if (request.action === 'rememberConditionalPropertyDefinitions') {
+    rememberConditionalPropertyDefinitions(request.objectType, request.definitions)
+      .then((definitions) => sendResponse({ success: true, definitions }))
+      .catch((error) => sendResponse({ success: false, error: error?.message || 'Could not remember conditional fields' }));
     return true;
   }
 
@@ -2914,7 +2997,13 @@ async function searchHubSpotContactsByPhone(phoneVariations) {
   if (digits.startsWith('00')) digits = digits.slice(2);
   if (digits.length < 7) return [];
 
-  const result = await callHubSpotEdgeFunction('searchContacts', {
+  const conditionalDefinitions = await getKnownConditionalPropertyDefinitions('contacts');
+  const conditionalProperties = conditionalDefinitions.flatMap((definition) => [
+    definition.name,
+    definition.controllingProperty,
+  ]).filter(Boolean);
+  const properties = [...new Set([...CONTACT_LOOKUP_PROPERTIES, ...conditionalProperties])];
+  const buildRequest = (requestedProperties) => ({
     searchRequest: {
       // Separate filterGroups are OR'ed: match the number in any phone field.
       filterGroups: [
@@ -2927,23 +3016,42 @@ async function searchHubSpotContactsByPhone(phoneVariations) {
         { filters: [{ propertyName: 'mobilephone', operator: 'CONTAINS_TOKEN', value: digits }] },
         { filters: [{ propertyName: 'hs_whatsapp_phone_number', operator: 'CONTAINS_TOKEN', value: digits }] },
       ],
-      properties: CONTACT_LOOKUP_PROPERTIES,
+      properties: requestedProperties,
       limit: 10,
     },
   });
+  let result;
+  try {
+    result = await callHubSpotEdgeFunction('searchContacts', buildRequest(properties));
+  } catch (error) {
+    // A HubSpot admin can archive a previously learned property. Keep contact
+    // lookup working and fall back to the stable core field list.
+    if (!conditionalProperties.length) throw error;
+    result = await callHubSpotEdgeFunction('searchContacts', buildRequest(CONTACT_LOOKUP_PROPERTIES));
+  }
   const hits = result?.results || result?.data?.results || [];
-  return Array.isArray(hits) ? hits : [];
+  return Array.isArray(hits) ? attachKnownConditionalFields(hits, conditionalDefinitions) : [];
 }
 
 // Legacy fallback: scan the first page of contacts and fuzzy-match in memory.
 // Only used when the server-side search is unavailable or errors.
 async function scanHubSpotContactsByPhone(phoneVariations) {
-  const requestData = {
+  const conditionalDefinitions = await getKnownConditionalPropertyDefinitions('contacts');
+  const conditionalProperties = conditionalDefinitions.flatMap((definition) => [definition.name, definition.controllingProperty]).filter(Boolean);
+  const buildRequest = (properties) => ({
     limit: 100,
-    properties: CONTACT_LOOKUP_PROPERTIES,
+    properties,
     associations: ['company']
-  };
-  const result = await callHubSpotEdgeFunction('getContacts', requestData);
+  });
+  let result;
+  try {
+    result = await callHubSpotEdgeFunction('getContacts', buildRequest([
+      ...new Set([...CONTACT_LOOKUP_PROPERTIES, ...conditionalProperties]),
+    ]));
+  } catch (error) {
+    if (!conditionalProperties.length) throw error;
+    result = await callHubSpotEdgeFunction('getContacts', buildRequest(CONTACT_LOOKUP_PROPERTIES));
+  }
 
   // Handle different response formats from edge function
   let contacts = result.results || result.data?.results || result.data || result;
@@ -2955,7 +3063,7 @@ async function scanHubSpotContactsByPhone(phoneVariations) {
     }
   }
 
-  return contacts.filter(contact => {
+  const matching = contacts.filter(contact => {
     const contactPhone = contact.properties?.phone || contact.properties?.mobilephone || contact.phone || '';
     if (!contactPhone) return false;
 
@@ -2971,6 +3079,7 @@ async function scanHubSpotContactsByPhone(phoneVariations) {
              normalizedVariant.includes(normalizedContactPhone.replace('+', ''));
     });
   });
+  return attachKnownConditionalFields(matching, conditionalDefinitions);
 }
 
 async function checkHubSpotContactViaEdgeFunction(phoneNumber) {

@@ -49,7 +49,9 @@ test('related sections share the CRM hierarchy and hide technical backend errors
   assert.match(css, /\.activities-section,\s*#hubspot-sidebar \.ws-related-section/);
   assert.match(css, /\.ws-related-retry/);
   assert.match(content, /ws-related-reconnect/);
-  assert.match(css, /--ws-section-header-height:\s*62px/);
+  assert.match(css, /--ws-section-header-height:\s*50px/);
+  assert.match(css, /--ws-section-x:\s*14px/);
+  assert.match(css, /#hubspot-sidebar \.info-row \{\s*min-height: 0;\s*padding: 8px 0;/);
   assert.match(css, /\.ws-related-loading \{ display: none !important; \}/);
 });
 

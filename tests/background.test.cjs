@@ -17,3 +17,23 @@ test('HubSpot error-shaped or empty contact responses are never a saved contact'
  const ctx=vm.createContext({console:quiet,whatsyncDebug(){},callHubSpotEdgeFunction:async()=>({success:true})});vm.runInContext(functions(['createHubSpotContactViaEdgeFunction']),ctx);
  await assert.rejects(ctx.createHubSpotContactViaEdgeFunction({properties:{}},null,null),/did not return/);
 });
+
+test('learned conditional fields are shown only for the matching HubSpot rule',()=>{
+ const ctx=vm.createContext({});
+ vm.runInContext(functions(['attachKnownConditionalFields']),ctx);
+ const contacts=[{properties:{hs_lead_status:'QUALIFIED',lead_tier:'tier_3',disqualification_reason:'budget'}}];
+ const result=ctx.attachKnownConditionalFields(contacts,[
+  {name:'lead_tier',label:'Lead Tier',controllingProperty:'hs_lead_status',controllingValue:'QUALIFIED'},
+  {name:'disqualification_reason',label:'Disqualification Reason',controllingProperty:'hs_lead_status',controllingValue:'UNQUALIFIED'},
+ ]);
+ assert.equal(result[0].whatsyncConditionalFields.length,1);
+ assert.equal(result[0].whatsyncConditionalFields[0].name,'lead_tier');
+ assert.equal(result[0].whatsyncConditionalFields[0].value,'tier_3');
+});
+
+test('conditional field definitions reject unsafe property names',()=>{
+ const ctx=vm.createContext({});
+ vm.runInContext(functions(['sanitizeConditionalPropertyDefinition']),ctx);
+ assert.equal(ctx.sanitizeConditionalPropertyDefinition({name:'lead_tier'}).name,'lead_tier');
+ assert.equal(ctx.sanitizeConditionalPropertyDefinition({name:'lead-tier<script>'}),null);
+});

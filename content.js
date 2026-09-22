@@ -4220,6 +4220,59 @@ function requiredHubSpotProperties(error) {
   return [...names].filter((name) => /^[A-Za-z0-9_]+$/.test(String(name)));
 }
 
+function hubSpotConditionalRuleContexts(error) {
+  const rules = [];
+  const seen = new Set();
+  const add = (dependentProperty, controllingProperty, controllingValue) => {
+    const dependent = String(dependentProperty ?? '').trim();
+    const controller = String(controllingProperty ?? '').trim();
+    const value = String(controllingValue ?? '').trim();
+    if (!/^[A-Za-z0-9_]+$/.test(dependent) || !/^[A-Za-z0-9_]+$/.test(controller) || !value) return;
+    const key = `${dependent}\u0000${controller}\u0000${value}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rules.push({ dependentProperty: dependent, controllingProperty: controller, controllingValue: value });
+  };
+  const scanMessage = (value) => {
+    if (typeof value !== 'string') return;
+    const pattern = /Property\s+['"`]([A-Za-z0-9_]+)['"`]\s+is required when\s+['"`]([A-Za-z0-9_]+)['"`]\s+is set to\s+['"`]([^'"`]+)['"`]/gi;
+    for (const match of value.matchAll(pattern)) add(match[1], match[2], match[3]);
+  };
+  const visit = (value, depth = 0) => {
+    if (value == null || depth > 6) return;
+    if (typeof value === 'string') {
+      scanMessage(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    if (typeof value !== 'object') return;
+    const context = value.context && typeof value.context === 'object' ? value.context : {};
+    const dependent = value.propertyName || value.property || context.propertyName || context.dependentProperty;
+    const controller = value.controllingProperty || context.controllingProperty || context.controllerProperty;
+    const controllingValue = value.controllingValue || context.controllingValue || context.controllerValue;
+    if (!Array.isArray(dependent)) add(dependent, controller, controllingValue);
+    Object.values(value).forEach((child) => visit(child, depth + 1));
+  };
+  visit(error);
+  return rules;
+}
+
+async function rememberHubSpotConditionalDefinitions(objectType, definitions) {
+  if (!Array.isArray(definitions) || !definitions.length) return;
+  try {
+    await sendExtensionMessage({
+      action: 'rememberConditionalPropertyDefinitions',
+      objectType,
+      definitions,
+    });
+  } catch (error) {
+    console.warn('[Content] Could not remember HubSpot conditional fields:', error);
+  }
+}
+
 async function fetchHubSpotPropertyDefinitions(objectType, properties) {
   const response = await sendExtensionMessage({ action: 'getPropertyDefinitions', objectType, properties });
   if (!response?.success) throw hubSpotResponseError(response, 'Could not load the fields required by HubSpot');
@@ -4332,10 +4385,23 @@ async function runHubSpotConditionalWrite({ objectType, properties, write }) {
       required.forEach((name) => requested.add(name));
       const definitions = await fetchHubSpotPropertyDefinitions(objectType, required);
       if (definitions.length !== required.length) throw new Error('HubSpot requires another field, but its definition could not be loaded. Open the record in HubSpot to complete this change.');
-      conditionalDefinitions.push(...definitions.filter((definition) => (
+      const ruleContexts = hubSpotConditionalRuleContexts(error);
+      const contextualDefinitions = definitions.map((definition) => {
+        const rule = ruleContexts.find((candidate) => candidate.dependentProperty === definition.name);
+        return rule ? {
+          ...definition,
+          controllingProperty: rule.controllingProperty,
+          controllingValue: rule.controllingValue,
+        } : definition;
+      });
+      conditionalDefinitions.push(...contextualDefinitions.filter((definition) => (
         definition?.name && !conditionalDefinitions.some((known) => known.name === definition.name)
       )));
-      const values = await requestHubSpotRequiredValues(definitions);
+      // Persist only definitions returned by HubSpot. Later contact loads can
+      // fetch and display the accepted dependent values without hardcoded
+      // portal-specific property names.
+      await rememberHubSpotConditionalDefinitions(objectType, contextualDefinitions);
+      const values = await requestHubSpotRequiredValues(contextualDefinitions);
       combined = { ...combined, ...values };
     }
   }

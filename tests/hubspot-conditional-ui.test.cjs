@@ -55,14 +55,36 @@ test('sidebar recognizes 2026-09 validation context variants', () => {
   assert.deepEqual([...result], ['lead_tier', 'qualification_reason']);
 });
 
+test('sidebar learns the controlling value from HubSpot conditional validation', () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functions(['hubSpotConditionalRuleContexts']), ctx);
+  const result = ctx.hubSpotConditionalRuleContexts({
+    message: `Property 'lead_tier' is required when 'hs_lead_status' is set to 'QUALIFIED'.`,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [{
+    dependentProperty: 'lead_tier',
+    controllingProperty: 'hs_lead_status',
+    controllingValue: 'QUALIFIED',
+  }]);
+});
+
 test('conditional write retries atomically with the required values', async () => {
   let attempts = 0;
   let requestedDefinitions = [];
   const ctx = vm.createContext({
     requiredHubSpotProperties: (error) => error.details?.requiredProperties || [],
+    hubSpotConditionalRuleContexts: () => [{
+      dependentProperty: 'lead_tier',
+      controllingProperty: 'hs_lead_status',
+      controllingValue: 'QUALIFIED',
+    }],
     fetchHubSpotPropertyDefinitions: async (_, names) => {
       requestedDefinitions = names;
       return names.map((name) => ({ name }));
+    },
+    rememberHubSpotConditionalDefinitions: async (_, definitions) => {
+      assert.equal(definitions[0].controllingProperty, 'hs_lead_status');
+      assert.equal(definitions[0].controllingValue, 'QUALIFIED');
     },
     requestHubSpotRequiredValues: async () => ({ lead_tier: 'tier_1' }),
     hubSpotResponseError: (response) => Object.assign(new Error(response.error), { details: response.details }),
@@ -85,4 +107,5 @@ test('conditional write retries atomically with the required values', async () =
   assert.equal(response.whatsyncConditionalFields.length, 1);
   assert.equal(response.whatsyncConditionalFields[0].name, 'lead_tier');
   assert.equal(response.whatsyncConditionalFields[0].value, 'tier_1');
+  assert.equal(response.whatsyncConditionalFields[0].controllingProperty, 'hs_lead_status');
 });

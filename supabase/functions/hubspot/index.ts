@@ -411,7 +411,7 @@ async function getRelatedCompanyContacts(
     companyIds.map(async (companyId) => {
       const contacts = await getAllAssociationSummaries(token, 'companies', companyId, 'contacts');
       for (const association of contacts) {
-        if (association.id && association.id !== contactId) {
+        if (association.id) {
           associatedIds.add(association.id);
           associationByContactId.set(association.id, association);
         }
@@ -466,6 +466,7 @@ async function getContactLeads(
   }
   if (leadIds.length === 0) return { results: [], total: 0 };
 
+  try {
   const activityProperties = [
     'hs_lastactivitydate', 'notes_last_updated', 'hs_last_engagement_date',
     'hs_next_activity_date', 'notes_next_activity_date',
@@ -560,6 +561,24 @@ async function getContactLeads(
   }).sort((a, b) => new Date(b.updatedAt ?? b.createdAt ?? 0).getTime() - new Date(a.updatedAt ?? a.createdAt ?? 0).getTime());
 
   return { results, total: leadIds.length };
+  } catch (error) {
+    if (error instanceof HttpError && [401, 403].includes(error.status)) {
+      return {
+        results: [],
+        unavailable: true,
+        requiresReauthorization: true,
+        message: 'Reconnect HubSpot once to let WhatSync display this Lead record.',
+      };
+    }
+    if (error instanceof HttpError && error.status === 404) {
+      return {
+        results: [],
+        unavailable: true,
+        message: 'HubSpot Leads is not available for this account.',
+      };
+    }
+    throw error;
+  }
 }
 
 async function getContactAttachments(

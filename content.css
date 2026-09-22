@@ -841,6 +841,21 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     font-size: 13px;
 }
 
+#hubspot-sidebar .ws-related-reconnect {
+    display: inline-flex;
+    margin-top: 12px;
+    padding: 9px 13px;
+    border-radius: 9px;
+    background: #ff7a59;
+    color: #102631 !important;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+#hubspot-sidebar .ws-related-reconnect:hover {
+    background: #ff9578;
+}
+
 #hubspot-sidebar .ws-related-error {
     display: flex;
     flex-direction: column;

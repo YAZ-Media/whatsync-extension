@@ -22,6 +22,8 @@ test('all configurable relationship sections have a real extension and API path'
   assert.match(hubspot, /case 'getSidebarSection'/);
   assert.match(hubspot, /case 'getSidebarSections'/);
   assert.match(hubspot, /getAllAssociationIds\(token, 'contacts', contactId, 'leads'\)/);
+  assert.doesNotMatch(hubspot, /association\.id !== contactId/);
+  assert.match(hubspot, /Reconnect HubSpot once to let WhatSync display this Lead record/);
   assert.doesNotMatch(hubspot, /getContactStageHistory/);
   assert.match(content, /preloadRelatedSidebarSections/);
   assert.match(content, /requestIdleCallback/);
@@ -44,6 +46,7 @@ test('related sections share the CRM hierarchy and hide technical backend errors
   assert.doesNotMatch(content, /escapeHtml\(error\?\.message/);
   assert.match(css, /\.activities-section,\s*#hubspot-sidebar \.ws-related-section/);
   assert.match(css, /\.ws-related-retry/);
+  assert.match(content, /ws-related-reconnect/);
 });
 
 test('sidebar appearance has drag ordering and a functional fictional-data preview', () => {

@@ -4729,12 +4729,15 @@ function renderRelatedSidebarSection(section, payload) {
   );
   const emptyMessages = {
     companies: 'No associated companies.',
-    contacts: 'No other contacts are associated with this company.',
+    contacts: 'No contacts are associated with this company.',
     lead_tracker: 'No HubSpot Lead records are associated with this contact.',
     attachments: 'No attachments were found in HubSpot notes.',
   };
   if (payload?.unavailable) {
-    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}</div>`;
+    const reconnect = payload?.requiresReauthorization
+      ? '<a class="ws-related-reconnect" href="https://whatsync.io/dashboard/integrations" target="_blank" rel="noopener noreferrer">Reconnect HubSpot</a>'
+      : '';
+    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}${reconnect}</div>`;
   } else {
     const recordUrl = ['companies', 'contacts'].includes(sectionName)
       ? hubSpotRecordUrl('contact', contactId)

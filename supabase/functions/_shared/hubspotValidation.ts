@@ -22,6 +22,8 @@ function scanRequiredMessage(target: Set<string>, value: unknown): void {
     /Property\s+['"`]([A-Za-z0-9_]+)['"`]\s+is required\b/gi,
     /\b([A-Za-z][A-Za-z0-9_]*)\s+is required because of a conditional property rule\b/gi,
     /A value for\s+['"`]?([A-Za-z][A-Za-z0-9_]*)['"`]?\s+must be provided\b/gi,
+    /Missing required propert(?:y|ies)\s*:?\s*['"`]?([A-Za-z][A-Za-z0-9_]*)['"`]?/gi,
+    /Required propert(?:y|ies)\s*:?\s*['"`]?([A-Za-z][A-Za-z0-9_]*)['"`]?/gi,
     /Required propert(?:y|ies)\s*:?\s*['"`\[]?([A-Za-z0-9_,\s'"`.-]+)\]?/gi,
     /Missing required propert(?:y|ies)\s*:?\s*['"`\[]?([A-Za-z0-9_,\s'"`.-]+)\]?/gi,
   ];
@@ -47,7 +49,7 @@ export function extractHubSpotRequiredProperties(payload: unknown): string[] {
     }
     if (typeof value !== 'object') return;
     const record = value as Record<string, unknown>;
-    for (const key of ['requiredProperties', 'missingRequiredProperties']) {
+    for (const key of ['requiredProperties', 'missingRequiredProperties', 'conditionalRequiredProperties', 'missingProperties']) {
       const names = record[key];
       if (Array.isArray(names)) names.forEach((name) => addProperty(found, name));
       else addProperty(found, names);
@@ -61,9 +63,11 @@ export function extractHubSpotRequiredProperties(payload: unknown): string[] {
       const context = record.context && typeof record.context === 'object'
         ? record.context as Record<string, unknown>
         : null;
-      const contextProperties = context?.propertyName;
-      if (Array.isArray(contextProperties)) contextProperties.forEach((name) => addProperty(found, name));
-      else addProperty(found, contextProperties);
+      for (const key of ['propertyName', 'propertyNames', 'requiredProperties', 'missingRequiredProperties']) {
+        const contextProperties = context?.[key];
+        if (Array.isArray(contextProperties)) contextProperties.forEach((name) => addProperty(found, name));
+        else addProperty(found, contextProperties);
+      }
     }
     for (const child of Object.values(record)) visit(child, depth + 1);
   };

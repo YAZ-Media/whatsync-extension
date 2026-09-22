@@ -5547,3 +5547,132 @@ body.whatsapp-theme-dark #hubspot-sidebar {
   text-decoration:none;
 }
 #hubspot-sidebar .ws-lead-activity-grid a { color:var(--sidebar-accent, #ff7a59); }
+
+/* Canonical CRM section layout. Keep the same density and hierarchy HubSpot
+   users already know: flat section headers, inset content, bordered cards. */
+#hubspot-sidebar {
+  --ws-section-x: 18px;
+  --ws-section-header-height: 62px;
+  --ws-card-radius: 14px;
+}
+#hubspot-sidebar :is(
+  .about-section,
+  .activities-section,
+  .ws-related-section,
+  .deals-section,
+  .notes-section,
+  .tickets-section,
+  .tasks-section
+) {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--sidebar-border);
+  border-bottom: 0;
+  background: transparent;
+}
+#hubspot-sidebar :is(
+  .about-header,
+  .activities-header,
+  .ws-related-header,
+  .deals-header,
+  .notes-header,
+  .tickets-header,
+  .tasks-header
+) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--ws-section-header-height);
+  margin: 0;
+  padding: 15px var(--ws-section-x);
+  border: 0;
+  border-bottom: 1px solid var(--sidebar-border);
+  border-radius: 0;
+  background: transparent;
+}
+#hubspot-sidebar :is(.activities-header,.ws-related-header):hover {
+  background: var(--sidebar-hover-bg);
+}
+#hubspot-sidebar .ws-related-header:focus { outline: none; }
+#hubspot-sidebar .ws-related-header:focus-visible {
+  outline: 2px solid var(--sidebar-accent, #ff7a59);
+  outline-offset: -3px;
+}
+#hubspot-sidebar :is(
+  .about-title,
+  .activities-title,
+  .ws-related-title,
+  .deals-title,
+  .notes-title,
+  .tickets-title,
+  .tasks-title
+) {
+  gap: 10px;
+  color: var(--sidebar-text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+#hubspot-sidebar :is(
+  .activities-content,
+  .ws-related-content,
+  .deals-content,
+  .notes-content,
+  .tickets-content,
+  .tasks-content
+) {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 16px var(--ws-section-x) 20px;
+}
+#hubspot-sidebar .ws-related-list { gap: 12px; }
+#hubspot-sidebar .ws-related-item,
+#hubspot-sidebar .ws-association-card {
+  padding: 16px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--ws-card-radius);
+  background: var(--sidebar-content-bg);
+  box-shadow: none;
+}
+#hubspot-sidebar .ws-related-empty,
+#hubspot-sidebar .ws-related-error {
+  padding: 2px 0;
+  color: var(--sidebar-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+#hubspot-sidebar .ws-related-empty .ws-related-reconnect {
+  width: fit-content;
+  margin-top: 12px;
+}
+#hubspot-sidebar .ws-related-reconnect,
+#hubspot-sidebar .ws-related-retry {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: 8px;
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-text);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+#hubspot-sidebar .ws-related-loading { display: none !important; }
+#hubspot-sidebar .ws-lead-tracker-card {
+  gap: 16px;
+  padding: 4px 0 8px;
+}
+#hubspot-sidebar .ws-lead-property { font-size: 14px; line-height: 1.45; }
+#hubspot-sidebar .ws-lead-progress { gap: 5px; }
+#hubspot-sidebar .ws-lead-progress span { height: 12px; border-radius: 3px; }
+#hubspot-sidebar .ws-lead-activity-grid { padding-top: 4px; }
+
+/* HubSpot rule dialog always stays readable even when WhatsApp is dark. */
+#hubspot-required-fields-modal .hubspot-required-field :is(input,select,textarea) {
+  background: #ffffff !important;
+  border-color: #b7c7d1 !important;
+  color: #213343 !important;
+  -webkit-text-fill-color: #213343 !important;
+  color-scheme: light !important;
+}

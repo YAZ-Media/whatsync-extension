@@ -38,6 +38,23 @@ test('sidebar recognizes nested HubSpot conditional validation payloads', () => 
   assert.deepEqual([...result], ['disqualification_reason', 'lead_tier']);
 });
 
+test('sidebar recognizes 2026-09 validation context variants', () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functions(['requiredHubSpotProperties']), ctx);
+  const result = ctx.requiredHubSpotProperties({
+    category: 'PROPERTY_VALIDATION_ERROR',
+    errors: [{
+      code: 'MISSING_CONDITIONAL_REQUIRED_PROPERTIES',
+      message: 'Missing required property: lead_tier',
+      context: {
+        propertyNames: ['lead_tier'],
+        missingRequiredProperties: ['qualification_reason'],
+      },
+    }],
+  });
+  assert.deepEqual([...result], ['lead_tier', 'qualification_reason']);
+});
+
 test('conditional write retries atomically with the required values', async () => {
   let attempts = 0;
   let requestedDefinitions = [];

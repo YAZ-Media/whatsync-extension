@@ -4179,6 +4179,8 @@ function requiredHubSpotProperties(error) {
       /Property\s+['"`]([A-Za-z0-9_]+)['"`]\s+is required\b/gi,
       /\b([A-Za-z][A-Za-z0-9_]*)\s+is required because of a conditional property rule\b/gi,
       /A value for\s+['"`]?([A-Za-z][A-Za-z0-9_]*)['"`]?\s+must be provided\b/gi,
+      /Missing required propert(?:y|ies)\s*:?\s*['"`]?([A-Za-z][A-Za-z0-9_]*)['"`]?/gi,
+      /Required propert(?:y|ies)\s*:?\s*['"`]?([A-Za-z][A-Za-z0-9_]*)['"`]?/gi,
     ];
     patterns.forEach((pattern) => {
       for (const match of value.matchAll(pattern)) add(match[1]);
@@ -4195,7 +4197,7 @@ function requiredHubSpotProperties(error) {
       return;
     }
     if (typeof value !== 'object') return;
-    ['requiredProperties', 'missingRequiredProperties'].forEach((key) => {
+    ['requiredProperties', 'missingRequiredProperties', 'conditionalRequiredProperties', 'missingProperties'].forEach((key) => {
       const required = value[key];
       if (Array.isArray(required)) required.forEach(add);
       else add(required);
@@ -4204,10 +4206,13 @@ function requiredHubSpotProperties(error) {
       .some((entry) => /required/i.test(String(entry ?? '')));
     if (requiredSignal) {
       add(value.propertyName);
+      add(value.name);
       add(value.property);
-      const contextNames = value.context?.propertyName;
-      if (Array.isArray(contextNames)) contextNames.forEach(add);
-      else add(contextNames);
+      ['propertyName', 'propertyNames', 'requiredProperties', 'missingRequiredProperties'].forEach((key) => {
+        const contextNames = value.context?.[key];
+        if (Array.isArray(contextNames)) contextNames.forEach(add);
+        else add(contextNames);
+      });
     }
     Object.values(value).forEach((child) => visit(child, depth + 1));
   };
@@ -4698,22 +4703,6 @@ function formatRelatedSectionItem(sectionName, item, contactId) {
   return '';
 }
 
-function relatedSectionLoadingLabel(sectionName) {
-  return ({
-    companies: 'Loading companies...',
-    contacts: 'Loading contacts...',
-    lead_tracker: 'Loading HubSpot leads...',
-    attachments: 'Loading attachments...',
-  })[sectionName] || 'Loading HubSpot data...';
-}
-
-function showRelatedSectionLoading(section) {
-  const list = section.querySelector('.ws-related-list');
-  const sectionName = section.getAttribute('data-section');
-  if (!list) return;
-  list.innerHTML = `<div class="ws-related-loading" role="status"><div class="loading-spinner"></div><p>${escapeHtml(relatedSectionLoadingLabel(sectionName))}</p></div>`;
-}
-
 function renderRelatedSidebarSection(section, payload) {
   const contactId = section.getAttribute('data-contact-id');
   const sectionName = section.getAttribute('data-section');
@@ -4722,11 +4711,15 @@ function renderRelatedSidebarSection(section, payload) {
   if (!contactId || !sectionName || !list) return;
 
   const results = Array.isArray(payload?.results) ? payload.results : [];
-  if (count) count.textContent = String(
-    sectionName === 'attachments'
-      ? results.reduce((total, item) => total + (Number(item.count) || 0), 0)
-      : (Number.isFinite(Number(payload?.total)) ? Number(payload.total) : results.length)
-  );
+  if (count) {
+    count.textContent = payload?.unavailable
+      ? '—'
+      : String(
+        sectionName === 'attachments'
+          ? results.reduce((total, item) => total + (Number(item.count) || 0), 0)
+          : (Number.isFinite(Number(payload?.total)) ? Number(payload.total) : results.length)
+      );
+  }
   const emptyMessages = {
     companies: 'No associated companies.',
     contacts: 'No contacts are associated with this company.',
@@ -4735,7 +4728,7 @@ function renderRelatedSidebarSection(section, payload) {
   };
   if (payload?.unavailable) {
     const reconnect = payload?.requiresReauthorization
-      ? '<a class="ws-related-reconnect" href="https://whatsync.io/dashboard/integrations" target="_blank" rel="noopener noreferrer">Reconnect HubSpot</a>'
+      ? '<a class="ws-related-reconnect" href="https://whatsync.io/dashboard/integrations" target="_blank" rel="noopener noreferrer">Update HubSpot access</a>'
       : '';
     list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}${reconnect}</div>`;
   } else {
@@ -4758,7 +4751,7 @@ function renderRelatedSidebarSectionError(section, code) {
   const list = section.querySelector('.ws-related-list');
   const count = section.querySelector('.ws-related-count');
   if (!list) return;
-  if (count) count.textContent = '0';
+  if (count) count.textContent = '—';
   delete section.dataset.loaded;
   delete section.dataset.loading;
   const message = code === 'SIDEBAR_SECTION_UNAVAILABLE'
@@ -4778,7 +4771,6 @@ async function loadRelatedSidebarSection(section) {
   if (!contactId || !sectionName || section.dataset.loading === 'true') return;
 
   section.dataset.loading = 'true';
-  showRelatedSectionLoading(section);
   try {
     const response = await sendExtensionMessage({
       action: 'getSidebarSection',
@@ -4797,36 +4789,12 @@ async function loadRelatedSidebarSection(section) {
   }
 }
 
-async function preloadRelatedSidebarSections(sections) {
-  const candidates = sections.filter((section) => section.dataset.loaded !== 'true' && section.dataset.loading !== 'true');
-  if (!candidates.length) return;
-  const contactId = candidates[0].getAttribute('data-contact-id');
-  if (!contactId) return;
-  candidates.forEach((section) => {
-    section.dataset.loading = 'true';
-    showRelatedSectionLoading(section);
-  });
-  try {
-    const requested = candidates.map((section) => section.getAttribute('data-section')).filter(Boolean);
-    const response = await sendExtensionMessage({ action: 'getSidebarSections', contactId, sections: requested });
-    if (!response?.success) {
-      const error = new Error(response?.error || 'Could not preload HubSpot sections');
-      error.code = response?.code;
-      throw error;
-    }
-    candidates.forEach((section) => {
-      const sectionName = section.getAttribute('data-section');
-      const payload = response.sections?.[sectionName];
-      if (payload?.error) renderRelatedSidebarSectionError(section, 'SIDEBAR_SECTION_FAILED');
-      else renderRelatedSidebarSection(section, payload || { results: [] });
-    });
-  } catch (error) {
-    candidates.forEach((section) => delete section.dataset.loading);
-    await Promise.all(candidates.map((section) => loadRelatedSidebarSection(section)));
-  }
+async function preloadRelatedSidebarSections(contactId, requested = ['companies', 'contacts', 'lead_tracker', 'attachments']) {
+  if (!contactId) return { success: false, sections: {} };
+  return sendExtensionMessage({ action: 'getSidebarSections', contactId, sections: requested });
 }
 
-function setupRelatedSidebarSections() {
+function setupRelatedSidebarSections(prefetchPromise = null) {
   const sections = [...document.querySelectorAll('#hubspot-sidebar .ws-related-section')];
   sections.forEach((section) => {
     const header = section.querySelector('.ws-related-header');
@@ -4844,9 +4812,30 @@ function setupRelatedSidebarSections() {
       }
     });
   });
-  const preload = () => preloadRelatedSidebarSections(sections);
-  if ('requestIdleCallback' in window) window.requestIdleCallback(preload, { timeout: 600 });
-  else setTimeout(preload, 120);
+  if (!sections.length) return;
+  const contactId = sections[0].getAttribute('data-contact-id');
+  sections.forEach((section) => { section.dataset.loading = 'true'; });
+  const request = prefetchPromise || preloadRelatedSidebarSections(
+    contactId,
+    sections.map((section) => section.getAttribute('data-section')).filter(Boolean),
+  );
+  Promise.resolve(request).then((response) => {
+    // A user can switch chats while this request is in flight. Only populate
+    // the sidebar that still belongs to the requested HubSpot contact.
+    const currentSections = [...document.querySelectorAll('#hubspot-sidebar .ws-related-section')]
+      .filter((section) => section.getAttribute('data-contact-id') === String(contactId || ''));
+    if (!response?.success) throw Object.assign(new Error(response?.error || 'Could not load HubSpot sections'), { code: response?.code });
+    currentSections.forEach((section) => {
+      const sectionName = section.getAttribute('data-section');
+      const payload = response.sections?.[sectionName];
+      if (payload?.error) renderRelatedSidebarSectionError(section, 'SIDEBAR_SECTION_FAILED');
+      else renderRelatedSidebarSection(section, payload || { results: [] });
+    });
+  }).catch((error) => {
+    sections.forEach((section) => {
+      if (section.isConnected) renderRelatedSidebarSectionError(section, error?.code);
+    });
+  });
 }
 
 // Set up the Recent activity section: collapsible header + initial load. Expanded by default.
@@ -10782,7 +10771,7 @@ function relatedSidebarSectionMarkup(key, title, contactId) {
           <svg class="chevron-icon ws-related-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
-          <span>${escapeHtml(title)} (<span class="ws-related-count">0</span>)</span>
+          <span>${escapeHtml(title)} (<span class="ws-related-count">—</span>)</span>
         </span>
       </button>
       <div class="ws-related-content" hidden>
@@ -10808,6 +10797,10 @@ async function formatContactDetails(contacts, phoneNumber) {
   const contact = contacts[0]; // Use first contact
   const props = contact.properties || {};
   
+  // Privacy and layout settings are independent reads. Start privacy now so
+  // it does not create another serial wait after sidebar preferences.
+  const privacyPromise = getPrivacySettings();
+
   // Get userId for dynamic sidebar fields
   let userId = null;
   try {
@@ -10869,7 +10862,7 @@ async function formatContactDetails(contacts, phoneNumber) {
     }
   }
   
-  const headerPrivacy = await getPrivacySettings();
+  const headerPrivacy = await privacyPromise;
   const headerAllows = key => isSidebarFieldEnabled(key) && (!Array.isArray(headerPrivacy.allowed_properties) || headerPrivacy.allowed_properties.includes(key));
   const visibleName = headerAllows('firstname_lastname') ? fullName : 'Contact';
   // Escape CRM-sourced values before interpolating them into sidebar HTML — a
@@ -11308,13 +11301,15 @@ async function updateSidebarContent(known = null) {
   currentPhoneNumber = null;
   const isCurrent = () => updateToken === sidebarContentUpdateToken && renderChatKey === getCurrentChatHeaderKey();
   sidebarContent.innerHTML = `<div class="ws-contact-skeleton" role="status"><span class="ws-eyebrow">HUBSPOT WORKSPACE</span><h4>${escapeHtml(getCurrentContactName() || 'Contact')}</h4><p>Loading this conversation’s CRM record…</p><i></i><i></i><i></i></div>`;
+  const maindiv = document.querySelector("div#main");
+  const extractedPhonePromise = maindiv
+    ? (known?.phone ? Promise.resolve(known.phone) : extractPhoneFromChat()).catch(() => null)
+    : Promise.resolve(null);
   const state = await getWhatsyncState();
   if (!isCurrent()) return;
   if (!state.loggedIn) { renderSignInState(sidebarContent); return; }
   if (!state.hubspotConnected) { renderConnectHubSpotState(sidebarContent); return; }
 
-  const maindiv = document.querySelector("div#main");
-  
   if (!maindiv) {
     // Show "NO Chat Selected" message
     sidebarContent.innerHTML = `
@@ -11328,7 +11323,7 @@ async function updateSidebarContent(known = null) {
     // Main div exists - extract phone and check HubSpot
     // Phone extraction happens when sidebar shows
     whatsyncDebug('[Sidebar] Sidebar is showing - extracting phone number...');
-    return (known?.phone ? Promise.resolve(known.phone) : extractPhoneFromChat()).then(async extractedPhone => {
+    return extractedPhonePromise.then(async extractedPhone => {
       if (!isCurrent()) return;
 
       if (extractedPhone) {
@@ -11338,6 +11333,10 @@ async function updateSidebarContent(known = null) {
 
         if (contacts && contacts.length > 0) {
           whatsyncDebug('Matching contact found in HubSpot:', contacts);
+          // Begin the slower association/Lead work as soon as the contact is
+          // known. It runs beside contact formatting, so switching chats does
+          // not leave users waiting through a second loading phase.
+          const relatedSectionsPromise = preloadRelatedSidebarSections(contactRecordId(contacts[0]));
           const html = await formatContactDetails(contacts, extractedPhone);
           if (!isCurrent()) return;
           sidebarContent.innerHTML = html;
@@ -11363,7 +11362,7 @@ async function updateSidebarContent(known = null) {
           setupEditableContactFields();
           setupOwnerNameResolution();
           setupContactSuggestions(sidebarContent, contacts[0]);
-          setupRelatedSidebarSections();
+          setupRelatedSidebarSections(relatedSectionsPromise);
           // Recent activity timeline
           setupActivitiesSection();
           // Setup notes section
@@ -11434,6 +11433,7 @@ async function updateSidebarContent(known = null) {
               const syncedContacts = await checkHubSpotContact(extractedPhone);
               if (!isCurrent()) return;
               if (syncedContacts && syncedContacts.length > 0) {
+                const relatedSectionsPromise = preloadRelatedSidebarSections(contactRecordId(syncedContacts[0]));
                 const html = await formatContactDetails(syncedContacts, extractedPhone);
           if (!isCurrent()) return;
           sidebarContent.innerHTML = html;
@@ -11449,7 +11449,7 @@ async function updateSidebarContent(known = null) {
                 setupAboutCollapsible();
                 setupEditableContactFields();
                 setupOwnerNameResolution();
-                setupRelatedSidebarSections();
+                setupRelatedSidebarSections(relatedSectionsPromise);
                 setupActivitiesSection();
                 setupNotesSection();
                 setupTicketsSection();

@@ -43,6 +43,20 @@ Deno.test('parses the current HubSpot conditional and create-form error shapes',
   }), ['disqualification_reason']);
 });
 
+Deno.test('parses 2026-09 conditional context variants', () => {
+  assertEquals(extractHubSpotRequiredProperties({
+    category: 'PROPERTY_VALIDATION_ERROR',
+    errors: [{
+      code: 'MISSING_CONDITIONAL_REQUIRED_PROPERTIES',
+      message: 'Missing required property: lead_tier',
+      context: {
+        propertyNames: ['lead_tier'],
+        missingRequiredProperties: ['qualification_reason'],
+      },
+    }],
+  }), ['lead_tier', 'qualification_reason']);
+});
+
 Deno.test('builds safe validation metadata for the current object write path', () => {
   const details = buildHubSpotValidationDetails({
     category: 'VALIDATION_ERROR',

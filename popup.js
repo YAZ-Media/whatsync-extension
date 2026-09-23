@@ -98,6 +98,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const hubspotPortalIdEl = document.getElementById('hubspotPortalId');
   const hubspotConnectedDateEl = document.getElementById('hubspotConnectedDate');
   const hubspotTestConnectionBtn = document.getElementById('hubspotTestConnectionBtn');
+  const hubspotReconnectBtn = document.getElementById('hubspotReconnectBtn');
 
   function hideLoadingShowContent() {
     if (popupLoading) popupLoading.classList.add('hidden');
@@ -215,6 +216,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     hubspotPortalIdEl.textContent = portalId != null && String(portalId).trim() !== '' ? `Portal ID: ${portalId}` : 'Portal ID: —';
     const dateStr = formatConnectedDate(connectedAt);
     hubspotConnectedDateEl.textContent = dateStr ? `Connected: ${dateStr}` : 'Connected';
+    if (hubspotReconnectBtn) {
+      hubspotReconnectBtn.textContent = connection?.requiresConnectionUpdate ? 'Update connection' : 'Reconnect';
+    }
     hubspotAccountDetails.classList.add('visible');
   }
 

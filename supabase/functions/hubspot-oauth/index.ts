@@ -389,13 +389,19 @@ serve(async (req) => {
         // their own OAuth inherit the org Owner's connection.
         const connUserId = await resolveConnectionUserId(userId);
         const connRes = await externalQuery('hubspot_connections', 'GET', {
-          select: 'status,portal_id,connected_at,updated_at',
+          select: 'status,portal_id,connected_at,updated_at,scopes',
           filters: { user_id: `eq.${connUserId}` },
         });
 
-        let connection = { status: 'not_connected', portal_id: null, connected_at: null };
+        let connection: Record<string, unknown> = { status: 'not_connected', portal_id: null, connected_at: null };
+        let leadStageTracker = false;
         if (connRes.ok && Array.isArray(connRes.data) && connRes.data.length > 0) {
           connection = connRes.data[0];
+          const grantedScopes = Array.isArray(connection.scopes)
+            ? connection.scopes.map(String)
+            : String(connection.scopes || '').split(/[\s,]+/).filter(Boolean);
+          leadStageTracker = grantedScopes.includes('crm.objects.leads.read');
+          delete connection.scopes;
           // Normalize the legacy 'connected' spelling so every client (website,
           // extension) sees the same canonical 'active' status.
           if (connection.status === 'connected') connection = { ...connection, status: 'active' };
@@ -443,7 +449,14 @@ serve(async (req) => {
         }
 
         return new Response(
-          JSON.stringify({ connection, settings }),
+          JSON.stringify({
+            connection: {
+              ...connection,
+              capabilities: { leadStageTracker },
+              requiresConnectionUpdate: connection.status === 'active' && !leadStageTracker,
+            },
+            settings,
+          }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
@@ -808,21 +821,33 @@ serve(async (req) => {
 
         const connUserId = await resolveConnectionUserId(userId);
         const connRes = await externalQuery('hubspot_connections', 'GET', {
-          select: 'status,portal_id,connected_at',
+          select: 'status,portal_id,connected_at,scopes',
           filters: { user_id: `eq.${connUserId}` },
         });
 
         let status = 'not_connected';
         let portalId = null;
         let connectedAt = null;
+        let leadStageTracker = false;
         if (connRes.ok && Array.isArray(connRes.data) && connRes.data.length > 0) {
           status = connRes.data[0].status === 'connected' ? 'active' : connRes.data[0].status;
           portalId = connRes.data[0].portal_id;
           connectedAt = connRes.data[0].connected_at;
+          const grantedScopes = Array.isArray(connRes.data[0].scopes)
+            ? connRes.data[0].scopes.map(String)
+            : String(connRes.data[0].scopes || '').split(/[\s,]+/).filter(Boolean);
+          leadStageTracker = grantedScopes.includes('crm.objects.leads.read');
         }
 
         return new Response(
-          JSON.stringify({ status, portalId, connectedAt, connected: ['active', 'connected'].includes(String(status)) }),
+          JSON.stringify({
+            status,
+            portalId,
+            connectedAt,
+            connected: ['active', 'connected'].includes(String(status)),
+            capabilities: { leadStageTracker },
+            requiresConnectionUpdate: status === 'active' && !leadStageTracker,
+          }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }

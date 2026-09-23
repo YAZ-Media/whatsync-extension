@@ -4864,21 +4864,19 @@ function renderRelatedSidebarSection(section, payload) {
     lead_tracker: 'No lead associated.',
     attachments: 'No attachments were found in HubSpot notes.',
   };
+  // Lead-object access is an account-level HubSpot capability. Older OAuth
+  // connections may not include it, and prompting for a second sign-in inside
+  // one sidebar section makes the feature feel disconnected. The Integrations
+  // page owns the one-time connection upgrade; keep the unavailable section
+  // out of the user's working surface until that upgrade is complete.
+  if (sectionName === 'lead_tracker' && payload?.requiresReauthorization) {
+    section.hidden = true;
+    section.dataset.loaded = 'true';
+    delete section.dataset.loading;
+    return;
+  }
   if (payload?.unavailable) {
-    const reconnect = payload?.requiresReauthorization
-      ? '<button type="button" class="ws-related-reconnect" data-update-hubspot-access>Connect HubSpot Leads</button>'
-      : '';
-    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}${reconnect}</div>`;
-    list.querySelector('[data-update-hubspot-access]')?.addEventListener('click', async (event) => {
-      const button = event.currentTarget;
-      button.disabled = true;
-      button.textContent = 'Opening HubSpot…';
-      const response = await sendExtensionMessage({ action: 'updateHubSpotLeadAccess' }).catch(() => null);
-      if (!response?.success) {
-        button.disabled = false;
-        button.textContent = 'Try again';
-      }
-    });
+    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}</div>`;
   } else {
     const recordUrl = ['companies', 'contacts'].includes(sectionName)
       ? hubSpotRecordUrl('contact', contactId)

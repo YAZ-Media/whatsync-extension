@@ -462,23 +462,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     callHubSpotEdgeFunction('getAccessStatus').then(data => sendResponse({success:true,data})).catch(error => sendResponse({success:false,error:error.message}));
     return true;
   }
-  if (request.action === 'updateHubSpotLeadAccess') {
-    (async () => {
-      try {
-        const result = await callHubSpotOAuthEdgeFunction('startOAuth', {});
-        const authUrl = String(result?.authUrl || '');
-        if (!/^https:\/\/app\.hubspot\.com\/oauth\/authorize\?/.test(authUrl)) {
-          throw new Error('HubSpot authorization is unavailable.');
-        }
-        await chrome.tabs.create({ url: authUrl, active: true });
-        sendResponse({ success: true });
-      } catch (error) {
-        console.error('[Background] Could not start HubSpot Lead authorization:', error);
-        sendResponse({ success: false, error: error?.message || 'Could not open HubSpot authorization.' });
-      }
-    })();
-    return true;
-  }
   // Handle getCurrentTabId request
   if (request.action === 'getCurrentTabId') {
     getCurrentTabId().then(tabId => {
@@ -2787,7 +2770,9 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
       portalId: hubspotConnectionCache.portalId,
       portal_id: hubspotConnectionCache.portal_id,
       connectedAt: hubspotConnectionCache.connectedAt,
-      connected_at: hubspotConnectionCache.connected_at
+      connected_at: hubspotConnectionCache.connected_at,
+      capabilities: hubspotConnectionCache.capabilities,
+      requiresConnectionUpdate: hubspotConnectionCache.requiresConnectionUpdate
     };
   }
 
@@ -2807,6 +2792,8 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
       portal_id: portalId,
       connectedAt,
       connected_at: connectedAt,
+      capabilities: result.capabilities,
+      requiresConnectionUpdate: !!result.requiresConnectionUpdate,
       cachedAt: Date.now()
     };
 
@@ -2822,6 +2809,8 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
           portal_id: portalId,
           connectedAt,
           connected_at: connectedAt,
+          capabilities: result.capabilities,
+          requiresConnectionUpdate: !!result.requiresConnectionUpdate,
           savedAt: Date.now(),
         }
       });

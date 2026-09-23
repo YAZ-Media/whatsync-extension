@@ -30,10 +30,18 @@ test('all configurable relationship sections have a real extension and API path'
   assert.match(content, /setupRelatedSidebarSections\(relatedSectionsPromise\)/);
   assert.doesNotMatch(content, /showRelatedSectionLoading/);
   assert.match(content, /ws-related-count">—/);
-  assert.match(content, /data-update-hubspot-access/);
-  assert.match(background, /request\.action === 'updateHubSpotLeadAccess'/);
+  assert.match(content, /sectionName === 'lead_tracker' && payload\?\.requiresReauthorization/);
+  assert.match(content, /section\.hidden = true/);
+  assert.doesNotMatch(content, /data-update-hubspot-access/);
+  assert.doesNotMatch(background, /request\.action === 'updateHubSpotLeadAccess'/);
   assert.match(content, /key === 'lead_tracker' \? ''/);
   assert.match(content, /\+ Add in HubSpot/);
+  const oauth = read('supabase/functions/hubspot-oauth/index.ts');
+  assert.match(oauth, /optional_scope', 'sales-email-read crm\.objects\.leads\.read'/);
+  assert.match(oauth, /requiresConnectionUpdate/);
+  assert.match(oauth, /capabilities: \{ leadStageTracker \}/);
+  const popup = read('popup.js');
+  assert.match(popup, /Update connection/);
 });
 
 test('HubSpot conditional rules use enforced writes and remain configurable', () => {

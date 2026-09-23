@@ -281,7 +281,7 @@ function attachKnownConditionalFields(contacts, definitions) {
 }
 async function callHubSpotEdgeFunction(action, data = {}) {
   const cacheable = [
-    'getPropertyOptions', 'getPropertyDefinitions', 'getOwners', 'getOwnerById',
+    'getPropertyOptions', 'getPropertyDefinitions', 'getCreatePropertyDefinitions', 'getOwners', 'getOwnerById',
     'getSidebarFields', 'getSidebarSection', 'getSidebarSections', 'searchContacts',
     'getRuntimeInfo',
   ].includes(action);
@@ -994,6 +994,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } catch (error) {
         console.error('[Background] getPropertyDefinitions failed:', error);
         sendResponse(hubSpotErrorResponse(error, 'Could not load the required HubSpot fields'));
+      }
+    })();
+    return true;
+  }
+
+  if (request.action === 'getCreatePropertyDefinitions') {
+    const objectType = request.objectType || request.data?.objectType || 'contacts';
+    (async () => {
+      try {
+        const result = await callHubSpotEdgeFunction('getCreatePropertyDefinitions', { objectType });
+        sendResponse({ success: true, properties: result?.properties || [] });
+      } catch (error) {
+        console.error('[Background] getCreatePropertyDefinitions failed:', error);
+        sendResponse(hubSpotErrorResponse(error, 'Could not load the HubSpot create requirements'));
       }
     })();
     return true;

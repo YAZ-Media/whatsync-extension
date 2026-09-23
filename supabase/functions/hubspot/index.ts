@@ -1027,6 +1027,16 @@ function sanitizeProperties(raw: Record<string, unknown>): Record<string, unknow
   return out;
 }
 
+function isRequiredForCreate(prop: Record<string, unknown>): boolean {
+  const metadata = (prop.modificationMetadata as Record<string, unknown> | undefined) || {};
+  const requiredFor = Array.isArray(prop.requiredFor) ? prop.requiredFor.map(String) : [];
+  return prop.required === true ||
+    prop.isRequired === true ||
+    prop.requiredForCreate === true ||
+    metadata.requiredValue === true ||
+    requiredFor.some((value) => /create/i.test(value));
+}
+
 // Map the extension's flat task payload to real HubSpot task property names.
 // The client sends { subject, body, status, type, priority, dueDate, ownerId, contactId };
 // HubSpot only accepts hs_task_* property names, so a raw pass-through fails validation.
@@ -1533,7 +1543,7 @@ async function handleAction(
 
     case 'createContact':
       return hubspot(token, 'POST', crmObjectWritePath('contacts'), {
-        properties: (data.properties as Record<string, unknown>) ?? data,
+        properties: sanitizeProperties((data.properties as Record<string, unknown>) ?? data),
       });
 
     case 'getContact': {
@@ -2023,9 +2033,63 @@ async function handleAction(
           externalOptions: prop.externalOptions === true,
           referencedObjectType,
           readOnly: Boolean((prop.modificationMetadata as Record<string, unknown> | undefined)?.readOnlyValue),
+          hidden: prop.hidden === true,
+          formField: prop.formField === true,
+          calculated: prop.calculated === true,
+          groupName: typeof prop.groupName === 'string' ? prop.groupName : '',
+          displayOrder: typeof prop.displayOrder === 'number' ? prop.displayOrder : null,
         };
       }));
       return { properties: properties.filter((property) => !property.readOnly) };
+    }
+
+    // HubSpot 2026-09 exposes account-level create requirements on property
+    // definitions. Return only those fields so the extension can show them
+    // before the first save attempt. HubSpot remains authoritative and any
+    // conditional fields activated by the submitted values are handled by the
+    // validation/retry flow.
+    case 'getCreatePropertyDefinitions': {
+      const objectType = String((data as { objectType?: string }).objectType || 'contacts');
+      const response = (await hubspot(
+        token,
+        'GET',
+        `/crm/properties/${HUBSPOT_CRM_WRITE_VERSION}/${encodeURIComponent(objectType)}`,
+      )) as { results?: Array<Record<string, unknown>> };
+      const required = (response.results || []).filter((prop) => {
+        const readOnly = Boolean((prop.modificationMetadata as Record<string, unknown> | undefined)?.readOnlyValue);
+        return !readOnly && !prop.calculated && isRequiredForCreate(prop);
+      });
+      const owners = required.some((prop) => String(prop.referencedObjectType || '').toUpperCase() === 'OWNER')
+        ? (await hubspot(token, 'GET', '/crm/v3/owners?limit=100')) as { results?: Array<Record<string, unknown>> }
+        : { results: [] };
+      const properties = required.map((prop) => {
+        let options = Array.isArray(prop.options)
+          ? (prop.options as Array<Record<string, unknown>>)
+            .filter((option) => option && option.hidden !== true)
+            .map((option) => ({ value: String(option.value ?? ''), label: String(option.label ?? option.value ?? '') }))
+          : [];
+        const referencedObjectType = typeof prop.referencedObjectType === 'string' ? prop.referencedObjectType : '';
+        if (!options.length && prop.externalOptions === true && referencedObjectType.toUpperCase() === 'OWNER') {
+          options = (owners.results || [])
+            .filter((owner) => owner.archived !== true)
+            .map((owner) => ({
+              value: String(owner.id ?? ''),
+              label: [owner.firstName, owner.lastName].filter(Boolean).join(' ') || String(owner.email || owner.id || ''),
+            }));
+        }
+        return {
+          name: String(prop.name || ''),
+          label: String(prop.label || prop.name || ''),
+          description: typeof prop.description === 'string' ? prop.description : '',
+          type: typeof prop.type === 'string' ? prop.type : 'string',
+          fieldType: typeof prop.fieldType === 'string' ? prop.fieldType : 'text',
+          options,
+          externalOptions: prop.externalOptions === true,
+          referencedObjectType,
+          required: true,
+        };
+      }).filter((property) => /^[A-Za-z0-9_]+$/.test(property.name));
+      return { properties };
     }
 
     // ----- Dashboard aggregates -----

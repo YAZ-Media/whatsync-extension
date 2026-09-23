@@ -4290,21 +4290,89 @@ function hubSpotPropertyInput(definition) {
   let control;
   if (options.length) {
     const multiple = fieldType === 'checkbox';
-    control = `<select name="${name}" ${multiple ? 'multiple data-hubspot-type="multiple"' : ''} required>${multiple ? '' : `<option value="">Select ${label}</option>`}${options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label || option.value)}</option>`).join('')}</select>`;
+    control = `<select name="${name}" data-hubspot-property="${name}" ${multiple ? 'multiple data-hubspot-type="multiple"' : ''} required>${multiple ? '' : `<option value="">Select ${label}</option>`}${options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label || option.value)}</option>`).join('')}</select>`;
   } else if (type === 'bool' || fieldType === 'booleancheckbox') {
-    control = `<select name="${name}" required><option value="">Select ${label}</option><option value="true">Yes</option><option value="false">No</option></select>`;
+    control = `<select name="${name}" data-hubspot-property="${name}" required><option value="">Select ${label}</option><option value="true">Yes</option><option value="false">No</option></select>`;
   } else if (type === 'date' || fieldType === 'date') {
-    control = `<input name="${name}" type="date" data-hubspot-type="date" required>`;
+    control = `<input name="${name}" data-hubspot-property="${name}" type="date" data-hubspot-type="date" required>`;
   } else if (type === 'datetime') {
-    control = `<input name="${name}" type="datetime-local" data-hubspot-type="datetime" required>`;
+    control = `<input name="${name}" data-hubspot-property="${name}" type="datetime-local" data-hubspot-type="datetime" required>`;
   } else if (type === 'number') {
-    control = `<input name="${name}" type="number" step="any" required>`;
+    control = `<input name="${name}" data-hubspot-property="${name}" type="number" step="any" required>`;
   } else if (fieldType === 'textarea') {
-    control = `<textarea name="${name}" rows="3" required></textarea>`;
+    control = `<textarea name="${name}" data-hubspot-property="${name}" rows="3" required></textarea>`;
   } else {
-    control = `<input name="${name}" type="text" required>`;
+    control = `<input name="${name}" data-hubspot-property="${name}" type="text" required>`;
   }
   return `<label class="hubspot-required-field"><span>${label}<b aria-hidden="true">*</b></span>${control}${description}</label>`;
+}
+
+function readHubSpotPropertyValues(container) {
+  const values = {};
+  if (!container) return values;
+  container.querySelectorAll('[data-hubspot-property]').forEach((field) => {
+    if (!field.name || field.value === '') return;
+    let value = field.dataset.hubspotType === 'multiple'
+      ? [...field.selectedOptions].map((option) => option.value).join(';')
+      : field.value;
+    if (field.dataset.hubspotType === 'date') value = String(new Date(`${value}T00:00:00.000Z`).getTime());
+    if (field.dataset.hubspotType === 'datetime') value = String(new Date(value).getTime());
+    values[field.name] = value;
+  });
+  return values;
+}
+
+function requestHubSpotCreateRequiredValues(form, definitions, createBtn, messageDiv) {
+  return new Promise((resolve, reject) => {
+    const host = form.querySelector('.hubspot-create-required-fields');
+    if (!host || !form.isConnected) {
+      reject(new Error('The contact form is no longer open.'));
+      return;
+    }
+    host.hidden = false;
+    definitions.forEach((definition) => {
+      if (!host.querySelector(`[data-hubspot-property="${CSS.escape(definition.name)}"]`)) {
+        host.insertAdjacentHTML('beforeend', hubSpotPropertyInput(definition));
+      }
+    });
+    const intro = host.querySelector('.hubspot-create-required-intro');
+    if (intro) intro.hidden = false;
+    messageDiv.className = 'form-message info';
+    messageDiv.setAttribute('role', 'status');
+    messageDiv.textContent = 'Your HubSpot account requires the highlighted fields. Complete them to create the contact.';
+    messageDiv.style.display = 'block';
+    form.removeAttribute('aria-busy');
+    createBtn.disabled = false;
+    createBtn.querySelector('.btn-text').textContent = 'Complete & create';
+    createBtn.querySelector('.btn-text').style.display = 'inline';
+    createBtn.querySelector('.btn-loading').style.display = 'none';
+
+    let observer;
+    const onSubmit = (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!form.reportValidity()) return;
+      form.removeEventListener('submit', onSubmit, true);
+      observer?.disconnect();
+      form.setAttribute('aria-busy', 'true');
+      createBtn.disabled = true;
+      createBtn.querySelector('.btn-text').style.display = 'none';
+      createBtn.querySelector('.btn-loading').style.display = 'inline';
+      messageDiv.style.display = 'none';
+      resolve(readHubSpotPropertyValues(host));
+    };
+    form.addEventListener('submit', onSubmit, true);
+    observer = new MutationObserver(() => {
+      if (form.isConnected) return;
+      observer.disconnect();
+      form.removeEventListener('submit', onSubmit, true);
+      const error = new Error('Contact creation cancelled');
+      error.name = 'AbortError';
+      reject(error);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    host.querySelector('[data-hubspot-property]')?.focus();
+  });
 }
 
 function requestHubSpotRequiredValues(definitions) {
@@ -4357,7 +4425,7 @@ function requestHubSpotRequiredValues(definitions) {
   });
 }
 
-async function runHubSpotConditionalWrite({ objectType, properties, write }) {
+async function runHubSpotConditionalWrite({ objectType, properties, write, requestValues = requestHubSpotRequiredValues }) {
   const runtime = await sendExtensionMessage({ action: 'verifyHubSpotWriteRuntime' });
   if (!runtime?.success) {
     throw new Error(runtime?.error || 'WhatSync could not verify HubSpot property rules. Nothing was saved.');
@@ -4406,7 +4474,7 @@ async function runHubSpotConditionalWrite({ objectType, properties, write }) {
       // fetch and display the accepted dependent values without hardcoded
       // portal-specific property names.
       await rememberHubSpotConditionalDefinitions(objectType, contextualDefinitions);
-      const values = await requestHubSpotRequiredValues(contextualDefinitions);
+      const values = await requestValues(contextualDefinitions);
       combined = { ...combined, ...values };
     }
   }
@@ -9665,6 +9733,76 @@ async function populateCreateFormSelect(selectId, property, placeholder) {
   }
 }
 
+const CONTACT_CREATE_PROPERTY_FIELDS = {
+  email: 'email',
+  firstname: 'firstName',
+  lastname: 'lastName',
+  phone: 'phone',
+  company: 'company',
+  jobtitle: 'jobTitle',
+  hubspot_owner_id: 'contactOwner',
+  lifecyclestage: 'lifecycleStage',
+  hs_lead_status: 'leadStatus',
+};
+
+// HubSpot does not publish the private ordering of a portal's manually
+// customized Create contact panel. It does publish the portal's property
+// definitions, however, so keep every visible core field labelled and
+// described exactly as it is in that account. Required create/conditional
+// fields are added inline after HubSpot's authoritative write validation.
+async function applyContactCreatePropertyMetadata(form) {
+  const propertyNames = Object.keys(CONTACT_CREATE_PROPERTY_FIELDS);
+  try {
+    const definitions = await fetchHubSpotPropertyDefinitions('contacts', propertyNames);
+    if (!form.isConnected) return;
+    definitions.forEach((definition) => {
+      const id = CONTACT_CREATE_PROPERTY_FIELDS[definition.name];
+      const control = id ? form.querySelector(`#${id}`) : null;
+      const group = control?.closest('.form-group');
+      const label = group?.querySelector(`label[for="${id}"]`);
+      if (!control || !group || !label) return;
+      label.textContent = `${definition.label || definition.name}${control.required ? ' *' : ''}`;
+      if (definition.description) {
+        let hint = group.querySelector('.ws-property-description');
+        if (!hint) {
+          hint = document.createElement('p');
+          hint.className = 'form-hint ws-property-description';
+          control.before(hint);
+        }
+        hint.textContent = definition.description;
+      }
+    });
+  } catch (error) {
+    console.warn('[Content] Could not load HubSpot contact field metadata:', error);
+  }
+}
+
+async function loadHubSpotCreateRequiredFields(form) {
+  try {
+    const response = await sendExtensionMessage({
+      action: 'getCreatePropertyDefinitions',
+      objectType: 'contacts',
+    });
+    if (!response?.success || !form.isConnected) return;
+    const core = new Set(Object.keys(CONTACT_CREATE_PROPERTY_FIELDS));
+    const definitions = (response.properties || []).filter((definition) => !core.has(definition.name));
+    if (!definitions.length) return;
+    const host = form.querySelector('.hubspot-create-required-fields');
+    if (!host) return;
+    host.hidden = false;
+    host.querySelector('.hubspot-create-required-intro')?.removeAttribute('hidden');
+    definitions.forEach((definition) => {
+      if (!host.querySelector(`[data-hubspot-property="${CSS.escape(definition.name)}"]`)) {
+        host.insertAdjacentHTML('beforeend', hubSpotPropertyInput(definition));
+      }
+    });
+  } catch (error) {
+    // The save endpoint still enforces these rules and will add any missing
+    // fields inline. A metadata outage must not make contact creation unsafe.
+    console.warn('[Content] Could not preload HubSpot create requirements:', error);
+  }
+}
+
 // The signed-in user's own email, cached so the in-chat scanner can exclude it
 // from contact suggestions. Populated (async) by formatCreateContactForm.
 let cachedUserEmail = null;
@@ -9741,6 +9879,8 @@ function setupCreateContactForm(phoneNumber) {
   
   if (!form || !createBtn || !messageDiv) return;
   showWorkspaceAccess(form);
+  applyContactCreatePropertyMetadata(form);
+  loadHubSpotCreateRequiredFields(form);
 
   const { firstName: defaultFirst, lastName: defaultLast } = parseContactNameParts(
     getCurrentContactName()
@@ -9824,6 +9964,9 @@ function setupCreateContactForm(phoneNumber) {
     const lastName = document.getElementById('lastName').value.trim();
     const contactName = `${firstName} ${lastName}`.trim() || getCurrentContactName() || '';
 
+    const accountSpecificProperties = readHubSpotPropertyValues(
+      form.querySelector('.hubspot-create-required-fields')
+    );
     const contactData = {
       sourceData: {
         phone: hubspotPhoneFormat || undefined,
@@ -9847,7 +9990,8 @@ function setupCreateContactForm(phoneNumber) {
           return manual || undefined;
         })(),
         lifecyclestage: document.getElementById('lifecycleStage').value.trim() || undefined,
-        hs_lead_status: document.getElementById('leadStatus').value.trim() || undefined
+        hs_lead_status: document.getElementById('leadStatus').value.trim() || undefined,
+        ...accountSpecificProperties,
       }
     };
     
@@ -9855,6 +9999,12 @@ function setupCreateContactForm(phoneNumber) {
       const createResponse = await runHubSpotConditionalWrite({
         objectType: 'contacts',
         properties: contactData.properties,
+        requestValues: (definitions) => requestHubSpotCreateRequiredValues(
+          form,
+          definitions,
+          createBtn,
+          messageDiv,
+        ),
         write: async (properties) => ({
           success: true,
           data: await createHubSpotContact({ ...contactData, properties }),
@@ -10100,29 +10250,30 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
         <h5>Create New Contact</h5>
         <form id="createContactForm" class="create-contact-form">
           <section class="ws-suggestions" aria-label="Contact suggestions"></section>
-          <div class="form-group">
+          <p class="create-contact-account-note">Fields, choices, and required rules come from your connected HubSpot account.</p>
+          <div class="form-group" data-hubspot-property-group="email">
             <label for="email">Email *</label>
-            <input type="email" id="email" name="email" required>
+            <input type="email" id="email" name="email" autocomplete="email" required>
           </div>
-          <div class="form-group">
+          <div class="form-group" data-hubspot-property-group="firstname">
             <label for="firstName">First Name *</label>
-            <input type="text" id="firstName" name="firstName" value="${escapeHtml(defaultFirstName)}" required>
+            <input type="text" id="firstName" name="firstName" autocomplete="given-name" value="${escapeHtml(defaultFirstName)}" required>
           </div>
-          <div class="form-group">
+          <div class="form-group" data-hubspot-property-group="lastname">
             <label for="lastName">Last Name</label>
-            <input type="text" id="lastName" name="lastName" value="${escapeHtml(defaultLastName)}">
+            <input type="text" id="lastName" name="lastName" autocomplete="family-name" value="${escapeHtml(defaultLastName)}">
           </div>
-          <div class="form-group">
+          <div class="form-group" data-hubspot-property-group="phone">
             <label for="phone">Phone</label>
-            <input type="tel" id="phone" name="phone" value="${escapeHtml(displayPhone)}" data-phone-full="${escapeHtml(hubspotPhoneFormat)}" placeholder="${manualPhoneEntry ? 'Enter phone number' : ''}" ${phoneReadonly ? 'readonly' : ''}>
+            <input type="tel" id="phone" name="phone" autocomplete="tel" value="${escapeHtml(displayPhone)}" data-phone-full="${escapeHtml(hubspotPhoneFormat)}" placeholder="${manualPhoneEntry ? 'Enter phone number' : ''}" ${phoneReadonly ? 'readonly' : ''}>
           </div>
-          <div class="form-group">
+          <div class="form-group" data-hubspot-property-group="company">
             <label for="company">Company</label>
-            <input type="text" id="company" name="company">
+            <input type="text" id="company" name="company" autocomplete="organization">
           </div>
-          <div class="form-group">
+          <div class="form-group" data-hubspot-property-group="jobtitle">
             <label for="jobTitle">Job Title</label>
-            <input type="text" id="jobTitle" name="jobTitle">
+            <input type="text" id="jobTitle" name="jobTitle" autocomplete="organization-title">
           </div>
           <div class="form-group" id="contactOwnerGroup">
             <label for="contactOwner">Contact owner</label>
@@ -10143,6 +10294,12 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
               <option value="">Loading…</option>
             </select>
           </div>
+          <section class="hubspot-create-required-fields" aria-label="Required HubSpot fields" hidden>
+            <div class="hubspot-create-required-intro" hidden>
+              <strong>Required by your HubSpot setup</strong>
+              <p>These fields are part of this account's create or conditional rules.</p>
+            </div>
+          </section>
           <div class="form-actions">
             <button type="submit" id="createContactBtn" class="create-btn">
               <span class="btn-text">Create Contact</span>

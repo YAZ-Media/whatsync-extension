@@ -30,3 +30,17 @@ test('all conditional writes verify the deployed HubSpot write runtime', () => {
   assert.match(hubspot, /case 'getRuntimeInfo'/);
   assert.match(hubspot, /conditionalPropertyValidation: HUBSPOT_CRM_WRITE_VERSION === '2026-09'/);
 });
+
+test('contact creation uses portal metadata and keeps required fields in the form', () => {
+  const content = read('content.js');
+  const background = read('background.js');
+  const hubspot = read('supabase/functions/hubspot/index.ts');
+  assert.match(content, /getCreatePropertyDefinitions/);
+  assert.match(content, /class="hubspot-create-required-fields"/);
+  assert.match(content, /requestValues: \(definitions\) => requestHubSpotCreateRequiredValues/);
+  assert.match(background, /request\.action === 'getCreatePropertyDefinitions'/);
+  assert.match(hubspot, /case 'getCreatePropertyDefinitions'/);
+  assert.match(hubspot, /properties: sanitizeProperties/);
+  assert.doesNotMatch(content, /<label for="lastName">Last Name \*<\/label>/);
+  assert.match(content, /<input type="email" id="email"[^>]*required>/);
+});

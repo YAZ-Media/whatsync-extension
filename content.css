@@ -2452,6 +2452,83 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     text-align: left;
 }
 
+#hubspot-sidebar .create-contact-account-note {
+    margin: -2px 0 2px;
+    color: var(--sidebar-text-secondary, #667781);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+#hubspot-sidebar .hubspot-create-required-fields {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid rgba(255, 122, 89, 0.55);
+    border-radius: 10px;
+    background: rgba(255, 122, 89, 0.08);
+}
+
+#hubspot-sidebar .hubspot-create-required-fields[hidden] {
+    display: none;
+}
+
+#hubspot-sidebar .hubspot-create-required-intro strong {
+    color: var(--sidebar-text, #1a1a1a);
+    font-size: 13px;
+}
+
+#hubspot-sidebar .hubspot-create-required-intro p {
+    margin: 3px 0 0;
+    color: var(--sidebar-text-secondary, #667781);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+#hubspot-sidebar .hubspot-create-required-fields .hubspot-required-field {
+    display: grid;
+    gap: 6px;
+    color: var(--sidebar-text, #1a1a1a);
+    font-size: 12px;
+    font-weight: 650;
+}
+
+#hubspot-sidebar .hubspot-create-required-fields .hubspot-required-field b {
+    color: #ff7a59;
+    margin-left: 3px;
+}
+
+#hubspot-sidebar .hubspot-create-required-fields input,
+#hubspot-sidebar .hubspot-create-required-fields select,
+#hubspot-sidebar .hubspot-create-required-fields textarea {
+    width: 100%;
+    min-height: 38px;
+    padding: 7px 10px;
+    border: 1px solid var(--sidebar-border, #e2e8f0);
+    border-radius: 9px;
+    background: var(--sidebar-bg, #fff);
+    color: var(--sidebar-text, #1e293b);
+    font: inherit;
+}
+
+#hubspot-sidebar .hubspot-create-required-fields textarea {
+    min-height: 74px;
+    resize: vertical;
+}
+
+#hubspot-sidebar .hubspot-create-required-fields small {
+    color: var(--sidebar-text-secondary, #667781);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.35;
+}
+
+#hubspot-sidebar .form-message.info {
+    text-align: left;
+    color: var(--sidebar-text, #1e293b);
+    background: rgba(255, 122, 89, 0.1);
+    border: 1px solid rgba(255, 122, 89, 0.4);
+}
+
 #hubspot-sidebar .form-group {
     display: flex;
     flex-direction: column;

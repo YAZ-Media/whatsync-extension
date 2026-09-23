@@ -84,6 +84,7 @@ test('sidebar learns the controlling value from HubSpot conditional validation',
 test('conditional write retries atomically with the required values', async () => {
   let attempts = 0;
   let requestedDefinitions = [];
+  let inlineCreateRequesterUsed = false;
   const ctx = vm.createContext({
     sendExtensionMessage: async ({ action }) => action === 'verifyHubSpotWriteRuntime'
       ? { success: true, info: { crmWriteVersion: '2026-09', conditionalPropertyValidation: true } }
@@ -102,13 +103,17 @@ test('conditional write retries atomically with the required values', async () =
       assert.equal(definitions[0].controllingProperty, 'hs_lead_status');
       assert.equal(definitions[0].controllingValue, 'QUALIFIED');
     },
-    requestHubSpotRequiredValues: async () => ({ lead_tier: 'tier_1' }),
+    requestHubSpotRequiredValues: async () => { throw new Error('generic modal should not be used'); },
     hubSpotResponseError: (response) => Object.assign(new Error(response.error), { details: response.details }),
   });
   vm.runInContext(functions(['runHubSpotConditionalWrite']), ctx);
   const response = await ctx.runHubSpotConditionalWrite({
     objectType: 'contacts',
     properties: { hs_lead_status: 'QUALIFIED' },
+    requestValues: async () => {
+      inlineCreateRequesterUsed = true;
+      return { lead_tier: 'tier_1' };
+    },
     write: async (properties) => {
       attempts += 1;
       if (attempts === 1) return { success: false, error: 'Required', details: { requiredProperties: ['lead_tier', 'hs_lead_status'] } };
@@ -116,6 +121,7 @@ test('conditional write retries atomically with the required values', async () =
     },
   });
   assert.equal(attempts, 2);
+  assert.equal(inlineCreateRequesterUsed, true);
   assert.deepEqual(requestedDefinitions, ['lead_tier']);
   assert.equal(response.data.properties.hs_lead_status, 'QUALIFIED');
   assert.equal(response.data.properties.lead_tier, 'tier_1');

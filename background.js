@@ -1059,18 +1059,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // Open the extension popup (sign-in UI) from the sidebar's "Sign in" button.
+  // Open the secure website sign-in from the sidebar. Credentials must never
+  // be rendered inside WhatsApp Web's DOM.
   if (request.action === 'openPopup') {
     (async () => {
       try {
-        if (!chrome.action || typeof chrome.action.openPopup !== 'function') {
-          sendResponse({ success: false, opened: false });
-          return;
-        }
-        await chrome.action.openPopup();
+        await chrome.tabs.create({ url: 'https://whatsync.io/auth?mode=signin&source=extension' });
         sendResponse({ success: true, opened: true });
       } catch (e) {
-        console.warn('[Background] openPopup not available:', e);
+        console.warn('[Background] secure sign-in page could not be opened:', e);
         sendResponse({ success: false, opened: false });
       }
     })();

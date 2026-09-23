@@ -11329,50 +11329,28 @@ function renderSignInState(sidebarContent) {
     <div class="ws-state ws-signin-state">
       <div class="ws-signin-heading">
         <img src="${chrome.runtime.getURL('icons/mark.svg')}" width="34" height="34" alt="">
-        <div><h4>Welcome back</h4><p>Sign in here to connect this conversation to HubSpot.</p></div>
+        <div><h4>Connect WhatSync</h4><p>Sign in securely on WhatSync, then return to this conversation.</p></div>
       </div>
-      <form class="ws-signin-form" id="ws-signin-form">
-        <label>Email<input type="email" name="email" autocomplete="username" required placeholder="you@company.com"></label>
-        <label>Password<input type="password" name="password" autocomplete="current-password" required placeholder="Your password"></label>
-        <p class="ws-signin-error" role="alert" hidden></p>
-        <button type="submit" class="ws-state-btn">Sign in</button>
-      </form>
+      <button type="button" class="ws-state-btn" id="ws-signin-btn">Continue to sign in</button>
+      <button type="button" class="ws-state-btn ws-state-btn-secondary" id="ws-signin-retry-btn">I already signed in — check again</button>
       <p class="ws-state-hint">
-        <a href="https://whatsync.io/auth?mode=signup" target="_blank" rel="noopener noreferrer" class="ws-state-link">Create an account</a>
-        <span aria-hidden="true"> · </span>
-        <a href="https://whatsync.io/auth?mode=forgot-password" target="_blank" rel="noopener noreferrer" class="ws-state-link">Forgot password?</a>
+        Your password stays on whatsync.io and is never placed inside WhatsApp Web.
       </p>
     </div>
   `;
 
-  const form = sidebarContent.querySelector('#ws-signin-form');
-  form?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const button = form.querySelector('button[type="submit"]');
-    const errorNode = form.querySelector('.ws-signin-error');
-    const data = new FormData(form);
-    button.disabled = true;
-    button.textContent = 'Signing in…';
-    errorNode.hidden = true;
-    try {
-      const result = await sendExtensionMessage({
-        action: 'signInWhatSync',
-        email: String(data.get('email') || '').trim(),
-        password: String(data.get('password') || ''),
-      });
-      if (!result?.success) throw new Error(result?.error || 'Sign in failed.');
-      whatsyncStateCache = null;
-      sidebarContent.innerHTML = `<div class="ws-contact-skeleton" role="status"><span class="ws-eyebrow">CONNECTED</span><h4>Opening your HubSpot workspace…</h4><i></i><i></i><i></i></div>`;
-      await updateSidebarContent();
-    } catch (error) {
-      const message = String(error?.message || 'Sign in failed.');
-      errorNode.textContent = /invalid login credentials|invalid email or password/i.test(message)
-        ? 'Email or password is incorrect.'
-        : message;
-      errorNode.hidden = false;
-      button.disabled = false;
-      button.textContent = 'Sign in';
+  sidebarContent.querySelector('#ws-signin-btn')?.addEventListener('click', async () => {
+    const result = await sendExtensionMessage({ action: 'openPopup' }).catch(() => null);
+    if (!result?.opened) {
+      window.open('https://whatsync.io/auth?mode=signin&source=extension', '_blank', 'noopener,noreferrer');
     }
+  });
+  const retryBtn = sidebarContent.querySelector('#ws-signin-retry-btn');
+  retryBtn?.addEventListener('click', async () => {
+    retryBtn.disabled = true;
+    retryBtn.textContent = 'Checking…';
+    whatsyncStateCache = null;
+    await updateSidebarContent();
   });
 }
 

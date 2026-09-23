@@ -14,7 +14,11 @@ test('toolbar opens the docked WhatsApp experience without shipping the legacy p
   assert.equal(manifest.action.default_title, 'Open WhatSync in WhatsApp');
   assert.doesNotMatch(packageScript, /popup\.html|popup\.js|supabase\.js/);
   assert.match(read('background.js'), /openWhatSyncSidebar/);
-  assert.match(read('content.js'), /id="ws-signin-form"/);
+  const content = read('content.js');
+  assert.match(content, /id="ws-signin-btn"/);
+  assert.match(content, /action: 'openPopup'/);
+  assert.match(read('background.js'), /whatsync\.io\/auth\?mode=signin&source=extension/);
+  assert.doesNotMatch(content, /type="password"/);
 });
 
 test('all conditional writes verify the deployed HubSpot write runtime', () => {

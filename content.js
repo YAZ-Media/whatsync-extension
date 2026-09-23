@@ -460,12 +460,46 @@ function extractPhoneFromDataIdOnElement(el) {
 }
 
 function getActiveChatPanel() {
-  return (
-    document.querySelector('div#main') ||
-    document.querySelector('[data-testid="conversation-panel-wrapper"]') ||
-    document.querySelector('[data-testid="conversation-panel-body"]')?.parentElement ||
-    null
-  );
+  const directCandidates = [
+    document.querySelector('div#main'),
+    document.querySelector('[data-testid="conversation-panel-wrapper"]'),
+    document.querySelector('[data-testid="conversation-panel-body"]')?.parentElement,
+    document.querySelector('[role="main"]'),
+    document.querySelector('main'),
+  ];
+
+  for (const candidate of directCandidates) {
+    if (candidate && !candidate.closest('#hubspot-sidebar, #pane-side, [aria-label="Chat list"]')) {
+      return candidate;
+    }
+  }
+
+  // WhatsApp periodically removes the legacy #main and data-testid hooks. In
+  // those builds the message composer remains the most stable chat marker.
+  // Walk up until we find the smallest container that also owns a header.
+  const composer = Array.from(document.querySelectorAll(
+    'div[contenteditable="true"][role="textbox"], footer [contenteditable="true"]'
+  )).find((node) => !node.closest('#hubspot-sidebar, #pane-side, [aria-label="Chat list"]'));
+
+  if (composer) {
+    for (let node = composer.parentElement; node && node !== document.body; node = node.parentElement) {
+      if (node.querySelector('header') && !node.closest('#hubspot-sidebar, #pane-side, [aria-label="Chat list"]')) {
+        return node;
+      }
+    }
+  }
+
+  // A chat can be open before the composer hydrates. Use the conversation
+  // header or message log so the sidebar does not incorrectly show "No chat".
+  const marker =
+    document.querySelector('[data-testid="conversation-header"]') ||
+    document.querySelector('[data-testid="conversation-panel-messages"]') ||
+    document.querySelector('div[role="log"]');
+  if (marker && !marker.closest('#hubspot-sidebar, #pane-side, [aria-label="Chat list"]')) {
+    return marker.closest('[role="main"], main, section') || marker.parentElement;
+  }
+
+  return null;
 }
 
 function getChatListContainer() {
@@ -814,9 +848,11 @@ function readContactNameFromHeaderElement(el) {
  */
 function getCurrentContactName() {
   try {
+    const panel = getActiveChatPanel();
     const header =
-      document.querySelector('[data-testid="conversation-header"]') ||
-      document.querySelector('div#main header');
+      panel?.querySelector('[data-testid="conversation-header"]') ||
+      panel?.querySelector('header') ||
+      document.querySelector('[data-testid="conversation-header"]');
     if (!header) return '';
 
     const infoHeader = header.querySelector('[data-testid="conversation-info-header"]');
@@ -1122,8 +1158,8 @@ const WHATSYNC_TOGGLE_SVG = `
   </svg>`;
 
 function getWhatsAppChatHeader() {
-  const main = document.querySelector('div#main');
-  return main ? main.querySelector('header') : null;
+  const panel = getActiveChatPanel();
+  return panel?.querySelector('[data-testid="conversation-header"]') || panel?.querySelector('header') || null;
 }
 
 /**
@@ -11587,17 +11623,21 @@ let lastRenderedChatKey = null;
 // name, or the phone number for unsaved contacts). Differs between chats,
 // constant while scrolling within one.
 function getCurrentChatHeaderKey() {
-  const header = document.querySelector('div#main header');
-  if (!header) return '';
+  const panel = getActiveChatPanel();
+  const header = panel?.querySelector('[data-testid="conversation-header"]') || panel?.querySelector('header');
+  const chatList = getChatListContainer();
+  const selected = findSelectedChatListRow(chatList);
+  if (!header && !selected) return '';
   const titleEl =
-    header.querySelector('span[dir="auto"][title]') ||
-    header.querySelector('span[dir="auto"]') ||
-    header.querySelector('[role="button"] span');
+    header?.querySelector('span[dir="auto"][title]') ||
+    header?.querySelector('span[dir="auto"]') ||
+    header?.querySelector('[role="button"] span') ||
+    selected?.querySelector('span[dir="auto"][title]') ||
+    selected?.querySelector('span[dir="auto"]');
   const title = (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
-  const active = document.querySelector('#pane-side [aria-selected="true"]');
-  const stableId = active?.getAttribute('data-id') || active?.querySelector('[data-id]')?.getAttribute('data-id') || '';
-  const avatar = header.querySelector('img')?.getAttribute('src') || '';
-  return title ? `${title}|${stableId}|${avatar}` : '';
+  const stableId = selected?.getAttribute('data-id') || selected?.querySelector('[data-id]')?.getAttribute('data-id') || '';
+  const avatar = header?.querySelector('img')?.getAttribute('src') || '';
+  return title || stableId ? `${title}|${stableId}|${avatar}` : '';
 }
 
 // Resolve the shared WhatSync state: is the extension signed in, and is HubSpot
@@ -11715,7 +11755,7 @@ async function updateSidebarContent(known = null) {
   currentPhoneNumber = null;
   const isCurrent = () => updateToken === sidebarContentUpdateToken && renderChatKey === getCurrentChatHeaderKey();
   sidebarContent.innerHTML = `<div class="ws-contact-skeleton" role="status"><span class="ws-eyebrow">HUBSPOT WORKSPACE</span><h4>${escapeHtml(getCurrentContactName() || 'Contact')}</h4><p>Loading this conversation’s CRM record…</p><i></i><i></i><i></i></div>`;
-  const maindiv = document.querySelector("div#main");
+  const maindiv = getActiveChatPanel();
   const extractedPhonePromise = maindiv
     ? (known?.phone ? Promise.resolve(known.phone) : extractPhoneFromChat()).catch(() => null)
     : Promise.resolve(null);
@@ -12268,7 +12308,7 @@ function initializeChatListRowObserver() {
   if (extensionContextInvalidated) return;
 
   // Select the chat list container
-  const chatList = document.querySelector('[aria-label="Chat list"]');
+  const chatList = getChatListContainer();
 
   if (!chatList) {
     // Retry for up to a minute (e.g. WhatsApp still loading or on QR screen),
@@ -12298,7 +12338,7 @@ function initializeChatListRowObserver() {
   // Add direct click event listener as primary method
   chatClickHandler = (e) => {
     // Check if clicked element or its parent is a gridcell
-    const gridcell = e.target.closest('[role="gridcell"]');
+    const gridcell = e.target.closest('[role="gridcell"], [role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
     if (gridcell) {
       // Hide CRM latency behind WhatsApp's own chat-opening transition whenever
       // the clicked row exposes a phone/JID.
@@ -12312,6 +12352,11 @@ function initializeChatListRowObserver() {
         setupMainChatObserver();
       }
       retriggerSidebar();
+      // WhatsApp swaps in the conversation pane after the row click. The first
+      // refresh can therefore run while the landing panel is still mounted.
+      // Retry once after that transition so an open sidebar never stays on the
+      // empty-chat state.
+      setTimeout(retriggerSidebar, 300);
     }
   };
   
@@ -12345,7 +12390,7 @@ function initializeChatListRowObserver() {
         // Check if aria-selected changed to true (chat was selected)
         if (mutation.attributeName === 'aria-selected') {
           const isSelected = target.getAttribute('aria-selected') === 'true';
-          if (isSelected && target.matches('[role="gridcell"]')) {
+          if (isSelected && target.matches('[role="gridcell"], [role="listitem"], [role="row"], [data-testid="cell-frame-container"]')) {
             whatsyncDebug('[Chat List Observer] ✅ Chat selected via aria-selected change');
             retriggerSidebar();
           }
@@ -12378,7 +12423,7 @@ let observedMainChat = null;
 function setupMainChatObserver() {
   if (extensionContextInvalidated) return;
 
-  const mainChat = document.querySelector('div#main');
+  const mainChat = getActiveChatPanel();
 
   if (!mainChat) {
     // div#main doesn't exist until the user opens a chat. Retry briefly, then
@@ -12429,6 +12474,12 @@ function setupMainChatObserver() {
   });
   observedMainChat = mainChat;
 
+  // The observer is often attached only after WhatsApp has completed the chat
+  // transition. Refresh immediately; waiting for another mutation leaves the
+  // sidebar stuck on the state rendered before the pane existed.
+  ensureHeaderToggle();
+  retriggerSidebar();
+
   whatsyncDebug('[Chat List Observer] ✅ Main chat area observer initialized');
 }
 
@@ -12467,7 +12518,7 @@ function retriggerSidebar() {
     // Sidebar is showing and the chat changed — update its content.
     whatsyncDebug('[Chat List Observer] ✅ Chat changed - updating sidebar content...');
     updateSidebarContent();
-    const maindiv = document.querySelector("div#main");
+    const maindiv = getActiveChatPanel();
     if (maindiv) widthSetting(); // Adjust width if maindiv exists
     whatsyncDebug('[Chat List Observer] ✅ Sidebar content updated');
   }, 60); // Coalesce header mutations without delaying until chat loading settles.

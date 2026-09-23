@@ -60,6 +60,19 @@ test('connection refresh clears every cache and updates open sidebars', () => {
   assert.match(bridge, /action: 'refreshHubSpotIntegration'/);
 });
 
+test('sidebar chat detection supports current WhatsApp layouts without div#main', () => {
+  const content = read('content.js');
+  assert.match(content, /function getActiveChatPanel\(\)/);
+  assert.match(content, /document\.querySelector\('\[role="main"\]'\)/);
+  assert.match(content, /div\[contenteditable="true"\]\[role="textbox"\]/);
+  assert.match(content, /const maindiv = getActiveChatPanel\(\);/);
+  assert.match(content, /const mainChat = getActiveChatPanel\(\);/);
+  assert.match(content, /function getWhatsAppChatHeader\(\) \{[\s\S]*getActiveChatPanel\(\)/);
+  assert.match(content, /function getCurrentChatHeaderKey\(\) \{[\s\S]*getActiveChatPanel\(\)/);
+  assert.match(content, /setTimeout\(retriggerSidebar, 300\)/);
+  assert.match(content, /observedMainChat = mainChat;[\s\S]*ensureHeaderToggle\(\);[\s\S]*retriggerSidebar\(\);/);
+});
+
 test('HubSpot conditional rules use enforced writes and remain configurable', () => {
   const content = read('content.js');
   const hubspot = read('supabase/functions/hubspot/index.ts');

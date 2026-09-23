@@ -4864,19 +4864,11 @@ function renderRelatedSidebarSection(section, payload) {
     lead_tracker: 'No lead associated.',
     attachments: 'No attachments were found in HubSpot notes.',
   };
-  // Lead-object access is an account-level HubSpot capability. Older OAuth
-  // connections may not include it, and prompting for a second sign-in inside
-  // one sidebar section makes the feature feel disconnected. The Integrations
-  // page owns the one-time connection upgrade; keep the unavailable section
-  // out of the user's working surface until that upgrade is complete.
-  if (sectionName === 'lead_tracker' && payload?.requiresReauthorization) {
-    section.hidden = true;
-    section.dataset.loaded = 'true';
-    delete section.dataset.loading;
-    return;
-  }
   if (payload?.unavailable) {
-    list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}</div>`;
+    const workspaceAccess = sectionName === 'lead_tracker' && payload?.requiresReauthorization
+      ? '<span>Available after your workspace admin updates the HubSpot connection.</span><a class="ws-related-reconnect" href="https://whatsync.io/dashboard/integrations" target="_blank" rel="noopener noreferrer">Open Integrations</a>'
+      : escapeHtml(payload.message || emptyMessages[sectionName]);
+    list.innerHTML = `<div class="ws-related-empty">${workspaceAccess}</div>`;
   } else {
     const recordUrl = ['companies', 'contacts'].includes(sectionName)
       ? hubSpotRecordUrl('contact', contactId)

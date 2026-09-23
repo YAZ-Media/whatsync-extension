@@ -30,8 +30,9 @@ test('all configurable relationship sections have a real extension and API path'
   assert.match(content, /setupRelatedSidebarSections\(relatedSectionsPromise\)/);
   assert.doesNotMatch(content, /showRelatedSectionLoading/);
   assert.match(content, /ws-related-count">—/);
-  assert.match(content, /sectionName === 'lead_tracker' && payload\?\.requiresReauthorization/);
-  assert.match(content, /section\.hidden = true/);
+  assert.match(content, /Available after your workspace admin updates the HubSpot connection/);
+  assert.match(content, /https:\/\/whatsync\.io\/dashboard\/integrations/);
+  assert.doesNotMatch(content, /section\.hidden = true/);
   assert.doesNotMatch(content, /data-update-hubspot-access/);
   assert.doesNotMatch(background, /request\.action === 'updateHubSpotLeadAccess'/);
   assert.match(content, /key === 'lead_tracker' \? ''/);

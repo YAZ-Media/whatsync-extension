@@ -477,9 +477,11 @@ function getActiveChatPanel() {
   // WhatsApp periodically removes the legacy #main and data-testid hooks. In
   // those builds the message composer remains the most stable chat marker.
   // Walk up until we find the smallest container that also owns a header.
-  const composer = Array.from(document.querySelectorAll(
-    'div[contenteditable="true"][role="textbox"], footer [contenteditable="true"]'
-  )).find((node) => !node.closest('#hubspot-sidebar, #pane-side, [aria-label="Chat list"]'));
+  const composer =
+    document.querySelector('[data-testid="conversation-compose-box-input"]') ||
+    Array.from(document.querySelectorAll(
+      'div[contenteditable="true"][role="textbox"], footer [contenteditable="true"]'
+    )).find((node) => !node.closest('#hubspot-sidebar, #pane-side, [aria-label="Chat list"]'));
 
   if (composer) {
     for (let node = composer.parentElement; node && node !== document.body; node = node.parentElement) {
@@ -487,6 +489,11 @@ function getActiveChatPanel() {
         return node;
       }
     }
+
+    // Current WhatsApp builds do not expose a semantic header in the chat
+    // subtree. The composer itself is sufficient proof that a conversation is
+    // open and gives the sidebar a stable observer target.
+    return composer.parentElement || composer;
   }
 
   // A chat can be open before the composer hydrates. Use the conversation
@@ -849,11 +856,16 @@ function readContactNameFromHeaderElement(el) {
 function getCurrentContactName() {
   try {
     const panel = getActiveChatPanel();
+    const composer =
+      panel?.querySelector?.('[data-testid="conversation-compose-box-input"]') ||
+      document.querySelector('[data-testid="conversation-compose-box-input"]');
+    const composerLabel = composer?.getAttribute('aria-label')?.trim() || '';
+    const composerName = composerLabel.match(/^Type a message to\s+(.+)$/i)?.[1]?.trim() || '';
     const header =
       panel?.querySelector('[data-testid="conversation-header"]') ||
       panel?.querySelector('header') ||
       document.querySelector('[data-testid="conversation-header"]');
-    if (!header) return '';
+    if (!header) return isValidContactName(composerName) ? composerName : '';
 
     const infoHeader = header.querySelector('[data-testid="conversation-info-header"]');
     if (infoHeader) {
@@ -870,7 +882,7 @@ function getCurrentContactName() {
       if (name) candidates.push(name);
     });
 
-    if (candidates.length === 0) return '';
+    if (candidates.length === 0) return isValidContactName(composerName) ? composerName : '';
 
     // Prefer the longest valid label (avoids short UI fragments).
     return candidates.sort((a, b) => b.length - a.length)[0];
@@ -11625,9 +11637,13 @@ let lastRenderedChatKey = null;
 function getCurrentChatHeaderKey() {
   const panel = getActiveChatPanel();
   const header = panel?.querySelector('[data-testid="conversation-header"]') || panel?.querySelector('header');
+  const composer =
+    panel?.querySelector?.('[data-testid="conversation-compose-box-input"]') ||
+    document.querySelector('[data-testid="conversation-compose-box-input"]');
+  const composerLabel = composer?.getAttribute('aria-label')?.trim() || '';
   const chatList = getChatListContainer();
   const selected = findSelectedChatListRow(chatList);
-  if (!header && !selected) return '';
+  if (!header && !selected && !composerLabel) return '';
   const titleEl =
     header?.querySelector('span[dir="auto"][title]') ||
     header?.querySelector('span[dir="auto"]') ||
@@ -11637,7 +11653,7 @@ function getCurrentChatHeaderKey() {
   const title = (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
   const stableId = selected?.getAttribute('data-id') || selected?.querySelector('[data-id]')?.getAttribute('data-id') || '';
   const avatar = header?.querySelector('img')?.getAttribute('src') || '';
-  return title || stableId ? `${title}|${stableId}|${avatar}` : '';
+  return title || stableId || composerLabel ? `${title}|${stableId}|${avatar}|${composerLabel}` : '';
 }
 
 // Resolve the shared WhatSync state: is the extension signed in, and is HubSpot
@@ -12543,6 +12559,19 @@ const navigationCheckInterval = setInterval(() => {
   // Re-attach the header toggle if WhatsApp rebuilt the chat header (chat switch,
   // re-render). Cheap no-op when it's already present.
   ensureHeaderToggle();
+
+  // WhatsApp can replace the active conversation without emitting a useful
+  // click or header mutation. The composer label changes with the chat and is
+  // available before message history finishes loading, so use it as a cheap
+  // self-healing signal for an already-open sidebar.
+  const sidebar = document.getElementById('hubspot-sidebar');
+  if (sidebar?.classList.contains('open')) {
+    const chatKey = getCurrentChatHeaderKey();
+    const showingNoChat = !!sidebar.querySelector('.no-chat-selected');
+    if ((showingNoChat && getActiveChatPanel()) || (chatKey && chatKey !== lastRenderedChatKey)) {
+      retriggerSidebar();
+    }
+  }
 
   const url = location.href;
   if (url !== lastUrl) {

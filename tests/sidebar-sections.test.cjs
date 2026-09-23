@@ -65,12 +65,15 @@ test('sidebar chat detection supports current WhatsApp layouts without div#main'
   assert.match(content, /function getActiveChatPanel\(\)/);
   assert.match(content, /document\.querySelector\('\[role="main"\]'\)/);
   assert.match(content, /div\[contenteditable="true"\]\[role="textbox"\]/);
+  assert.match(content, /conversation-compose-box-input/);
+  assert.match(content, /Type a message to\\s\+\(\.\+\)/);
   assert.match(content, /const maindiv = getActiveChatPanel\(\);/);
   assert.match(content, /const mainChat = getActiveChatPanel\(\);/);
   assert.match(content, /function getWhatsAppChatHeader\(\) \{[\s\S]*getActiveChatPanel\(\)/);
   assert.match(content, /function getCurrentChatHeaderKey\(\) \{[\s\S]*getActiveChatPanel\(\)/);
   assert.match(content, /setTimeout\(retriggerSidebar, 300\)/);
   assert.match(content, /observedMainChat = mainChat;[\s\S]*ensureHeaderToggle\(\);[\s\S]*retriggerSidebar\(\);/);
+  assert.match(content, /showingNoChat && getActiveChatPanel\(\)/);
 });
 
 test('HubSpot conditional rules use enforced writes and remain configurable', () => {

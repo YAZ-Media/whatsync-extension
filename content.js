@@ -4208,7 +4208,6 @@ function requiredHubSpotProperties(error) {
       .some((entry) => /required/i.test(String(entry ?? '')));
     if (requiredSignal) {
       add(value.propertyName);
-      add(value.name);
       add(value.property);
       ['propertyName', 'propertyNames', 'requiredProperties', 'missingRequiredProperties'].forEach((key) => {
         const contextNames = value.context?.[key];

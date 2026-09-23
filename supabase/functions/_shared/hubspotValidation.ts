@@ -58,7 +58,6 @@ export function extractHubSpotRequiredProperties(payload: unknown): string[] {
       .some((entry) => /required/i.test(String(entry ?? ''))) || /required/i.test(String(record.message ?? ''));
     if (requiredSignal) {
       addProperty(found, record.propertyName);
-      addProperty(found, record.name);
       addProperty(found, record.property);
       const context = record.context && typeof record.context === 'object'
         ? record.context as Record<string, unknown>

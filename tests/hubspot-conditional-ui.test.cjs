@@ -51,6 +51,23 @@ test('sidebar recognizes 2026-09 validation context variants', () => {
   assert.deepEqual([...result], ['lead_tier', 'qualification_reason']);
 });
 
+test('sidebar never mistakes a generic JavaScript error name for a HubSpot property', () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(functions(['requiredHubSpotProperties']), ctx);
+  const result = ctx.requiredHubSpotProperties({
+    name: 'Error',
+    message: `Property 'lead_tier' is required when 'hs_lead_status' is set to 'QUALIFIED'.`,
+    details: {
+      errors: [{
+        name: 'Error',
+        code: 'MISSING_CONDITIONAL_REQUIRED_PROPERTY',
+        context: { propertyName: ['lead_tier'] },
+      }],
+    },
+  });
+  assert.deepEqual([...result], ['lead_tier']);
+});
+
 test('sidebar learns the controlling value from HubSpot conditional validation', () => {
   const ctx = vm.createContext({});
   vm.runInContext(functions(['hubSpotConditionalRuleContexts']), ctx);

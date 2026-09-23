@@ -41,8 +41,23 @@ test('all configurable relationship sections have a real extension and API path'
   assert.match(oauth, /optional_scope', 'sales-email-read crm\.objects\.leads\.read'/);
   assert.match(oauth, /requiresConnectionUpdate/);
   assert.match(oauth, /capabilities: \{ leadStageTracker \}/);
+  assert.match(oauth, /introspectHubSpotToken\(tokens\.access_token\)/);
+  assert.match(oauth, /Repair connections created by older callbacks/);
   const popup = read('popup.js');
   assert.match(popup, /Update connection/);
+});
+
+test('connection refresh clears every cache and updates open sidebars', () => {
+  const content = read('content.js');
+  const background = read('background.js');
+  const bridge = read('dashboard-bridge.js');
+
+  assert.match(content, /whatsyncStateCache = null;[\s\S]*refreshHubSpotIntegration/);
+  assert.match(content, /changes\.hubspotConnectionRevision/);
+  assert.match(background, /request\.action === 'refreshHubSpotIntegration'/);
+  assert.match(background, /hubspotConnectionRevision: Date\.now\(\)/);
+  assert.match(bridge, /whatsync\.hubspotConnectionUpdated/);
+  assert.match(bridge, /action: 'refreshHubSpotIntegration'/);
 });
 
 test('HubSpot conditional rules use enforced writes and remain configurable', () => {

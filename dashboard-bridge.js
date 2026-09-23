@@ -8,6 +8,7 @@
   const STORAGE_KEY = 'external_auth_session';
   const SYNC_SETTINGS_KEY = 'whatsync.syncSettings';
   const SIDEBAR_FIELDS_KEY = 'whatsync.sidebarFieldsUpdated';
+  const HUBSPOT_CONNECTION_KEY = 'whatsync.hubspotConnectionUpdated';
 
   let sessionSyncRunning = false;
   let hadPageSession = false;
@@ -79,6 +80,18 @@
     }
   }
 
+  let lastHubSpotConnectionSignal = null;
+  async function syncHubSpotConnectionSignal() {
+    try {
+      const value = localStorage.getItem(HUBSPOT_CONNECTION_KEY);
+      if (!value || value === lastHubSpotConnectionSignal) return;
+      lastHubSpotConnectionSignal = value;
+      await chrome.runtime.sendMessage({ action: 'refreshHubSpotIntegration' });
+    } catch (e) {
+      console.warn('[Dashboard Bridge] Could not refresh HubSpot connection status:', e);
+    }
+  }
+
   let lastPrivacy = null;
   function syncPrivacy() {
     const raw = localStorage.getItem('whatsync.privacySettings');
@@ -90,6 +103,7 @@
     syncSessionToExtension();
     syncIntegrationSettingsToExtension();
     syncSidebarFieldsSignal();
+    syncHubSpotConnectionSignal();
   }
 
   window.addEventListener('message', async event => {
@@ -105,6 +119,7 @@
     if (e.key === STORAGE_KEY) syncSessionToExtension();
     if (e.key === SYNC_SETTINGS_KEY && e.newValue) syncIntegrationSettingsToExtension();
     if (e.key === SIDEBAR_FIELDS_KEY && e.newValue) syncSidebarFieldsSignal();
+    if (e.key === HUBSPOT_CONNECTION_KEY && e.newValue) syncHubSpotConnectionSignal();
   });
 
   window.addEventListener('whatsync-session-updated', syncSessionToExtension);

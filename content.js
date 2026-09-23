@@ -11681,9 +11681,18 @@ function renderConnectHubSpotState(sidebarContent) {
     retryBtn.addEventListener('click', async () => {
       retryBtn.disabled = true;
       retryBtn.textContent = 'Checking…';
-      // Force a fresh check by clearing the in-memory cache via background message
-      await sendExtensionMessage({ action: 'clearHubSpotCache' }).catch(() => {});
-      updateSidebarContent();
+      // Clear both cache layers, then make one fresh server check. The previous
+      // flow only cleared the service worker and immediately reused this page's
+      // five-minute cache, making the button appear to do nothing.
+      whatsyncStateCache = null;
+      const result = await sendExtensionMessage({ action: 'refreshHubSpotIntegration' }).catch(() => null);
+      whatsyncStateCache = null;
+      if (!result?.success) {
+        retryBtn.disabled = false;
+        retryBtn.textContent = 'Try again';
+        return;
+      }
+      await updateSidebarContent();
     });
   }
 }
@@ -12216,7 +12225,12 @@ function registerExtensionListeners() {
         contentSyncSettingsCache = null;
       }
       // Any change to login OR HubSpot connection should re-evaluate the sidebar state.
-      if (namespace === 'local' && (changes.userLoggedIn || changes.userId || changes.hubspotConnected)) {
+      if (namespace === 'local' && (
+        changes.userLoggedIn
+        || changes.userId
+        || changes.hubspotConnected
+        || changes.hubspotConnectionRevision
+      )) {
         whatsyncStateCache = null;
         sidebarContentUpdateToken++;
         sidebarCatalogCache = null;

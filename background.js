@@ -561,10 +561,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'clearHubSpotCache') {
-    hubspotConnectionCache = null;
-    hubspotReadCache.clear();
-    chrome.storage.local.remove(HUBSPOT_CONNECTION_STORAGE_KEY);
-    sendResponse({ success: true });
+    (async () => {
+      hubspotConnectionCache = null;
+      hubspotReadCache.clear();
+      await chrome.storage.local.remove([
+        HUBSPOT_CONNECTION_STORAGE_KEY,
+        'hubspotConnected',
+      ]);
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
+  if (request.action === 'refreshHubSpotIntegration') {
+    (async () => {
+      try {
+        hubspotConnectionCache = null;
+        hubspotReadCache.clear();
+        await chrome.storage.local.remove(HUBSPOT_CONNECTION_STORAGE_KEY);
+
+        const storageData = await chrome.storage.local.get(['userId', 'userLoggedIn']);
+        if (!storageData.userId || storageData.userLoggedIn !== true) {
+          await chrome.storage.local.set({
+            hubspotConnected: false,
+            hubspotConnectionRevision: Date.now(),
+          });
+          sendResponse({ success: true, data: { status: 'disconnected' } });
+          return;
+        }
+
+        const result = await checkHubSpotIntegrationStatusViaEdgeFunction(storageData.userId);
+        const connected = result.status === 'active' || result.status === 'connected';
+        await chrome.storage.local.set({
+          hubspotConnected: connected,
+          hubspotConnectionRevision: Date.now(),
+        });
+        sendResponse({ success: true, data: result });
+      } catch (error) {
+        sendResponse({ success: false, error: error?.message || 'Could not refresh HubSpot status' });
+      }
+    })();
     return true;
   }
 
@@ -2801,7 +2837,8 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
     // Only persist when genuinely connected so a stale record never masks a real
     // disconnect that happened on the server side (24-h TTL is a safety net).
     if (result.status === 'active' || result.status === 'connected') {
-      chrome.storage.local.set({
+      await chrome.storage.local.set({
+        hubspotConnected: true,
         [HUBSPOT_CONNECTION_STORAGE_KEY]: {
           userId,
           status: result.status,
@@ -2816,7 +2853,8 @@ async function checkHubSpotIntegrationStatusViaEdgeFunction(userId) {
       });
     } else {
       // Server says disconnected — clear the durable record so we don't lie.
-      chrome.storage.local.remove(HUBSPOT_CONNECTION_STORAGE_KEY);
+      await chrome.storage.local.remove(HUBSPOT_CONNECTION_STORAGE_KEY);
+      await chrome.storage.local.set({ hubspotConnected: false });
     }
 
     return result;

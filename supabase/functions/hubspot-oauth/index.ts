@@ -32,6 +32,30 @@ const ALLOWED_FIELD_SOURCES = new Set([
   'job_title',
 ]);
 
+function normalizeHubSpotScopes(...values: unknown[]): string[] {
+  const scopes = values.flatMap((value) => {
+    if (Array.isArray(value)) return value.map(String);
+    if (typeof value === 'string') return value.split(/[\s,]+/);
+    return [];
+  });
+  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean)));
+}
+
+async function introspectHubSpotToken(accessToken: string): Promise<Record<string, unknown> | null> {
+  try {
+    const response = await fetch('https://api.hubapi.com/oauth/2026-03/token/introspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: accessToken }),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to introspect HubSpot token:', error);
+    return null;
+  }
+}
+
 function normalizeFieldMappings(raw: unknown) {
   if (!Array.isArray(raw) || raw.length === 0) {
     return DEFAULT_FIELD_MAPPINGS.map((m) => ({ ...m }));
@@ -597,25 +621,19 @@ serve(async (req) => {
         const tokens = await tokenRes.json();
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-        // The 2026-03 token response contains the portal id. If an older app
-        // response omits it, use the body-based introspection endpoint so the
-        // access token never appears in a URL or request log.
-        let portalId = tokens.hub_id?.toString() || null;
-        if (!portalId) {
-          try {
-            const infoRes = await fetch('https://api.hubapi.com/oauth/2026-03/token/introspect', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({ token: tokens.access_token }),
-            });
-            if (infoRes.ok) {
-              const info = await infoRes.json();
-              portalId = info.hub_id?.toString() || null;
-            }
-          } catch (e) {
-            console.error('Failed to get portal info:', e);
-          }
-        }
+        // Token exchange responses are not consistent about including granted
+        // optional scopes. Introspect every new token so a successful reconnect
+        // cannot be stored as if Leads access were missing.
+        const tokenInfo = await introspectHubSpotToken(tokens.access_token);
+        const portalId = tokens.hub_id?.toString()
+          || tokenInfo?.hub_id?.toString()
+          || null;
+        const grantedScopes = normalizeHubSpotScopes(
+          tokens.scopes,
+          tokens.scope,
+          tokenInfo?.scopes,
+          tokenInfo?.scope,
+        );
 
         // Upsert connection
         const connectionData = {
@@ -625,7 +643,7 @@ serve(async (req) => {
           access_token: await encryptHubSpotToken(tokens.access_token),
           refresh_token: await encryptHubSpotToken(tokens.refresh_token),
           expires_at: expiresAt.toISOString(),
-          scopes: Array.isArray(tokens.scopes) ? tokens.scopes : tokens.scope?.split(' ') || [],
+          scopes: grantedScopes,
           connected_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -833,9 +851,24 @@ serve(async (req) => {
           status = connRes.data[0].status === 'connected' ? 'active' : connRes.data[0].status;
           portalId = connRes.data[0].portal_id;
           connectedAt = connRes.data[0].connected_at;
-          const grantedScopes = Array.isArray(connRes.data[0].scopes)
-            ? connRes.data[0].scopes.map(String)
-            : String(connRes.data[0].scopes || '').split(/[\s,]+/).filter(Boolean);
+          let grantedScopes = normalizeHubSpotScopes(connRes.data[0].scopes);
+
+          // Repair connections created by older callbacks that stored an empty
+          // scope array even though HubSpot granted the permissions. This makes
+          // the current connection usable without disconnecting it again.
+          if (status === 'active' && grantedScopes.length === 0) {
+            const tokenData = await refreshTokensIfNeeded(connUserId);
+            if (tokenData?.accessToken) {
+              const tokenInfo = await introspectHubSpotToken(tokenData.accessToken);
+              grantedScopes = normalizeHubSpotScopes(tokenInfo?.scopes, tokenInfo?.scope);
+              if (grantedScopes.length > 0) {
+                await externalQuery('hubspot_connections', 'PATCH', {
+                  filters: { user_id: `eq.${connUserId}` },
+                  body: { scopes: grantedScopes, updated_at: new Date().toISOString() },
+                });
+              }
+            }
+          }
           leadStageTracker = grantedScopes.includes('crm.objects.leads.read');
         }
 

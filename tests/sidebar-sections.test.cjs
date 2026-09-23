@@ -23,13 +23,17 @@ test('all configurable relationship sections have a real extension and API path'
   assert.match(hubspot, /case 'getSidebarSections'/);
   assert.match(hubspot, /getAllAssociationIds\(token, 'contacts', contactId, 'leads'\)/);
   assert.doesNotMatch(hubspot, /association\.id !== contactId/);
-  assert.match(hubspot, /WhatSync needs updated HubSpot access to display this Lead record/);
+  assert.match(hubspot, /Connect HubSpot Leads to use this section/);
   assert.doesNotMatch(hubspot, /getContactStageHistory/);
   assert.match(content, /preloadRelatedSidebarSections/);
   assert.match(content, /const relatedSectionsPromise = preloadRelatedSidebarSections\(contactRecordId\(contacts\[0\]\)\)/);
   assert.match(content, /setupRelatedSidebarSections\(relatedSectionsPromise\)/);
   assert.doesNotMatch(content, /showRelatedSectionLoading/);
   assert.match(content, /ws-related-count">—/);
+  assert.match(content, /data-update-hubspot-access/);
+  assert.match(background, /request\.action === 'updateHubSpotLeadAccess'/);
+  assert.match(content, /key === 'lead_tracker' \? ''/);
+  assert.match(content, /\+ Add in HubSpot/);
 });
 
 test('HubSpot conditional rules use enforced writes and remain configurable', () => {

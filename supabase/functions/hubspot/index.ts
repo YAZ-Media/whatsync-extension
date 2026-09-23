@@ -452,7 +452,7 @@ async function getContactLeads(
         results: [],
         unavailable: true,
         requiresReauthorization: true,
-        message: 'WhatSync needs updated HubSpot access to display this Lead record.',
+        message: 'Connect HubSpot Leads to use this section.',
       };
     }
     if (error instanceof HttpError && error.status === 404) {
@@ -567,7 +567,7 @@ async function getContactLeads(
         results: [],
         unavailable: true,
         requiresReauthorization: true,
-        message: 'WhatSync needs updated HubSpot access to display this Lead record.',
+        message: 'Connect HubSpot Leads to use this section.',
       };
     }
     if (error instanceof HttpError && error.status === 404) {

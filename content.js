@@ -4861,14 +4861,24 @@ function renderRelatedSidebarSection(section, payload) {
   const emptyMessages = {
     companies: 'No associated companies.',
     contacts: 'No contacts are associated with this company.',
-    lead_tracker: 'No HubSpot Lead records are associated with this contact.',
+    lead_tracker: 'No lead associated.',
     attachments: 'No attachments were found in HubSpot notes.',
   };
   if (payload?.unavailable) {
     const reconnect = payload?.requiresReauthorization
-      ? '<a class="ws-related-reconnect" href="https://whatsync.io/dashboard/integrations" target="_blank" rel="noopener noreferrer">Update HubSpot access</a>'
+      ? '<button type="button" class="ws-related-reconnect" data-update-hubspot-access>Connect HubSpot Leads</button>'
       : '';
     list.innerHTML = `<div class="ws-related-empty">${escapeHtml(payload.message || emptyMessages[sectionName])}${reconnect}</div>`;
+    list.querySelector('[data-update-hubspot-access]')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = 'Opening HubSpot…';
+      const response = await sendExtensionMessage({ action: 'updateHubSpotLeadAccess' }).catch(() => null);
+      if (!response?.success) {
+        button.disabled = false;
+        button.textContent = 'Try again';
+      }
+    });
   } else {
     const recordUrl = ['companies', 'contacts'].includes(sectionName)
       ? hubSpotRecordUrl('contact', contactId)
@@ -4876,9 +4886,13 @@ function renderRelatedSidebarSection(section, payload) {
     const viewAll = recordUrl && results.length
       ? `<a class="ws-view-all-associations" href="${recordUrl}" target="_blank" rel="noopener noreferrer">View all associated ${sectionName === 'companies' ? 'Companies' : 'Contacts'} ↗</a>`
       : '';
+    const leadRecordUrl = sectionName === 'lead_tracker' ? hubSpotRecordUrl('contact', contactId) : null;
+    const leadEmptyAction = sectionName === 'lead_tracker' && !results.length && leadRecordUrl
+      ? `<a class="ws-related-reconnect" href="${leadRecordUrl}" target="_blank" rel="noopener noreferrer">+ Add in HubSpot</a>`
+      : '';
     list.innerHTML = results.length
       ? results.map((item) => formatRelatedSectionItem(sectionName, item, contactId)).join('')
-      : `<div class="ws-related-empty">${escapeHtml(emptyMessages[sectionName] || 'No records found.')}</div>`;
+      : `<div class="ws-related-empty">${escapeHtml(emptyMessages[sectionName] || 'No records found.')}${leadEmptyAction}</div>`;
     list.insertAdjacentHTML('beforeend', viewAll);
   }
   section.dataset.loaded = 'true';
@@ -11161,7 +11175,7 @@ function relatedSidebarSectionMarkup(key, title, contactId) {
           <svg class="chevron-icon ws-related-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
-          <span>${escapeHtml(title)} (<span class="ws-related-count">—</span>)</span>
+          <span>${escapeHtml(title)}${key === 'lead_tracker' ? '' : ' (<span class="ws-related-count">—</span>)'}</span>
         </span>
       </button>
       <div class="ws-related-content" hidden>

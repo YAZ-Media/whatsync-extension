@@ -5896,6 +5896,14 @@ body.whatsapp-theme-dark #hubspot-sidebar {
   font-weight: 700;
   text-decoration: none;
 }
+#hubspot-sidebar .ws-related-reconnect {
+  border-color: #ff7a59;
+  background: #ff7a59;
+  color: #102631;
+  cursor: pointer;
+}
+#hubspot-sidebar .ws-related-reconnect:hover { background: #ff9578; }
+#hubspot-sidebar .ws-related-reconnect:disabled { cursor: wait; opacity: .72; }
 #hubspot-sidebar .ws-related-loading { display: none !important; }
 #hubspot-sidebar .ws-lead-tracker-card {
   gap: 11px;

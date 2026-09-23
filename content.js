@@ -4283,7 +4283,6 @@ async function fetchHubSpotPropertyDefinitions(objectType, properties) {
 function hubSpotPropertyInput(definition) {
   const name = escapeHtml(definition.name);
   const label = escapeHtml(definition.label || definition.name);
-  const description = definition.description ? `<small>${escapeHtml(definition.description)}</small>` : '';
   const options = Array.isArray(definition.options) ? definition.options : [];
   const fieldType = String(definition.fieldType || '').toLowerCase();
   const type = String(definition.type || '').toLowerCase();
@@ -4304,7 +4303,7 @@ function hubSpotPropertyInput(definition) {
   } else {
     control = `<input name="${name}" data-hubspot-property="${name}" type="text" required>`;
   }
-  return `<label class="hubspot-required-field"><span>${label}<b aria-hidden="true">*</b></span>${control}${description}</label>`;
+  return `<label class="hubspot-required-field"><span>${label}<b aria-hidden="true">*</b></span>${control}</label>`;
 }
 
 function readHubSpotPropertyValues(container) {
@@ -4339,7 +4338,7 @@ function requestHubSpotCreateRequiredValues(form, definitions, createBtn, messag
     if (intro) intro.hidden = false;
     messageDiv.className = 'form-message info';
     messageDiv.setAttribute('role', 'status');
-    messageDiv.textContent = 'Your HubSpot account requires the highlighted fields. Complete them to create the contact.';
+    messageDiv.textContent = 'Complete the required fields.';
     messageDiv.style.display = 'block';
     form.removeAttribute('aria-busy');
     createBtn.disabled = false;
@@ -9746,8 +9745,8 @@ const CONTACT_CREATE_PROPERTY_FIELDS = {
 
 // HubSpot does not publish the private ordering of a portal's manually
 // customized Create contact panel. It does publish the portal's property
-// definitions, however, so keep every visible core field labelled and
-// described exactly as it is in that account. Required create/conditional
+// definitions, however, so keep every visible core field labelled exactly as
+// it is in that account. Required create/conditional
 // fields are added inline after HubSpot's authoritative write validation.
 async function applyContactCreatePropertyMetadata(form) {
   const propertyNames = Object.keys(CONTACT_CREATE_PROPERTY_FIELDS);
@@ -9761,15 +9760,6 @@ async function applyContactCreatePropertyMetadata(form) {
       const label = group?.querySelector(`label[for="${id}"]`);
       if (!control || !group || !label) return;
       label.textContent = `${definition.label || definition.name}${control.required ? ' *' : ''}`;
-      if (definition.description) {
-        let hint = group.querySelector('.ws-property-description');
-        if (!hint) {
-          hint = document.createElement('p');
-          hint.className = 'form-hint ws-property-description';
-          control.before(hint);
-        }
-        hint.textContent = definition.description;
-      }
     });
   } catch (error) {
     console.warn('[Content] Could not load HubSpot contact field metadata:', error);
@@ -9890,7 +9880,6 @@ function setupCompanyAssociationPicker(form) {
   const cancelCreate = form.querySelector('#cancelNewCompany');
   const newName = form.querySelector('#newCompanyName');
   const newDomain = form.querySelector('#newCompanyDomain');
-  const status = form.querySelector('#companyPickerStatus');
   if (!search || !results || !selected || !add || !createPanel || !newName) return;
 
   let timer = null;
@@ -9908,7 +9897,6 @@ function setupCompanyAssociationPicker(form) {
     createPanel.hidden = true;
     newName.value = '';
     if (newDomain) newDomain.value = '';
-    if (status) status.textContent = 'Optional. Search your HubSpot companies or add a new one.';
   };
 
   const selectCompany = (company) => {
@@ -9923,7 +9911,6 @@ function setupCompanyAssociationPicker(form) {
     results.hidden = true;
     results.innerHTML = '';
     createPanel.hidden = true;
-    if (status) status.textContent = 'This contact will be associated with the selected HubSpot company.';
   };
 
   const renderResults = (companies, query) => {
@@ -9949,25 +9936,19 @@ function setupCompanyAssociationPicker(form) {
     results.hidden = true;
     if (query.length < 2) {
       results.innerHTML = '';
-      if (status) status.textContent = 'Type at least 2 characters to search HubSpot.';
       return;
     }
     const current = ++sequence;
-    if (status) status.textContent = 'Searching HubSpot companies…';
     timer = setTimeout(async () => {
       try {
         const response = await sendExtensionMessage({ action: 'searchHubSpotCompanies', query });
         if (current !== sequence || !form.isConnected) return;
         if (!response?.success) throw new Error(response?.error || 'Company search failed');
         renderResults(response.companies || [], query);
-        if (status) status.textContent = response.companies?.length
-          ? 'Choose the company to associate with this contact.'
-          : 'No match found. You can add this company to HubSpot.';
       } catch (error) {
         if (current !== sequence || !form.isConnected) return;
         results.innerHTML = '<p class="ws-company-empty">Company search is unavailable. Try again.</p>';
         results.hidden = false;
-        if (status) status.textContent = error.message || 'Could not search HubSpot companies.';
       }
     }, 250);
   });
@@ -9980,7 +9961,6 @@ function setupCompanyAssociationPicker(form) {
     add.hidden = true;
     newName.value = search.value.trim();
     newName.focus();
-    if (status) status.textContent = 'The company will be created in HubSpot and associated when you create the contact.';
   });
   cancelCreate?.addEventListener('click', () => {
     createPanel.hidden = true;
@@ -9988,7 +9968,6 @@ function setupCompanyAssociationPicker(form) {
     add.hidden = false;
     newName.value = '';
     if (newDomain) newDomain.value = '';
-    if (status) status.textContent = 'Optional. Search your HubSpot companies or add a new one.';
   });
 }
 
@@ -10022,7 +10001,6 @@ function setupCreateContactForm(phoneNumber) {
   const createBtn = document.getElementById('createContactBtn');
   const messageDiv = document.getElementById('createContactMessage');
   const ownerSelect = document.getElementById('contactOwner');
-  const ownerHint = document.getElementById('contactOwnerHint');
   const ownerGroup = document.getElementById('contactOwnerGroup');
   
   if (!form || !createBtn || !messageDiv) return;
@@ -10052,21 +10030,17 @@ function setupCreateContactForm(phoneNumber) {
       const activeOwners = (owners || []).filter(o => !o.archived);
       const match = activeOwners.find(o => o.email?.toLowerCase() === email);
       const name = o => [o.firstName, o.lastName].filter(Boolean).join(' ') || o.email || String(o.id);
-      let label = CONTACT_OWNER_AUTO_LABELS[mode] || 'Use workspace assignment';
-      let hint = CONTACT_OWNER_ASSIGNMENT_HINTS[mode] || 'Assignment is resolved when the contact is saved.';
+      let label = CONTACT_OWNER_AUTO_LABELS[mode] || 'Automatic';
       if (mode === 'creator') {
-        label = match ? `Account match — ${name(match)}` : 'Unassigned — no matching HubSpot owner';
-        hint = match ? `Your sign-in email matches ${name(match)} in HubSpot. Choose someone else to override.` : 'Your sign-in email does not match an active HubSpot owner. Choose an owner below or save unassigned.';
+        label = match ? name(match) : 'No matching owner';
       }
       ownerSelect.innerHTML = `<option value="">${escapeHtml(label)}</option>`;
       if (mode === 'creator' && match) ownerSelect.options[0].value = String(match.id);
       for (const owner of activeOwners) {
         ownerSelect.add(new Option(name(owner), String(owner.id)));
       }
-      if (ownerHint) ownerHint.textContent = hint;
     }).catch(() => {
-      if (ownerSelect) ownerSelect.innerHTML = '<option value="">Use workspace assignment</option>';
-      if (ownerHint) ownerHint.textContent = 'Owner list unavailable. Workspace assignment will be checked when saving.';
+      if (ownerSelect) ownerSelect.innerHTML = '<option value="">Automatic</option>';
     });
   }
 
@@ -10412,7 +10386,6 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
         <h5>Create New Contact</h5>
         <form id="createContactForm" class="create-contact-form">
           <section class="ws-suggestions" aria-label="Contact suggestions"></section>
-          <p class="create-contact-account-note">WhatSync uses your HubSpot labels, choices, owners, and required rules.</p>
           <div class="form-group" data-hubspot-property-group="email">
             <label for="email">Email *</label>
             <input type="email" id="email" name="email" autocomplete="email" required>
@@ -10427,7 +10400,6 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
           </div>
           <div class="form-group" id="contactOwnerGroup">
             <label for="contactOwner">Contact owner</label>
-            <p class="form-hint" id="contactOwnerHint"></p>
             <select id="contactOwner" name="contactOwner">
               <option value="">Loading owners...</option>
             </select>
@@ -10447,8 +10419,7 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
             </select>
           </div>
           <div class="form-group ws-company-picker" id="companyAssociationGroup">
-            <label for="companySearch">Associated company</label>
-            <p class="form-hint" id="companyPickerStatus">Optional. Search your HubSpot companies or add a new one.</p>
+            <label for="companySearch">Company</label>
             <input type="search" id="companySearch" name="companySearch" autocomplete="off" placeholder="Search HubSpot companies">
             <div id="companySearchResults" class="ws-company-results" role="listbox" hidden></div>
             <div id="selectedCompany" class="ws-selected-company" hidden>
@@ -10458,7 +10429,6 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
             </div>
             <button type="button" id="addCompanyButton" class="ws-add-company">+ Add a company</button>
             <div id="newCompanyPanel" class="ws-new-company" hidden>
-              <strong>Add company to HubSpot</strong>
               <label for="newCompanyName">Company name *</label>
               <input type="text" id="newCompanyName" autocomplete="organization">
               <label for="newCompanyDomain">Company domain</label>
@@ -10474,8 +10444,7 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
           </div>
           <section class="hubspot-create-required-fields" aria-label="Required HubSpot fields" hidden>
             <div class="hubspot-create-required-intro" hidden>
-              <strong>Required by your HubSpot setup</strong>
-              <p>These fields are part of this account's create or conditional rules.</p>
+              <strong>Required fields</strong>
             </div>
           </section>
           <div class="form-actions">
@@ -10535,16 +10504,10 @@ async function getSyncSettings() {
 // What the default option in the Owner dropdown means, per the org's
 // assignment mode configured in the dashboard (Integrations page).
 const CONTACT_OWNER_AUTO_LABELS = {
-  round_robin: 'Automatic — next HubSpot owner',
-  creator: 'Match your account email',
+  round_robin: 'Automatic',
+  creator: 'Automatic',
   none: 'No owner',
 };
-const CONTACT_OWNER_ASSIGNMENT_HINTS = {
-  round_robin: 'Uses your assignment setting to rotate through HubSpot owners. Pick a person to override.',
-  creator: 'Assigned only when your account email matches an active HubSpot owner.',
-  none: 'No owner is set by default. Pick one below if you want.',
-};
-
 let contentPrivacyCache = null;
 async function getPrivacySettings() {
   if (contentPrivacyCache && Date.now() - contentPrivacyCache.at < 300000) {

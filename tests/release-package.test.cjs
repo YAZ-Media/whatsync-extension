@@ -60,3 +60,12 @@ test('contact creation associates a HubSpot company instead of writing Company N
   assert.match(hubspot, /contactCompanyAssociationTypes/);
   assert.match(hubspot, /payload\.associations/);
 });
+
+test('contact creation stays concise without explanatory property copy', () => {
+  const content = read('content.js');
+  assert.doesNotMatch(content, /create-contact-account-note/);
+  assert.doesNotMatch(content, /ws-property-description/);
+  assert.doesNotMatch(content, /id="contactOwnerHint"/);
+  assert.doesNotMatch(content, /id="companyPickerStatus"/);
+  assert.match(content, /<label for="companySearch">Company<\/label>/);
+});

@@ -2452,13 +2452,6 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     text-align: left;
 }
 
-#hubspot-sidebar .create-contact-account-note {
-    margin: -2px 0 2px;
-    color: var(--sidebar-text-secondary, #667781);
-    font-size: 12px;
-    line-height: 1.45;
-}
-
 #hubspot-sidebar .hubspot-create-required-fields {
     display: grid;
     gap: 12px;
@@ -2475,13 +2468,6 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
 #hubspot-sidebar .hubspot-create-required-intro strong {
     color: var(--sidebar-text, #1a1a1a);
     font-size: 13px;
-}
-
-#hubspot-sidebar .hubspot-create-required-intro p {
-    margin: 3px 0 0;
-    color: var(--sidebar-text-secondary, #667781);
-    font-size: 12px;
-    line-height: 1.4;
 }
 
 #hubspot-sidebar .hubspot-create-required-fields .hubspot-required-field {

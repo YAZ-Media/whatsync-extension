@@ -13,6 +13,16 @@ test('a successful CRM save survives activity log and company association failur
  vm.runInContext(functions(['maybeCreateCompanyForContact','createHubSpotContactViaEdgeFunction']),ctx);
  const result=await ctx.createHubSpotContactViaEdgeFunction({properties:{company:'Acme'}},'u','session');assert.equal(result.id,'123');assert.match(result.whatsyncWarning,/Company linking failed/);assert.deepEqual(actions,['createContact','associateCompanyByName']);
 });
+test('an explicitly selected company is sent with contact creation and skips legacy name matching',async()=>{
+ const calls=[];const settings={enrich_before_create:false,auto_create_companies:true};
+ const ctx=vm.createContext({console:quiet,whatsyncDebug(){},getSyncSettingsForUser:async()=>settings,applyFieldMappings:(_,__,props)=>props,applyContactOwnerAssignment:async x=>x,callHubSpotEdgeFunction:async(action,data)=>{calls.push({action,data});return {id:'456',properties:{}};},logContactCreationToSupabase:async()=>{}});
+ vm.runInContext(functions(['maybeCreateCompanyForContact','createHubSpotContactViaEdgeFunction']),ctx);
+ const result=await ctx.createHubSpotContactViaEdgeFunction({companyId:'99',properties:{firstname:'Ada'}},'u','session');
+ assert.equal(result.id,'456');
+ assert.equal(calls[0].action,'createContact');
+ assert.equal(calls[0].data.companyId,'99');
+ assert.equal(calls.some(call=>call.action==='associateCompanyByName'),false);
+});
 test('HubSpot error-shaped or empty contact responses are never a saved contact',async()=>{
  const ctx=vm.createContext({console:quiet,whatsyncDebug(){},callHubSpotEdgeFunction:async()=>({success:true})});vm.runInContext(functions(['createHubSpotContactViaEdgeFunction']),ctx);
  await assert.rejects(ctx.createHubSpotContactViaEdgeFunction({properties:{}},null,null),/did not return/);

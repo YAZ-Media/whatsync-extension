@@ -1027,6 +1027,28 @@ function sanitizeProperties(raw: Record<string, unknown>): Record<string, unknow
   return out;
 }
 
+async function contactCompanyAssociationTypes(token: string): Promise<number[]> {
+  try {
+    const response = await hubspot(
+      token,
+      'GET',
+      '/crm/v4/associations/contacts/companies/labels',
+    ) as { results?: Array<{ category?: string; typeId?: number; label?: string | null }> };
+    const labels = (response.results || []).filter((item) =>
+      item.category === 'HUBSPOT_DEFINED' && Number.isInteger(item.typeId) && Number(item.typeId) > 0
+    );
+    const defaultLabel = labels.find((item) => !item.label);
+    const primary = labels.find((item) => /primary/i.test(String(item.label || '')));
+    const selected = [defaultLabel?.typeId, primary?.typeId]
+      .filter((typeId): typeId is number => Number.isInteger(typeId) && Number(typeId) > 0);
+    return [...new Set(selected.length ? selected : [Number(labels[0]?.typeId || 1)])];
+  } catch {
+    // HubSpot's default contact → company association type is 1. This fallback
+    // keeps company linking available in portals that do not expose label reads.
+    return [1];
+  }
+}
+
 function isRequiredForCreate(prop: Record<string, unknown>): boolean {
   const metadata = (prop.modificationMetadata as Record<string, unknown> | undefined) || {};
   const requiredFor = Array.isArray(prop.requiredFor) ? prop.requiredFor.map(String) : [];
@@ -1541,10 +1563,24 @@ async function handleAction(
   switch (action) {
     // ----- Contacts -----
 
-    case 'createContact':
-      return hubspot(token, 'POST', crmObjectWritePath('contacts'), {
+    case 'createContact': {
+      const payload: Record<string, unknown> = {
         properties: sanitizeProperties((data.properties as Record<string, unknown>) ?? data),
-      });
+      };
+      const companyId = String(data.companyId ?? '');
+      if (companyId) {
+        if (!/^\d+$/.test(companyId)) throw new HttpError(400, 'A valid HubSpot company is required');
+        const associationTypeIds = await contactCompanyAssociationTypes(token);
+        payload.associations = [{
+          to: { id: companyId },
+          types: associationTypeIds.map((associationTypeId) => ({
+            associationCategory: 'HUBSPOT_DEFINED',
+            associationTypeId,
+          })),
+        }];
+      }
+      return hubspot(token, 'POST', crmObjectWritePath('contacts'), payload);
+    }
 
     case 'getContact': {
       const { contactId, properties = [] } = data as { contactId?: string; properties?: string[] };
@@ -1603,6 +1639,25 @@ async function handleAction(
       return hubspot(token, 'POST', '/crm/v3/objects/contacts/search', searchRequest);
     }
 
+    case 'searchCompanies': {
+      const query = String(data.query ?? '').trim().slice(0, 100);
+      const limit = Math.min(Math.max(Number(data.limit) || 8, 1), 20);
+      if (query.length < 2) return { companies: [] };
+      const result = await hubspot(token, 'POST', '/crm/v3/objects/companies/search', {
+        query,
+        properties: ['name', 'domain', 'phone'],
+        limit,
+      }) as { results?: Array<{ id: string; properties?: Record<string, string> }> };
+      return {
+        companies: (result.results || []).map((company) => ({
+          id: company.id,
+          name: company.properties?.name || 'Unnamed company',
+          domain: company.properties?.domain || '',
+          phone: company.properties?.phone || '',
+        })),
+      };
+    }
+
     // Patch a contact's properties (inline edits from the sidebar, e.g.
     // lifecycle stage / lead status). Read-only properties are stripped so a
     // stale field can never reject the whole request.
@@ -1645,7 +1700,7 @@ async function handleAction(
 
     case 'createCompany':
       return hubspot(token, 'POST', crmObjectWritePath('companies'), {
-        properties: (data.properties as Record<string, unknown>) ?? data,
+        properties: sanitizeProperties((data.properties as Record<string, unknown>) ?? data),
       });
 
     // ----- Notes -----

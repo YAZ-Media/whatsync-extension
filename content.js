@@ -9738,7 +9738,6 @@ const CONTACT_CREATE_PROPERTY_FIELDS = {
   firstname: 'firstName',
   lastname: 'lastName',
   phone: 'phone',
-  company: 'company',
   jobtitle: 'jobTitle',
   hubspot_owner_id: 'contactOwner',
   lifecyclestage: 'lifecycleStage',
@@ -9836,6 +9835,16 @@ function setupContactSuggestions(form, contact = null) {
         if (chatKey !== getCurrentChatHeaderKey()) return;
         const suggestion = suggestions[Number(button.dataset.suggestion)];
         if (!contact) {
+          if (suggestion.field === 'company') {
+            const search = form.querySelector('#companySearch');
+            if (search && !search.value.trim()) {
+              search.value = suggestion.value;
+              search.dispatchEvent(new Event('input', { bubbles: true }));
+              search.focus();
+            }
+            render();
+            return;
+          }
           const input = form.querySelector(`#${suggestion.field}`);
           if (input && !input.value.trim()) {
             input.value = suggestion.value;
@@ -9869,6 +9878,145 @@ function setupContactSuggestions(form, contact = null) {
   render();
 }
 
+function setupCompanyAssociationPicker(form) {
+  const search = form.querySelector('#companySearch');
+  const results = form.querySelector('#companySearchResults');
+  const selected = form.querySelector('#selectedCompany');
+  const selectedName = form.querySelector('#selectedCompanyName');
+  const selectedDomain = form.querySelector('#selectedCompanyDomain');
+  const remove = form.querySelector('#removeSelectedCompany');
+  const add = form.querySelector('#addCompanyButton');
+  const createPanel = form.querySelector('#newCompanyPanel');
+  const cancelCreate = form.querySelector('#cancelNewCompany');
+  const newName = form.querySelector('#newCompanyName');
+  const newDomain = form.querySelector('#newCompanyDomain');
+  const status = form.querySelector('#companyPickerStatus');
+  if (!search || !results || !selected || !add || !createPanel || !newName) return;
+
+  let timer = null;
+  let sequence = 0;
+
+  const clearSelection = () => {
+    delete form.dataset.companyId;
+    delete form.dataset.companyName;
+    selected.hidden = true;
+    search.hidden = false;
+    add.hidden = false;
+    search.value = '';
+    results.hidden = true;
+    results.innerHTML = '';
+    createPanel.hidden = true;
+    newName.value = '';
+    if (newDomain) newDomain.value = '';
+    if (status) status.textContent = 'Optional. Search your HubSpot companies or add a new one.';
+  };
+
+  const selectCompany = (company) => {
+    form.dataset.companyId = String(company.id);
+    form.dataset.companyName = String(company.name || 'Company');
+    selectedName.textContent = company.name || 'Company';
+    selectedDomain.textContent = company.domain || '';
+    selectedDomain.hidden = !company.domain;
+    selected.hidden = false;
+    search.hidden = true;
+    add.hidden = true;
+    results.hidden = true;
+    results.innerHTML = '';
+    createPanel.hidden = true;
+    if (status) status.textContent = 'This contact will be associated with the selected HubSpot company.';
+  };
+
+  const renderResults = (companies, query) => {
+    results.innerHTML = '';
+    if (!companies.length) {
+      results.innerHTML = `<p class="ws-company-empty">No HubSpot company found for “${escapeHtml(query)}”.</p>`;
+    } else {
+      companies.forEach((company) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'ws-company-result';
+        button.innerHTML = `<strong>${escapeHtml(company.name || 'Unnamed company')}</strong>${company.domain ? `<span>${escapeHtml(company.domain)}</span>` : ''}`;
+        button.addEventListener('click', () => selectCompany(company));
+        results.appendChild(button);
+      });
+    }
+    results.hidden = false;
+  };
+
+  search.addEventListener('input', () => {
+    clearTimeout(timer);
+    const query = search.value.trim();
+    results.hidden = true;
+    if (query.length < 2) {
+      results.innerHTML = '';
+      if (status) status.textContent = 'Type at least 2 characters to search HubSpot.';
+      return;
+    }
+    const current = ++sequence;
+    if (status) status.textContent = 'Searching HubSpot companies…';
+    timer = setTimeout(async () => {
+      try {
+        const response = await sendExtensionMessage({ action: 'searchHubSpotCompanies', query });
+        if (current !== sequence || !form.isConnected) return;
+        if (!response?.success) throw new Error(response?.error || 'Company search failed');
+        renderResults(response.companies || [], query);
+        if (status) status.textContent = response.companies?.length
+          ? 'Choose the company to associate with this contact.'
+          : 'No match found. You can add this company to HubSpot.';
+      } catch (error) {
+        if (current !== sequence || !form.isConnected) return;
+        results.innerHTML = '<p class="ws-company-empty">Company search is unavailable. Try again.</p>';
+        results.hidden = false;
+        if (status) status.textContent = error.message || 'Could not search HubSpot companies.';
+      }
+    }, 250);
+  });
+
+  remove?.addEventListener('click', clearSelection);
+  add.addEventListener('click', () => {
+    createPanel.hidden = false;
+    results.hidden = true;
+    search.hidden = true;
+    add.hidden = true;
+    newName.value = search.value.trim();
+    newName.focus();
+    if (status) status.textContent = 'The company will be created in HubSpot and associated when you create the contact.';
+  });
+  cancelCreate?.addEventListener('click', () => {
+    createPanel.hidden = true;
+    search.hidden = false;
+    add.hidden = false;
+    newName.value = '';
+    if (newDomain) newDomain.value = '';
+    if (status) status.textContent = 'Optional. Search your HubSpot companies or add a new one.';
+  });
+}
+
+async function resolveCompanyForContact(form) {
+  if (form.dataset.companyId) {
+    return { companyId: form.dataset.companyId, companyName: form.dataset.companyName || '' };
+  }
+  const panel = form.querySelector('#newCompanyPanel');
+  if (!panel || panel.hidden) return {};
+  const name = form.querySelector('#newCompanyName')?.value.trim() || '';
+  const domain = form.querySelector('#newCompanyDomain')?.value.trim() || '';
+  if (!name) {
+    form.querySelector('#newCompanyName')?.focus();
+    throw new Error('Enter a company name or cancel adding the company.');
+  }
+  const response = await sendExtensionMessage({
+    action: 'createHubSpotCompany',
+    properties: { name, domain: domain || undefined },
+  });
+  const company = response?.company || response?.data;
+  if (!response?.success || !company?.id) {
+    throw new Error(response?.error || 'HubSpot could not create the company.');
+  }
+  form.dataset.companyId = String(company.id);
+  form.dataset.companyName = name;
+  return { companyId: String(company.id), companyName: name };
+}
+
 function setupCreateContactForm(phoneNumber) {
   const form = document.getElementById('createContactForm');
   const createBtn = document.getElementById('createContactBtn');
@@ -9881,6 +10029,7 @@ function setupCreateContactForm(phoneNumber) {
   showWorkspaceAccess(form);
   applyContactCreatePropertyMetadata(form);
   loadHubSpotCreateRequiredFields(form);
+  setupCompanyAssociationPicker(form);
 
   const { firstName: defaultFirst, lastName: defaultLast } = parseContactNameParts(
     getCurrentContactName()
@@ -9967,13 +10116,27 @@ function setupCreateContactForm(phoneNumber) {
     const accountSpecificProperties = readHubSpotPropertyValues(
       form.querySelector('.hubspot-create-required-fields')
     );
+    try {
+      var companyAssociation = await resolveCompanyForContact(form);
+    } catch (error) {
+      messageDiv.className = 'form-message error';
+      messageDiv.setAttribute('role', 'alert');
+      messageDiv.textContent = error.message;
+      messageDiv.style.display = 'block';
+      form.removeAttribute('aria-busy');
+      createBtn.disabled = false;
+      createBtn.querySelector('.btn-text').style.display = 'inline';
+      createBtn.querySelector('.btn-loading').style.display = 'none';
+      return;
+    }
+
     const contactData = {
+      companyId: companyAssociation.companyId,
       sourceData: {
         phone: hubspotPhoneFormat || undefined,
         contact_name: contactName,
         last_message_date: Date.now(),
         email: document.getElementById('email').value.trim() || undefined,
-        company: document.getElementById('company').value.trim() || undefined,
         job_title: document.getElementById('jobTitle').value.trim() || undefined,
       },
       properties: {
@@ -9983,7 +10146,6 @@ function setupCreateContactForm(phoneNumber) {
         lastname: lastName,
         email: form.querySelector('#email').value.trim(),
         phone: hubspotPhoneFormat || undefined,
-        company: form.querySelector('#company').value.trim() || undefined,
         jobtitle: form.querySelector('#jobTitle').value.trim() || undefined,
         hubspot_owner_id: (() => {
           const manual = document.getElementById('contactOwner')?.value?.trim();
@@ -10250,7 +10412,7 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
         <h5>Create New Contact</h5>
         <form id="createContactForm" class="create-contact-form">
           <section class="ws-suggestions" aria-label="Contact suggestions"></section>
-          <p class="create-contact-account-note">Fields, choices, and required rules come from your connected HubSpot account.</p>
+          <p class="create-contact-account-note">WhatSync uses your HubSpot labels, choices, owners, and required rules.</p>
           <div class="form-group" data-hubspot-property-group="email">
             <label for="email">Email *</label>
             <input type="email" id="email" name="email" autocomplete="email" required>
@@ -10263,18 +10425,6 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
             <label for="lastName">Last Name</label>
             <input type="text" id="lastName" name="lastName" autocomplete="family-name" value="${escapeHtml(defaultLastName)}">
           </div>
-          <div class="form-group" data-hubspot-property-group="phone">
-            <label for="phone">Phone</label>
-            <input type="tel" id="phone" name="phone" autocomplete="tel" value="${escapeHtml(displayPhone)}" data-phone-full="${escapeHtml(hubspotPhoneFormat)}" placeholder="${manualPhoneEntry ? 'Enter phone number' : ''}" ${phoneReadonly ? 'readonly' : ''}>
-          </div>
-          <div class="form-group" data-hubspot-property-group="company">
-            <label for="company">Company</label>
-            <input type="text" id="company" name="company" autocomplete="organization">
-          </div>
-          <div class="form-group" data-hubspot-property-group="jobtitle">
-            <label for="jobTitle">Job Title</label>
-            <input type="text" id="jobTitle" name="jobTitle" autocomplete="organization-title">
-          </div>
           <div class="form-group" id="contactOwnerGroup">
             <label for="contactOwner">Contact owner</label>
             <p class="form-hint" id="contactOwnerHint"></p>
@@ -10282,11 +10432,39 @@ async function formatCreateContactForm(phoneNumber, options = {}) {
               <option value="">Loading owners...</option>
             </select>
           </div>
+          <div class="form-group" data-hubspot-property-group="jobtitle">
+            <label for="jobTitle">Job Title</label>
+            <input type="text" id="jobTitle" name="jobTitle" autocomplete="organization-title">
+          </div>
+          <div class="form-group" data-hubspot-property-group="phone">
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" name="phone" autocomplete="tel" value="${escapeHtml(displayPhone)}" data-phone-full="${escapeHtml(hubspotPhoneFormat)}" placeholder="${manualPhoneEntry ? 'Enter phone number' : ''}" ${phoneReadonly ? 'readonly' : ''}>
+          </div>
           <div class="form-group">
             <label for="lifecycleStage">Lifecycle Stage</label>
             <select id="lifecycleStage" name="lifecycleStage">
               <option value="">Loading…</option>
             </select>
+          </div>
+          <div class="form-group ws-company-picker" id="companyAssociationGroup">
+            <label for="companySearch">Associated company</label>
+            <p class="form-hint" id="companyPickerStatus">Optional. Search your HubSpot companies or add a new one.</p>
+            <input type="search" id="companySearch" name="companySearch" autocomplete="off" placeholder="Search HubSpot companies">
+            <div id="companySearchResults" class="ws-company-results" role="listbox" hidden></div>
+            <div id="selectedCompany" class="ws-selected-company" hidden>
+              <span class="ws-company-avatar" aria-hidden="true">C</span>
+              <span><strong id="selectedCompanyName"></strong><small id="selectedCompanyDomain"></small></span>
+              <button type="button" id="removeSelectedCompany" aria-label="Remove selected company">×</button>
+            </div>
+            <button type="button" id="addCompanyButton" class="ws-add-company">+ Add a company</button>
+            <div id="newCompanyPanel" class="ws-new-company" hidden>
+              <strong>Add company to HubSpot</strong>
+              <label for="newCompanyName">Company name *</label>
+              <input type="text" id="newCompanyName" autocomplete="organization">
+              <label for="newCompanyDomain">Company domain</label>
+              <input type="text" id="newCompanyDomain" inputmode="url" placeholder="example.com">
+              <button type="button" id="cancelNewCompany" class="ws-company-cancel">Cancel</button>
+            </div>
           </div>
           <div class="form-group">
             <label for="leadStatus">Lead Status</label>

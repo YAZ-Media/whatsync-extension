@@ -282,7 +282,7 @@ function attachKnownConditionalFields(contacts, definitions) {
 async function callHubSpotEdgeFunction(action, data = {}) {
   const cacheable = [
     'getPropertyOptions', 'getPropertyDefinitions', 'getCreatePropertyDefinitions', 'getOwners', 'getOwnerById',
-    'getSidebarFields', 'getSidebarSection', 'getSidebarSections', 'searchContacts',
+    'getSidebarFields', 'getSidebarSection', 'getSidebarSections', 'searchContacts', 'searchCompanies',
     'getRuntimeInfo',
   ].includes(action);
   if (!cacheable) {
@@ -293,7 +293,7 @@ async function callHubSpotEdgeFunction(action, data = {}) {
   if (!userId || !userLoggedIn) throw new Error('Not authenticated');
   const key = JSON.stringify([userId, action, data]);
   const cached = hubspotReadCache.get(key);
-  const ttlMs = action === 'searchContacts' ? 60000 : (action === 'getRuntimeInfo' ? 300000 : 15000);
+  const ttlMs = ['searchContacts', 'searchCompanies'].includes(action) ? 60000 : (action === 'getRuntimeInfo' ? 300000 : 15000);
   if (cached && Date.now() - cached.at < ttlMs) return structuredClone(cached.value);
   if (hubspotReadsInFlight.has(key)) return hubspotReadsInFlight.get(key);
   const promise = requestHubSpotEdgeFunction(action, data).then(value => {
@@ -1008,6 +1008,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } catch (error) {
         console.error('[Background] getCreatePropertyDefinitions failed:', error);
         sendResponse(hubSpotErrorResponse(error, 'Could not load the HubSpot create requirements'));
+      }
+    })();
+    return true;
+  }
+
+  if (request.action === 'searchHubSpotCompanies') {
+    const query = String(request.query || request.data?.query || '').trim();
+    (async () => {
+      try {
+        if (query.length < 2) {
+          sendResponse({ success: true, companies: [] });
+          return;
+        }
+        const result = await callHubSpotEdgeFunction('searchCompanies', { query, limit: 8 });
+        sendResponse({ success: true, companies: result?.companies || result?.results || [] });
+      } catch (error) {
+        console.error('[Background] searchCompanies failed:', error);
+        sendResponse(hubSpotErrorResponse(error, 'Could not search HubSpot companies'));
+      }
+    })();
+    return true;
+  }
+
+  if (request.action === 'createHubSpotCompany') {
+    const properties = request.properties || request.data?.properties || {};
+    (async () => {
+      try {
+        const result = await callHubSpotEdgeFunction('createCompany', { properties });
+        sendResponse({ success: true, company: result?.data || result });
+      } catch (error) {
+        console.error('[Background] createCompany failed:', error);
+        sendResponse(hubSpotErrorResponse(error, 'HubSpot could not create the company'));
       }
     })();
     return true;
@@ -2654,7 +2686,7 @@ async function createHubSpotContactViaEdgeFunction(contactData, userId, accessTo
         const syncSettings = await getSyncSettingsForUser(userId);
         await logContactCreationToSupabase(userId, accessToken, payload, createdContact, syncSettings)
           .catch(() => console.warn('[Background] Contact saved; activity log unavailable.'));
-        await maybeCreateCompanyForContact(createdContact, payload, syncSettings);
+        if (!payload.companyId) await maybeCreateCompanyForContact(createdContact, payload, syncSettings);
       } else {
         console.warn('[Background] Missing userId or accessToken, skipping Supabase log');
         console.warn('[Background] userId:', userId, 'accessToken:', accessToken ? 'present' : 'missing');

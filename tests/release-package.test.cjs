@@ -44,3 +44,19 @@ test('contact creation uses portal metadata and keeps required fields in the for
   assert.doesNotMatch(content, /<label for="lastName">Last Name \*<\/label>/);
   assert.match(content, /<input type="email" id="email"[^>]*required>/);
 });
+
+test('contact creation associates a HubSpot company instead of writing Company Name text', () => {
+  const content = read('content.js');
+  const background = read('background.js');
+  const hubspot = read('supabase/functions/hubspot/index.ts');
+  assert.doesNotMatch(content, /id="company" name="company"/);
+  assert.doesNotMatch(content, /company:\s*form\.querySelector\('#company'\)/);
+  assert.match(content, /id="companySearch"/);
+  assert.match(content, /\+ Add a company/);
+  assert.match(content, /companyId: companyAssociation\.companyId/);
+  assert.match(background, /request\.action === 'searchHubSpotCompanies'/);
+  assert.match(background, /request\.action === 'createHubSpotCompany'/);
+  assert.match(hubspot, /case 'searchCompanies'/);
+  assert.match(hubspot, /contactCompanyAssociationTypes/);
+  assert.match(hubspot, /payload\.associations/);
+});

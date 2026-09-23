@@ -2617,6 +2617,99 @@ body.whatsapp-message-selection-mode [data-id].message-selected::after {
     color: var(--sidebar-text, #1e293b);
 }
 
+#hubspot-sidebar .ws-company-picker {
+    position: relative;
+}
+
+#hubspot-sidebar .ws-company-results {
+    overflow: hidden;
+    border: 1px solid var(--sidebar-border, #e2e8f0);
+    border-radius: 10px;
+    background: var(--sidebar-content-bg, #ffffff);
+}
+
+#hubspot-sidebar .ws-company-result {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--sidebar-border, #e2e8f0);
+    color: var(--sidebar-text, #1e293b);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+#hubspot-sidebar .ws-company-result:last-child { border-bottom: 0; }
+#hubspot-sidebar .ws-company-result:hover,
+#hubspot-sidebar .ws-company-result:focus-visible { background: var(--sidebar-hover-bg, #f8fafc); }
+#hubspot-sidebar .ws-company-result strong { font-size: 13px; }
+#hubspot-sidebar .ws-company-result span,
+#hubspot-sidebar .ws-company-empty { font-size: 12px; color: var(--sidebar-text-secondary, #667781); }
+#hubspot-sidebar .ws-company-empty { margin: 0; padding: 10px 12px; }
+
+#hubspot-sidebar .ws-selected-company {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) 30px;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 1px solid var(--sidebar-border, #e2e8f0);
+    border-radius: 10px;
+    background: var(--sidebar-content-bg, #ffffff);
+}
+
+#hubspot-sidebar .ws-selected-company[hidden] { display: none; }
+#hubspot-sidebar .ws-company-avatar {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    color: #c24120;
+    background: #ffebe6;
+    font-weight: 700;
+}
+#hubspot-sidebar .ws-selected-company > span:nth-child(2) { min-width: 0; }
+#hubspot-sidebar .ws-selected-company strong,
+#hubspot-sidebar .ws-selected-company small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hubspot-sidebar .ws-selected-company small { margin-top: 2px; color: var(--sidebar-text-secondary, #667781); }
+#hubspot-sidebar .ws-selected-company button {
+    border: 0;
+    background: transparent;
+    color: var(--sidebar-text-secondary, #667781);
+    font-size: 22px;
+    cursor: pointer;
+}
+
+#hubspot-sidebar .ws-add-company,
+#hubspot-sidebar .ws-company-cancel {
+    align-self: flex-start;
+    padding: 3px 0;
+    border: 0;
+    color: #ff7a59;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+#hubspot-sidebar .ws-new-company {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 12px;
+    border: 1px solid var(--sidebar-border, #e2e8f0);
+    border-radius: 10px;
+    background: var(--sidebar-hover-bg, #f8fafc);
+}
+#hubspot-sidebar .ws-new-company[hidden] { display: none; }
+#hubspot-sidebar .ws-new-company > strong { font-size: 13px; }
+#hubspot-sidebar .ws-new-company > label { font-size: 12px; }
+
 #hubspot-sidebar .form-actions {
     margin-top: 8px;
 }

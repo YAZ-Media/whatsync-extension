@@ -55,7 +55,7 @@ test('related sections share the CRM hierarchy and hide technical backend errors
   assert.match(css, /\.ws-related-loading \{ display: none !important; \}/);
 });
 
-test('sidebar appearance has drag ordering and a functional fictional-data preview', () => {
+test('sidebar appearance has drag ordering and a functional fictional-data preview', { skip: !fs.existsSync(path.join(root, 'website/src/pages/dashboard/SidebarDesigner.tsx')) }, () => {
   const designer = read('website/src/pages/dashboard/SidebarDesigner.tsx');
   assert.match(designer, /draggable=\{canManage\}/);
   assert.match(designer, /reorderField\(sourceKey, targetKey\)/);

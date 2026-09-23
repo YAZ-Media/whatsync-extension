@@ -4157,7 +4157,9 @@ async function fetchContactPropertyOptions(property) {
 }
 
 async function updateHubSpotContact(contactId, properties) {
-  return sendExtensionMessage({ action: 'updateContact', contactId, properties });
+  const response = await sendExtensionMessage({ action: 'updateContact', contactId, properties });
+  if (response?.success) contactLookupCache.clear();
+  return response;
 }
 
 function hubSpotResponseError(response, fallback = 'HubSpot could not save this record') {
@@ -4357,6 +4359,10 @@ function requestHubSpotRequiredValues(definitions) {
 }
 
 async function runHubSpotConditionalWrite({ objectType, properties, write }) {
+  const runtime = await sendExtensionMessage({ action: 'verifyHubSpotWriteRuntime' });
+  if (!runtime?.success) {
+    throw new Error(runtime?.error || 'WhatSync could not verify HubSpot property rules. Nothing was saved.');
+  }
   let combined = { ...properties };
   const requested = new Set();
   const conditionalDefinitions = [];
@@ -10004,6 +10010,11 @@ async function createHubSpotNote(contactId, noteText, noteHtml, createTodo, foll
   }
 }
 
+// Short-lived contact cache makes returning to a recent conversation instant,
+// while the background cache still keeps HubSpot as the source of truth.
+const contactLookupCache = new Map();
+const contactLookupInFlight = new Map();
+
 // Function to check HubSpot CRM for phone number match (via background script)
 async function checkHubSpotContact(phoneNumber) {
   if (!phoneNumber) {
@@ -10011,34 +10022,38 @@ async function checkHubSpotContact(phoneNumber) {
     return null;
   }
   
+  const cacheKey = String(phoneNumber).replace(/\D/g, '');
+  const cached = contactLookupCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 60000) return cached.value;
+  if (contactLookupInFlight.has(cacheKey)) return contactLookupInFlight.get(cacheKey);
+
   whatsyncDebug('[Content] Sending HubSpot search request for phone:', phoneNumber);
   
-  try {
+  const lookup = (async () => {
     const response = await sendExtensionMessage({
       action: 'checkHubSpotContact',
       phoneNumber: phoneNumber
     });
-    
+
     whatsyncDebug('[Content] Received response from background:', response);
-    
-    if (response) {
-      if (response.success) {
-        if (response.data) {
-          whatsyncDebug('[Content] ✅ HubSpot Contact Match Found:', response.data);
-          return response.data;
-        } else {
-          whatsyncDebug('[Content] ⚠️ No matching contacts found in HubSpot for:', phoneNumber);
-          return null;
-        }
-      } else if (response.error) {
-        console.error('[Content] ❌ HubSpot API Error:', response.error);
-        throw new Error(response.error);
-      }
+
+    if (response?.success) {
+      const value = response.data || null;
+      contactLookupCache.set(cacheKey, { at: Date.now(), value });
+      whatsyncDebug(value
+        ? '[Content] ✅ HubSpot Contact Match Found:'
+        : '[Content] ⚠️ No matching contacts found in HubSpot for:', value || phoneNumber);
+      return value;
+    }
+    if (response?.error) {
+      console.error('[Content] ❌ HubSpot API Error:', response.error);
+      throw new Error(response.error);
     }
     throw new Error('No response from HubSpot. Please retry.');
-  } catch (error) {
-    throw error;
-  }
+  })().finally(() => contactLookupInFlight.delete(cacheKey));
+
+  contactLookupInFlight.set(cacheKey, lookup);
+  return lookup;
 }
 
 // Function to format create contact form HTML (respects privacy mask_phone for display)
@@ -10155,7 +10170,11 @@ const DEFAULT_PRIVACY = { mask_phone: true, mask_media: false, allowed_propertie
 /**
  * Get privacy settings: always from backend via background script (edge function, 5-min cache).
  */
+let contentSyncSettingsCache = null;
 async function getSyncSettings() {
+  if (contentSyncSettingsCache && Date.now() - contentSyncSettingsCache.at < 300000) {
+    return contentSyncSettingsCache.value;
+  }
   try {
     const response = await sendExtensionMessage({ action: 'getSyncSettings' });
     if (!response) return {
@@ -10164,6 +10183,7 @@ async function getSyncSettings() {
       default_stage_id: null,
     };
     if (response?.success && response.settings) {
+      contentSyncSettingsCache = { at: Date.now(), value: response.settings };
       return response.settings;
     }
   } catch (error) {
@@ -10191,18 +10211,24 @@ const CONTACT_OWNER_ASSIGNMENT_HINTS = {
   none: 'No owner is set by default. Pick one below if you want.',
 };
 
+let contentPrivacyCache = null;
 async function getPrivacySettings() {
+  if (contentPrivacyCache && Date.now() - contentPrivacyCache.at < 300000) {
+    return contentPrivacyCache.value;
+  }
   try {
     const response = await sendExtensionMessage({ action: 'getPrivacySettings' });
     if (!response) return DEFAULT_PRIVACY;
     if (response?.success && response.privacy) {
       whatsyncDebug('[Privacy] Fetched from backend:', response.privacy);
       const p = response.privacy;
-      return {
+      const value = {
         mask_phone: !!p.mask_phone,
         mask_media: !!p.mask_media,
         allowed_properties: Array.isArray(p.allowed_properties) ? p.allowed_properties : null
       };
+      contentPrivacyCache = { at: Date.now(), value };
+      return value;
     }
   } catch (err) {
     if (!isExtensionContextInvalidated(err)) {
@@ -10356,7 +10382,7 @@ function isSidebarFieldEnabled(key) {
 
 let sidebarCatalogCache = null;
 async function fetchSidebarFieldsFromBackend(userId) {
-  if (sidebarCatalogCache?.userId === userId && Date.now() - sidebarCatalogCache.at < 15000) return sidebarCatalogCache.value;
+  if (sidebarCatalogCache?.userId === userId && Date.now() - sidebarCatalogCache.at < 300000) return sidebarCatalogCache.value;
   if (!userId || extensionContextInvalidated) {
     return { contactFields: [], actionFields: [] };
   }
@@ -10760,6 +10786,7 @@ try {
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace !== 'local' || !(changes['whatsync.sidebarFieldsUpdated'] || changes['whatsync.privacySettings'])) return;
     (async () => {
+      if (changes['whatsync.privacySettings']) contentPrivacyCache = null;
       sidebarCatalogCache = null;
       sidebarPrefsCache = null; // invalidate so next fetch goes to the network
       lastSidebarFieldsHash = null;
@@ -11275,13 +11302,23 @@ function getCurrentChatHeaderKey() {
 // Resolve the shared WhatSync state: is the extension signed in, and is HubSpot
 // connected for this account? Both the website and the extension read the same
 // backend, so this is the single source of truth the sidebar renders against.
+let whatsyncStateCache = null;
 async function getWhatsyncState() {
+  if (whatsyncStateCache && Date.now() - whatsyncStateCache.at < 300000) {
+    return whatsyncStateCache.value;
+  }
   try {
     const result = await extensionStorageGet(['userLoggedIn', 'userId']);
     const loggedIn = result.userLoggedIn === true && !!result.userId;
-    if (!loggedIn) return { loggedIn: false, hubspotConnected: false };
+    if (!loggedIn) {
+      const value = { loggedIn: false, hubspotConnected: false };
+      whatsyncStateCache = { at: Date.now(), value };
+      return value;
+    }
     const hubspotConnected = await checkHubSpotIntegrationStatus();
-    return { loggedIn: true, hubspotConnected };
+    const value = { loggedIn: true, hubspotConnected };
+    whatsyncStateCache = { at: Date.now(), value };
+    return value;
   } catch {
     return { loggedIn: false, hubspotConnected: false };
   }
@@ -11290,29 +11327,52 @@ async function getWhatsyncState() {
 // State screens shown in the sidebar when we can't show CRM data yet.
 function renderSignInState(sidebarContent) {
   sidebarContent.innerHTML = `
-    <div class="ws-state">
-      <div class="ws-state-icon">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
-          <polyline points="10 17 15 12 10 7"></polyline>
-          <line x1="15" y1="12" x2="3" y2="12"></line>
-        </svg>
+    <div class="ws-state ws-signin-state">
+      <div class="ws-signin-heading">
+        <img src="${chrome.runtime.getURL('icons/mark.svg')}" width="34" height="34" alt="">
+        <div><h4>Welcome back</h4><p>Sign in here to connect this conversation to HubSpot.</p></div>
       </div>
-      <h4>Sign in to WhatSync</h4>
-      <p>Open the secure extension window to sign in, then return to this chat.</p>
-      <button type="button" class="ws-state-btn" id="ws-open-popup-btn">Open secure sign in</button>
+      <form class="ws-signin-form" id="ws-signin-form">
+        <label>Email<input type="email" name="email" autocomplete="username" required placeholder="you@company.com"></label>
+        <label>Password<input type="password" name="password" autocomplete="current-password" required placeholder="Your password"></label>
+        <p class="ws-signin-error" role="alert" hidden></p>
+        <button type="submit" class="ws-state-btn">Sign in</button>
+      </form>
       <p class="ws-state-hint">
-        Don't have an account?
-        <a href="https://whatsync.io/auth" target="_blank" rel="noopener noreferrer" class="ws-state-link">Sign up free</a>
+        <a href="https://whatsync.io/auth?mode=signup" target="_blank" rel="noopener noreferrer" class="ws-state-link">Create an account</a>
+        <span aria-hidden="true"> · </span>
+        <a href="https://whatsync.io/auth?mode=forgot-password" target="_blank" rel="noopener noreferrer" class="ws-state-link">Forgot password?</a>
       </p>
     </div>
   `;
 
-  const openButton = sidebarContent.querySelector('#ws-open-popup-btn');
-  openButton?.addEventListener('click', async () => {
-    const result = await sendExtensionMessage({ action: 'openPopup' });
-    if (!result?.opened) {
-      window.open('https://whatsync.io/auth', '_blank', 'noopener,noreferrer');
+  const form = sidebarContent.querySelector('#ws-signin-form');
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    const errorNode = form.querySelector('.ws-signin-error');
+    const data = new FormData(form);
+    button.disabled = true;
+    button.textContent = 'Signing in…';
+    errorNode.hidden = true;
+    try {
+      const result = await sendExtensionMessage({
+        action: 'signInWhatSync',
+        email: String(data.get('email') || '').trim(),
+        password: String(data.get('password') || ''),
+      });
+      if (!result?.success) throw new Error(result?.error || 'Sign in failed.');
+      whatsyncStateCache = null;
+      sidebarContent.innerHTML = `<div class="ws-contact-skeleton" role="status"><span class="ws-eyebrow">CONNECTED</span><h4>Opening your HubSpot workspace…</h4><i></i><i></i><i></i></div>`;
+      await updateSidebarContent();
+    } catch (error) {
+      const message = String(error?.message || 'Sign in failed.');
+      errorNode.textContent = /invalid login credentials|invalid email or password/i.test(message)
+        ? 'Email or password is incorrect.'
+        : message;
+      errorNode.hidden = false;
+      button.disabled = false;
+      button.textContent = 'Sign in';
     }
   });
 }
@@ -11843,10 +11903,22 @@ function registerExtensionListeners() {
         sendResponse({ success: true });
         return true;
       }
+      if (message.action === 'openWhatSyncSidebar') {
+        injectSidebar();
+        const sidebar = document.getElementById('hubspot-sidebar');
+        sidebar?.classList.add('open');
+        widthSetting();
+        setupSidebarClose();
+        updateSidebarContent();
+        sendResponse({ success: true });
+        return true;
+      }
       if (message.action === 'userLoggedIn') {
+        whatsyncStateCache = null;
         checkLoginStateAndInjectNavbar();
         sendResponse({ success: true });
       } else if (message.action === 'userLoggedOut') {
+        whatsyncStateCache = null;
         sidebarContentUpdateToken++;
         cachedUserEmail = null;
         sidebarCatalogCache = null;
@@ -11861,8 +11933,12 @@ function registerExtensionListeners() {
     });
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace === 'local' && changes['whatsync.syncSettings']) {
+        contentSyncSettingsCache = null;
+      }
       // Any change to login OR HubSpot connection should re-evaluate the sidebar state.
       if (namespace === 'local' && (changes.userLoggedIn || changes.userId || changes.hubspotConnected)) {
+        whatsyncStateCache = null;
         sidebarContentUpdateToken++;
         sidebarCatalogCache = null;
         sidebarPrefsCache = null;
@@ -11931,6 +12007,10 @@ function initializeChatListRowObserver() {
     // Check if clicked element or its parent is a gridcell
     const gridcell = e.target.closest('[role="gridcell"]');
     if (gridcell) {
+      // Hide CRM latency behind WhatsApp's own chat-opening transition whenever
+      // the clicked row exposes a phone/JID.
+      const clickedPhone = extractPhoneFromElementAttributes(gridcell) || extractPhoneFromDataIdOnElement(gridcell);
+      if (clickedPhone) checkHubSpotContact(clickedPhone).catch(() => {});
       whatsyncDebug('[Chat List Observer] 🖱️ Chat clicked (via click event)');
       // div#main only exists once a chat is open, and WhatsApp can recreate it —
       // (re)arm its observer whenever the observed node is gone or detached

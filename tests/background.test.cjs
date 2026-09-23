@@ -1,6 +1,6 @@
-const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm');const fs=require('node:fs');const {parse}=require('../website/node_modules/acorn');
-const source=fs.readFileSync(require.resolve('../background.js'),'utf8');const ast=parse(source,{ecmaVersion:'latest'});
-const functions=names=>ast.body.filter(n=>n.type==='FunctionDeclaration'&&names.includes(n.id.name)).map(n=>source.slice(n.start,n.end)).join('\n');
+const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm');const fs=require('node:fs');const extractFunctions=require('./extract-function.cjs');
+const source=fs.readFileSync(require.resolve('../background.js'),'utf8');
+const functions=names=>extractFunctions(source,names);
 const quiet={log(){},warn(){},error(){}};
 test('transient refresh outage preserves the session and does not look like rejection',async()=>{
  const ctx=vm.createContext({console:quiet,whatsyncDebug(){},getStoredRefreshToken:async()=>'refresh',fetchWithTimeout:async()=>({ok:false,status:503,text:async()=>'unavailable'}),SUPABASE_URL:'https://fixture',SUPABASE_ANON_KEY:'public'});

@@ -19,11 +19,7 @@ FILES=(
   content.js
   content.css
   config.js
-  supabase.js
   dashboard-bridge.js
-  popup.html
-  popup.js
-  email-confirm.html
 )
 
 # Include any icon/image assets referenced by the manifest.

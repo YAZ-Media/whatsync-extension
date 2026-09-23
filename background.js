@@ -18,6 +18,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // Edge functions live on the same (ogsvc) project — use its anon key for apikey.
 const EDGE_FUNCTIONS_URL = SUPABASE_URL;
 const EDGE_FUNCTIONS_ANON_KEY = SUPABASE_ANON_KEY;
+const EXTERNAL_AUTH_ENDPOINT = `${EDGE_FUNCTIONS_URL}/functions/v1/external-auth`;
 
 // Session Configuration.
 // Persistent session: no wall-clock logout. The background proactively refreshes
@@ -142,6 +143,64 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = EDGE_FUNCTION_TIM
   }
 }
 
+async function externalAuthRequest(action, payload) {
+  const response = await fetchWithTimeout(EXTERNAL_AUTH_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: EDGE_FUNCTIONS_ANON_KEY,
+      Authorization: `Bearer ${EDGE_FUNCTIONS_ANON_KEY}`,
+    },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    throw new Error(data?.error || `Sign in failed (${response.status})`);
+  }
+  return data;
+}
+
+function extensionProfileFromAuth(user, email, profile) {
+  if (profile) return profile;
+  const metadata = user?.user_metadata || {};
+  return {
+    user_id: user?.id,
+    email: user?.email || email || '',
+    first_name: metadata.first_name || '',
+    last_name: metadata.last_name || '',
+    company: metadata.company || '',
+  };
+}
+
+async function signInExtension(emailValue, passwordValue) {
+  const email = String(emailValue || '').trim();
+  const password = String(passwordValue || '');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address.');
+  if (!password) throw new Error('Enter your password.');
+
+  const result = await externalAuthRequest('signIn', { email, password });
+  if (!result?.user?.id || !result?.session?.access_token || !result?.session?.refresh_token) {
+    throw new Error('The sign-in service returned an incomplete session. Please try again.');
+  }
+  const profile = extensionProfileFromAuth(result.user, email, result.profile);
+  await chrome.storage.local.set({
+    userLoggedIn: true,
+    userId: result.user.id,
+    accessToken: result.session.access_token,
+    refreshToken: result.session.refresh_token,
+    loginTimestamp: Date.now(),
+    external_auth_session: { ...result.session, user: result.user },
+    userProfile: profile,
+  });
+  hubspotConnectionCache = null;
+  hubspotReadCache.clear();
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+    tabs.forEach((tab) => tab.id && chrome.tabs.sendMessage(tab.id, { action: 'userLoggedIn' }).catch(() => {}));
+  } catch { /* the storage change still refreshes open sidebars */ }
+  return { user: result.user, profile };
+}
+
 const hubspotReadCache = new Map();
 const hubspotReadsInFlight = new Map();
 const CONDITIONAL_PROPERTY_STORAGE_KEY = 'hubspotConditionalPropertyDefinitions';
@@ -223,7 +282,8 @@ function attachKnownConditionalFields(contacts, definitions) {
 async function callHubSpotEdgeFunction(action, data = {}) {
   const cacheable = [
     'getPropertyOptions', 'getPropertyDefinitions', 'getOwners', 'getOwnerById',
-    'getSidebarFields', 'getSidebarSection', 'getSidebarSections',
+    'getSidebarFields', 'getSidebarSection', 'getSidebarSections', 'searchContacts',
+    'getRuntimeInfo',
   ].includes(action);
   if (!cacheable) {
     if (/^(create|update|delete|save)/i.test(action)) hubspotReadCache.clear();
@@ -233,7 +293,8 @@ async function callHubSpotEdgeFunction(action, data = {}) {
   if (!userId || !userLoggedIn) throw new Error('Not authenticated');
   const key = JSON.stringify([userId, action, data]);
   const cached = hubspotReadCache.get(key);
-  if (cached && Date.now() - cached.at < 15000) return structuredClone(cached.value);
+  const ttlMs = action === 'searchContacts' ? 60000 : (action === 'getRuntimeInfo' ? 300000 : 15000);
+  if (cached && Date.now() - cached.at < ttlMs) return structuredClone(cached.value);
   if (hubspotReadsInFlight.has(key)) return hubspotReadsInFlight.get(key);
   const promise = requestHubSpotEdgeFunction(action, data).then(value => {
     if (hubspotReadCache.size >= 100) hubspotReadCache.delete(hubspotReadCache.keys().next().value);
@@ -242,6 +303,27 @@ async function callHubSpotEdgeFunction(action, data = {}) {
   }).finally(() => hubspotReadsInFlight.delete(key));
   hubspotReadsInFlight.set(key, promise);
   return promise;
+}
+
+let conditionalWriteRuntimePromise = null;
+async function assertHubSpotConditionalWriteRuntime() {
+  if (!conditionalWriteRuntimePromise) {
+    conditionalWriteRuntimePromise = callHubSpotEdgeFunction('getRuntimeInfo')
+      .then((info) => {
+        if (info?.crmWriteVersion !== '2026-09' || info?.conditionalPropertyValidation !== true) {
+          throw new Error('WhatSync cannot safely save this change until its HubSpot service is updated. Your current value was not changed.');
+        }
+        return info;
+      })
+      .catch((error) => {
+        conditionalWriteRuntimePromise = null;
+        if (/Unknown action|getRuntimeInfo/i.test(String(error?.message || ''))) {
+          throw new Error('WhatSync cannot safely save this change because the HubSpot service is out of date. Your current value was not changed.');
+        }
+        throw error;
+      });
+  }
+  return conditionalWriteRuntimePromise;
 }
 async function requestHubSpotEdgeFunction(action, data = {}) {
   const requestBody = { action, data };
@@ -362,6 +444,20 @@ async function getCurrentTabId() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'signInWhatSync') {
+    signInExtension(request.email, request.password)
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((error) => sendResponse({ success: false, error: error?.message || 'Sign in failed' }));
+    return true;
+  }
+
+  if (request.action === 'verifyHubSpotWriteRuntime') {
+    assertHubSpotConditionalWriteRuntime()
+      .then((info) => sendResponse({ success: true, info }))
+      .catch((error) => sendResponse({ success: false, error: error?.message || 'HubSpot write validation is unavailable' }));
+    return true;
+  }
+
   if (request.action === 'getAccessStatus') {
     callHubSpotEdgeFunction('getAccessStatus').then(data => sendResponse({success:true,data})).catch(error => sendResponse({success:false,error:error.message}));
     return true;
@@ -920,6 +1016,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: false, error: 'Missing contactId or properties' });
           return;
         }
+        await assertHubSpotConditionalWriteRuntime();
         const result = await callHubSpotEdgeFunction('updateContact', { contactId, properties });
         sendResponse({ success: true, data: result });
       } catch (error) {
@@ -3293,5 +3390,25 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     }
   } catch (error) {
     console.warn('[Background] Could not refresh WhatsApp tabs after extension update:', error);
+  }
+});
+
+// The toolbar icon is a shortcut into the product, not a detached mini-app.
+// Focus WhatsApp and open the docked sidebar where sign-in and CRM work happen.
+chrome.action.onClicked.addListener(async (activeTab) => {
+  try {
+    let tab = activeTab?.url?.startsWith('https://web.whatsapp.com/') ? activeTab : null;
+    if (!tab) {
+      const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+      tab = tabs[0] || await chrome.tabs.create({ url: 'https://web.whatsapp.com/' });
+    }
+    if (tab?.id) {
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.tabs.sendMessage(tab.id, { action: 'openWhatSyncSidebar' }).catch(() => {
+        chrome.tabs.reload(tab.id);
+      });
+    }
+  } catch (error) {
+    console.warn('[Background] Could not open WhatSync in WhatsApp:', error?.message);
   }
 });

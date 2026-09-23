@@ -666,6 +666,88 @@ body.whatsapp-theme-dark #checkOpenchat.hubspot-header-toggle:hover {
     text-decoration: underline;
 }
 
+/* Sign-in lives inside the docked product surface. This avoids the detached
+   browser-action popup and keeps the user in the WhatsApp workflow. */
+#hubspot-sidebar .ws-signin-state {
+    align-items: stretch;
+    text-align: left;
+    padding: 28px 22px;
+    gap: 18px;
+}
+
+#hubspot-sidebar .ws-signin-heading {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--sidebar-border, #e0e0e0);
+}
+
+#hubspot-sidebar .ws-signin-heading img {
+    flex: 0 0 auto;
+    padding: 6px;
+    border-radius: 10px;
+    background: rgba(255, 122, 89, 0.13);
+}
+
+#hubspot-sidebar .ws-signin-heading p {
+    max-width: none;
+}
+
+#hubspot-sidebar .ws-signin-form {
+    display: grid;
+    gap: 14px;
+}
+
+#hubspot-sidebar .ws-signin-form label {
+    display: grid;
+    gap: 6px;
+    color: var(--sidebar-text, #1a1a1a);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+#hubspot-sidebar .ws-signin-form input {
+    width: 100%;
+    height: 42px;
+    padding: 9px 11px;
+    border: 1px solid var(--sidebar-border, #cbd6dc);
+    border-radius: 8px;
+    background: var(--sidebar-content-bg, #fff);
+    color: var(--sidebar-text, #1a1a1a);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    outline: none;
+}
+
+#hubspot-sidebar .ws-signin-form input:focus {
+    border-color: #ff7a59;
+    box-shadow: 0 0 0 3px rgba(255, 122, 89, 0.16);
+}
+
+#hubspot-sidebar .ws-signin-form .ws-state-btn {
+    width: 100%;
+    min-height: 42px;
+    margin-top: 2px;
+}
+
+#hubspot-sidebar .ws-signin-error {
+    max-width: none;
+    margin: 0;
+    padding: 10px 11px;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+}
+
+#hubspot-sidebar .ws-signin-state .ws-state-hint {
+    max-width: none;
+    margin-top: 0;
+    text-align: center;
+}
+
 /* Secondary (ghost) action button — used for "I already connected, check again" */
 #hubspot-sidebar .ws-state-btn-secondary {
     margin-top: 8px;

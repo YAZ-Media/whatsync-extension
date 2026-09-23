@@ -2,14 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const { parse } = require('../website/node_modules/acorn');
+const extractFunctions = require('./extract-function.cjs');
 
 const source = fs.readFileSync(require.resolve('../content.js'), 'utf8');
-const ast = parse(source, { ecmaVersion: 'latest' });
-const functions = (names) => ast.body
-  .filter((node) => node.type === 'FunctionDeclaration' && names.includes(node.id.name))
-  .map((node) => source.slice(node.start, node.end))
-  .join('\n');
+const functions = (names) => extractFunctions(source, names);
 
 test('sidebar recognizes HubSpot conditional required property errors', () => {
   const ctx = vm.createContext({});
@@ -72,6 +68,9 @@ test('conditional write retries atomically with the required values', async () =
   let attempts = 0;
   let requestedDefinitions = [];
   const ctx = vm.createContext({
+    sendExtensionMessage: async ({ action }) => action === 'verifyHubSpotWriteRuntime'
+      ? { success: true, info: { crmWriteVersion: '2026-09', conditionalPropertyValidation: true } }
+      : { success: false },
     requiredHubSpotProperties: (error) => error.details?.requiredProperties || [],
     hubSpotConditionalRuleContexts: () => [{
       dependentProperty: 'lead_tier',

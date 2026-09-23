@@ -1265,6 +1265,16 @@ async function handleAction(
 ): Promise<unknown> {
   // Pure-database actions don't need a HubSpot token
   switch (action) {
+    // Used by the extension before inline CRM edits. If an older edge function
+    // is still deployed this action is unknown, so the client can stop the
+    // write instead of silently bypassing a portal's conditional requirements.
+    case 'getRuntimeInfo':
+      return {
+        service: 'whatsync-hubspot',
+        crmWriteVersion: HUBSPOT_CRM_WRITE_VERSION,
+        conditionalPropertyValidation: HUBSPOT_CRM_WRITE_VERSION === '2026-09',
+      };
+
     // ----- Client telemetry -----
     // The extension self-reports failures (broken WhatsApp selectors, message
     // errors) so silent degradation becomes visible in the client_errors table.
